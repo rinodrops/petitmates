@@ -130,8 +130,10 @@ _icns_build: | $(RES_DIR_T)
 
 win:
 	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
+	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build          --bin wm_inspect_win --target x86_64-pc-windows-gnu
 	mkdir -p "$(WIN_DIR)/assets/bearded_dragon/sprite"
 	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
+	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/debug/wm_inspect_win.exe" "$(WIN_DIR)/wm_inspect_win.exe"
 	cp $(CHAR_SRC)/manifest.toml "$(WIN_DIR)/assets/bearded_dragon/"
 	cp $(CHAR_SRC)/config.toml   "$(WIN_DIR)/assets/bearded_dragon/"
 	cp $(CHAR_SRC)/sprite/*.png  "$(WIN_DIR)/assets/bearded_dragon/sprite/"
