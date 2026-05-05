@@ -8,20 +8,22 @@ fn main() {
     let base = std::path::Path::new(&manifest_dir).join("assets");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={}", base.join("appicon.ico").display());
     println!("cargo:rerun-if-changed={}", base.join("trayicon.ico").display());
     println!("cargo:rerun-if-changed={}", base.join("trayicon-white.ico").display());
 
     // Copy .ico files to /tmp to avoid issues with spaces in paths (e.g.
     // "Petit Mates" in the workspace path).
+    std::fs::copy(base.join("appicon.ico"),        "/tmp/pm_appicon.ico").unwrap();
     std::fs::copy(base.join("trayicon.ico"),       "/tmp/pm_trayicon.ico").unwrap();
     std::fs::copy(base.join("trayicon-white.ico"), "/tmp/pm_trayicon_white.ico").unwrap();
 
     // Resource IDs:
-    //   1 = window-class / Explorer icon (reuse tray icon as placeholder)
+    //   1 = window-class / Explorer icon (appicon)
     //   2 = tray icon dark silhouette (shown on light taskbar)
     //   3 = tray icon white silhouette (shown on dark taskbar)
     let rc_src = "#pragma code_page(65001)\n\
-                  1 ICON \"/tmp/pm_trayicon.ico\"\n\
+                  1 ICON \"/tmp/pm_appicon.ico\"\n\
                   2 ICON \"/tmp/pm_trayicon.ico\"\n\
                   3 ICON \"/tmp/pm_trayicon_white.ico\"\n";
     std::fs::write("/tmp/pm_resource.rc", rc_src).unwrap();

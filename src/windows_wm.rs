@@ -83,8 +83,13 @@ pub fn screen_info() -> ScreenInfo {
         // Work area = screen minus taskbar.
         let mut wa = RECT { left: 0, top: 0, right: 0, bottom: 0 };
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut RECT as *mut _, 0);
-        // Assume taskbar is at the bottom.
-        let taskbar_height = (h - wa.bottom as f64).max(0.0);
+        // Assume taskbar is at the bottom. If the call failed (wa.bottom == 0),
+        // fall back to a typical 40 px taskbar height so floor_y() stays valid.
+        let taskbar_height = if wa.bottom > 0 {
+            (h - wa.bottom as f64).max(0.0)
+        } else {
+            40.0
+        };
         ScreenInfo { width: w, height: h, taskbar_height }
     }
 }
