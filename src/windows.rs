@@ -291,13 +291,14 @@ fn surface_context(
 
 fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
     use rand::{Rng, SeedableRng};
-    let stand_w = assets.size("s-stand", false).0;
+    let (stand_w, stand_h) = assets.size("s-stand", false);
     let margin  = si.width * 0.10;
     let usable  = (si.width - margin * 2.0 - stand_w).max(0.0);
     let offset  = rand::rngs::SmallRng::from_os_rng().random::<f64>() * usable;
-    // Start at the top of the visible screen area (Y=0 on Windows, no menu bar).
-    // The character falls from here to the floor — same as macOS behaviour.
-    (margin + offset, 0.0)
+    // Start completely above the screen (sprite top at y = -stand_h, feet at y = 0)
+    // so the character falls into view without immediately landing on system windows
+    // near the top of the screen.
+    (margin + offset, -stand_h)
 }
 
 // ---- Tick (10 Hz) ----
