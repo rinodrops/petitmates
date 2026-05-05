@@ -119,6 +119,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
     let n = unsafe { GetClassNameW(hwnd, cls.as_mut_ptr(), cls.len() as i32) } as usize;
     let class = String::from_utf16_lossy(&cls[..n]);
     match class.as_str() {
+        // Taskbar and shell components.
         "Shell_TrayWnd"
         | "Shell_SecondaryTrayWnd"
         | "Progman"
@@ -126,8 +127,21 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
         | "DV2ControlHost"
         | "TaskListThumbnailWnd"
         | "MSTaskSwWClass"
-        | "SysListView32" => return TRUE,
+        | "SysListView32"
+        // Windows 11 system UI overlays.
+        | "Shell_InputSwitchTopLevelWindow"
+        | "MultitaskingViewFrame"
+        | "TaskListOverlayWnd"
+        | "NotifyIconOverflowWindow"
+        | "XamlExplorerHostIslandWindow"
+        | "TopLevelWindowForOverflowXamlIsland"
+        | "ForegroundStaging"
+        | "NativeHWNDHost" => return TRUE,
         _ => {}
+    }
+    // Windows 11 UWP / WinUI system windows (class name starts with known prefixes).
+    if class.starts_with("Windows.UI.") || class.starts_with("Microsoft.UI.") {
+        return TRUE;
     }
 
     // Skip tool windows (notification popups, HUDs, etc.).
