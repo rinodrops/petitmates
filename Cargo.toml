@@ -52,3 +52,15 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 image = "0.25"
+
+[[bin]]
+name = "petitmates"
+path = "src/main.rs"
+
+[[bin]]
+name = "wm_inspect"
+path = "src/bin/wm_inspect.rs"
+
+[[bin]]
+name = "wm_inspect_win"
+path = "src/bin/wm_inspect_win.rs"
