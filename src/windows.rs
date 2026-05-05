@@ -295,9 +295,9 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
     let margin  = si.width * 0.10;
     let usable  = (si.width - margin * 2.0 - stand_w).max(0.0);
     let offset  = rand::rngs::SmallRng::from_os_rng().random::<f64>() * usable;
-    // Start just above the screen top (y = -stand_h) so the character drops in.
-    let start_y = -(assets.size("s-stand", false).1);
-    (margin + offset, start_y)
+    // Start at the top of the visible screen area (Y=0 on Windows, no menu bar).
+    // The character falls from here to the floor — same as macOS behaviour.
+    (margin + offset, 0.0)
 }
 
 // ---- Tick (10 Hz) ----
