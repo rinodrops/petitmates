@@ -1,0 +1,54 @@
+[package]
+name = "petitmates"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+rand = { version = "0.9", features = ["small_rng"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", features = [
+    "NSAnimationContext",
+    "NSApplication",
+    "NSButton",
+    "NSColor",
+    "NSEvent",
+    "NSImage",
+    "NSImageView",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPanel",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+objc2-foundation = { version = "0.3.2", features = [
+    "NSArray",
+    "NSBundle",
+    "NSDictionary",
+    "NSFileManager",
+    "NSRunLoop",
+    "NSString",
+    "NSTimer",
+    "NSURL",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+image = "0.25"

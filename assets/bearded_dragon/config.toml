@@ -1,0 +1,57 @@
+# Petit Mates — Bearded Dragon behavior configuration
+# All values are hot-reloaded: edit and save while the app is running.
+
+# ---- Floor / Window-top ----
+[floor]
+walk_speed        = 60.0          # px/s (display coords)
+walk_frame_secs   = 0.14          # seconds per walk animation frame
+
+stand_duration    = [3.0,  8.0]   # [min, max] s standing idle
+sit_duration      = [5.0, 15.0]   # [min, max] s sitting idle
+lie_duration      = [20.0, 60.0]  # [min, max] s lying idle
+sleep_duration    = [60.0, 180.0] # [min, max] s sleeping
+
+headbob_period    = [0.8, 1.2]    # [min, max] s per head-bob cycle
+
+peek_prob         = 0.20          # probability of peek-down at edge (0..1)
+peek_duration     = 0.5           # seconds to hold peek pose
+edge_idle_prob    = 0.90          # probability of idling at window-top edge instead of rounding corner (0..1)
+
+# Initial edge-idle state weights: 40% stand, 30% sit, 20% lie, 10% lie-sleep (hardcoded).
+# Subsequent transitions while staying at the edge are controlled by the probabilities below.
+edge_stand_to_sit_prob  = 0.50   # stand → sit  (else round corner)
+edge_sit_to_lie_prob    = 0.50   # sit → lie    (else back to stand)
+edge_lie_to_sleep_prob  = 0.30   # lie → sleep  (else back to sit)
+# sleep always wakes to lie, then the lie→sleep cycle repeats.
+
+standup_duration  = 0.8           # seconds for stand-up animation after landing
+turn_duration     = 0.7           # seconds for turn-around animation
+
+observe_duration  = [3.0, 8.0]    # [min, max] s observation phase after landing
+
+# ---- Wall (vertical climb) ----
+[wall]
+climb_speed       = 120.0          # px/s (display coords)
+climb_frame_secs  = 0.11          # seconds per climb animation frame
+pause_prob        = 0.15          # probability of pausing per 3 climb frames (0..1)
+pause_duration    = [2.0, 5.0]    # [min, max] s wall pause
+entry_hold        = 0.5           # seconds to hold hang-wall-0 on first attach
+
+# ---- Corner ----
+[corner]
+side_corner_secs  = 1.5           # seconds to display s-hang-corner
+front_corner_secs = 0.5           # seconds to display f-hang-corner
+rest_prob         = 0.80          # probability of resting at upper corner (0..1)
+rest_duration     = [3.0, 8.0]    # [min, max] s upper corner rest
+lower_rest_duration = [1.0, 3.0]  # [min, max] s lower corner rest
+
+# ---- Jump (desktop floor → wall) ----
+[jump]
+gravity           = 1.2           # factor; effective accel = gravity × 60 px/s²
+runup_duration    = 0.3           # seconds for jump run-up animation
+wall_jump_max_dist = 300.0        # max px from Dock for a wall-jump to trigger
+
+# ---- Display ----
+[display]
+display_width     = 150.0         # character display width in logical pixels
+hover_alpha       = 0.25          # alpha value when mouse hovers over character
