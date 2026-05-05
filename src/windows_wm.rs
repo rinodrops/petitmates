@@ -11,6 +11,7 @@
 //! character positions.
 
 use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -147,6 +148,21 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
     // Skip tool windows (notification popups, HUDs, etc.).
     let exstyle = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
     if exstyle & WS_EX_TOOLWINDOW != 0 { return TRUE; }
+
+    // Skip windows cloaked by DWM (e.g. UWP apps that are suspended/virtual-
+    // desktoped but still return IsWindowVisible == TRUE).
+    {
+        let mut cloaked: u32 = 0;
+        unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED as u32,
+                &mut cloaked as *mut u32 as *mut _,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+        if cloaked != 0 { return TRUE; }
+    }
 
     let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if unsafe { GetWindowRect(hwnd, &mut r) } == 0 { return TRUE; }

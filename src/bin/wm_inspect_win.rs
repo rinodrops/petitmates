@@ -15,6 +15,7 @@
 use std::mem;
 use std::ptr;
 use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -97,6 +98,17 @@ unsafe extern "system" fn enum_all(hwnd: HWND, lp: LPARAM) -> BOOL {
         | "ForegroundStaging" | "NativeHWNDHost"
     ) || class.starts_with("Windows.UI.") || class.starts_with("Microsoft.UI.");
     if class_blocked { reject_reasons.push("class-blocked"); }
+
+    let mut cloaked: u32 = 0;
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED as u32,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+    if cloaked != 0 { reject_reasons.push("cloaked"); }
 
     if exstyle & WS_EX_TOOLWINDOW != 0 { reject_reasons.push("TOOLWINDOW"); }
     if ww < 300.0 { reject_reasons.push("w<300"); }
