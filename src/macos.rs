@@ -21,7 +21,8 @@ use objc2_foundation::{
 
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
-use crate::config::{make_shared, Config, SharedConfig};
+use crate::config::{make_shared, SharedConfig};
+use crate::engine::advance_anim;
 use crate::manifest;
 use crate::rust_behavior::RustBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
@@ -532,62 +533,6 @@ fn surface_context(
             (progress, at_edge, None)
         }
         _ => (0.5, false, None),
-    }
-}
-
-/// Advance per-state animation timers and frame counters by `dt` seconds.
-/// Returns the current `elapsed` value for `BehaviorContext::elapsed_secs`.
-fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
-    match state {
-        State::Falling { .. } | State::Grabbed => 0.0,
-
-        State::LandingStandUp { elapsed }
-        | State::Observing { elapsed, .. }
-        | State::TurningAround { elapsed, .. }
-        | State::PeekDown { elapsed, .. }
-        | State::JumpRunup { elapsed, .. }
-        | State::WallEntry { elapsed }
-        | State::WallPause { elapsed, .. }
-        | State::CornerTransitionSide { elapsed, .. }
-        | State::CornerTransitionFront { elapsed, .. }
-        | State::CornerRest { elapsed, .. }
-        | State::SitIdle { elapsed, .. }
-        | State::LieIdle { elapsed, .. }
-        | State::Sleeping { elapsed, .. } => {
-            *elapsed += dt;
-            *elapsed
-        }
-
-        State::StandIdle { elapsed, bob_elapsed, bob_phase, .. } => {
-            *elapsed += dt;
-            *bob_elapsed += dt;
-            let period = (cfg.floor.headbob_period[0] + cfg.floor.headbob_period[1]) / 2.0;
-            while *bob_elapsed >= period {
-                *bob_elapsed -= period;
-                *bob_phase = !*bob_phase;
-            }
-            *elapsed
-        }
-
-        State::Walking { frame, frame_elapsed, .. } => {
-            *frame_elapsed += dt;
-            while *frame_elapsed >= cfg.floor.walk_frame_secs {
-                *frame_elapsed -= cfg.floor.walk_frame_secs;
-                *frame = (*frame + 1) % 4;
-            }
-            0.0
-        }
-
-        State::ClimbingUp { frame, frame_elapsed, wall_frames }
-        | State::ClimbingDown { frame, frame_elapsed, wall_frames } => {
-            *frame_elapsed += dt;
-            while *frame_elapsed >= cfg.wall.climb_frame_secs {
-                *frame_elapsed -= cfg.wall.climb_frame_secs;
-                *frame = (*frame + 1) % 4;
-                *wall_frames = wall_frames.saturating_add(1);
-            }
-            0.0
-        }
     }
 }
 

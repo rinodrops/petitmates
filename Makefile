@@ -15,6 +15,10 @@ RES_DIR   := $(CONTENTS)/Resources
 EXE       := $(MACOS_DIR)/$(EXE_NAME)
 
 APP_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.zip
+WIN_DIR   := $(BUILD_DIR)/petitmates-windows
+WIN_EXE   := $(WIN_DIR)/petitmates.exe
+WIN_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-windows-x86_64.zip
+WIN_TARGET_DIR := /tmp/pm-win
 
 # Make-target–safe versions: spaces escaped as '\ ' for use in
 # prerequisite lists and target definitions.
@@ -33,7 +37,7 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-.PHONY: all app dev zip sign notarize clean
+.PHONY: all app dev win win-zip zip sign notarize clean
 
 all: app
 
@@ -117,6 +121,25 @@ _icns_build: | $(RES_DIR_T)
 	sips -z 1024  1024  $(ICON_SRC) --out "$(ICONSET)/icon_512x512@2x.png" >/dev/null
 	iconutil -c icns "$(ICONSET)" -o "$(ICNS)"
 	rm -rf "$(ICONSET)"
+
+# -----------------------------------------------------------------------
+# Windows cross-compile (x86_64, from macOS)
+# Requires: mingw-w64 (brew install mingw-w64)
+# Uses a space-free CARGO_TARGET_DIR to work around dlltool limitation.
+# -----------------------------------------------------------------------
+
+win:
+	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
+	mkdir -p "$(WIN_DIR)/assets/bearded_dragon/sprite"
+	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
+	cp $(CHAR_SRC)/manifest.toml "$(WIN_DIR)/assets/bearded_dragon/"
+	cp $(CHAR_SRC)/config.toml   "$(WIN_DIR)/assets/bearded_dragon/"
+	cp $(CHAR_SRC)/sprite/*.png  "$(WIN_DIR)/assets/bearded_dragon/sprite/"
+	@echo "Windows build: $(WIN_DIR)"
+
+win-zip: win
+	cd "$(BUILD_DIR)" && zip -r "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_DIR))"
+	@echo "Windows package: $(WIN_ZIP)"
 
 # -----------------------------------------------------------------------
 # Distribution zip
