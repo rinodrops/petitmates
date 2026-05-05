@@ -105,7 +105,8 @@ pub enum State {
     CornerRest { elapsed: f64, duration: f64, lying: bool },
 
     // -- User interaction --
-    /// Character is being dragged by the user (⌘+drag).
+    /// Character is being dragged by the user (⌘+drag on macOS).
+    #[allow(dead_code)]
     Grabbed,
 }
 
@@ -131,6 +132,7 @@ pub struct BehaviorContext<'a> {
     /// Current runtime config (hot-reloaded TOML values).
     pub config: &'a Config,
     /// A pre-rolled random value in [0.0, 1.0) for this tick (for Lua compat).
+    #[allow(dead_code)]
     pub rng01: f64,
     /// Normalized position on the current surface: 0.0 = left/top end,
     /// 1.0 = right/bottom end. Corners are 0.0 or 1.0.
