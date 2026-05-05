@@ -1,0 +1,11 @@
+# Rust build artifacts
+target/
+build/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editor
+.vscode/
+*.swp

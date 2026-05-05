@@ -1,0 +1,91 @@
+canonical_width = 512
+
+[sprites."f-hang-corner"]
+attachment = "point"
+x = 169
+y = 232
+
+[sprites."f-hang-wall"]
+attachment = "line_x"
+x = 183
+
+[sprites."f-hang-wall-close"]
+attachment = "line_x"
+x = 191
+
+[sprites."f-lie"]
+attachment = "line_y"
+y = 210
+
+[sprites."f-lie-sleep"]
+attachment = "line_y"
+y = 218
+
+[sprites."f-sit"]
+attachment = "line_y"
+y = 255
+
+[sprites."f-stand"]
+attachment = "line_y"
+y = 324
+
+[sprites."s-hang-corner"]
+attachment = "point"
+x = 174
+y = 231
+
+[sprites."s-hang-wall-0"]
+attachment = "line_x"
+x = 136
+
+[sprites."s-hang-wall-1"]
+attachment = "line_x"
+x = 175
+
+[sprites."s-hang-wall-2"]
+attachment = "line_x"
+x = 242
+
+[sprites."s-jump"]
+attachment = "line_y"
+y = 458
+
+[sprites."s-lie"]
+attachment = "line_y"
+y = 235
+
+[sprites."s-lie-sleep"]
+attachment = "line_y"
+y = 226
+
+[sprites."s-peek-down"]
+attachment = "line_y"
+y = 288
+
+[sprites."s-sit"]
+attachment = "line_y"
+y = 257
+
+[sprites."s-stand"]
+attachment = "line_y"
+y = 309
+
+[sprites."s-stand-close"]
+attachment = "line_y"
+y = 309
+
+[sprites."s-stand-up"]
+attachment = "line_y"
+y = 334
+
+[sprites."s-walk-0"]
+attachment = "line_y"
+y = 260
+
+[sprites."s-walk-1"]
+attachment = "line_y"
+y = 284
+
+[sprites."s-walk-2"]
+attachment = "line_y"
+y = 259
