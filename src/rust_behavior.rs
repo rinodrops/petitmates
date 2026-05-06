@@ -56,13 +56,54 @@ impl RustBehavior {
     }
 
     fn make_sit_idle(&self, ctx: &BehaviorContext) -> State {
-        let dur = self.rnd_range(ctx.config.floor.sit_duration);
-        State::SitIdle { elapsed: 0.0, duration: dur }
+        let dur   = self.rnd_range(ctx.config.floor.sit_duration);
+        let timer = self.rnd_range(ctx.config.floor.head_side_duration);
+        State::SitIdle { elapsed: 0.0, duration: dur, head_front: false, head_timer: timer }
     }
 
     fn make_lie_idle(&self, ctx: &BehaviorContext) -> State {
-        let dur = self.rnd_range(ctx.config.floor.lie_duration);
-        State::LieIdle { elapsed: 0.0, duration: dur }
+        let dur   = self.rnd_range(ctx.config.floor.lie_duration);
+        let timer = self.rnd_range(ctx.config.floor.head_side_duration);
+        State::LieIdle { elapsed: 0.0, duration: dur, head_front: false, head_timer: timer }
+    }
+
+    fn make_sleeping(&self, ctx: &BehaviorContext) -> State {
+        let dur   = self.rnd_range(ctx.config.floor.sleep_duration);
+        let timer = self.rnd_range(ctx.config.floor.head_side_duration);
+        State::Sleeping { elapsed: 0.0, duration: dur, head_front: false, head_timer: timer }
+    }
+
+    /// Advance the head-turn timer. Returns a `Transition::To` with the same
+    /// state type but updated `head_front`/`head_timer` if the timer has fired,
+    /// or `None` if the character should keep looking the same way.
+    fn tick_head_sit(&self, elapsed: f64, duration: f64, head_front: bool, head_timer: f64, cfg: &crate::config::Config) -> Option<State> {
+        if head_timer > 0.0 { return None; }
+        let (new_front, new_timer) = if head_front {
+            (false, self.rnd_range(cfg.floor.head_side_duration))
+        } else {
+            (true, self.rnd_range(cfg.floor.head_front_duration))
+        };
+        Some(State::SitIdle { elapsed, duration, head_front: new_front, head_timer: new_timer })
+    }
+
+    fn tick_head_lie(&self, elapsed: f64, duration: f64, head_front: bool, head_timer: f64, cfg: &crate::config::Config) -> Option<State> {
+        if head_timer > 0.0 { return None; }
+        let (new_front, new_timer) = if head_front {
+            (false, self.rnd_range(cfg.floor.head_side_duration))
+        } else {
+            (true, self.rnd_range(cfg.floor.head_front_duration))
+        };
+        Some(State::LieIdle { elapsed, duration, head_front: new_front, head_timer: new_timer })
+    }
+
+    fn tick_head_sleep(&self, elapsed: f64, duration: f64, head_front: bool, head_timer: f64, cfg: &crate::config::Config) -> Option<State> {
+        if head_timer > 0.0 { return None; }
+        let (new_front, new_timer) = if head_front {
+            (false, self.rnd_range(cfg.floor.head_side_duration))
+        } else {
+            (true, self.rnd_range(cfg.floor.head_front_duration))
+        };
+        Some(State::Sleeping { elapsed, duration, head_front: new_front, head_timer: new_timer })
     }
 
     fn walk_to_corner(&self, ctx: &BehaviorContext) -> State {
@@ -158,8 +199,7 @@ impl BehaviorScript for RustBehavior {
                             } else if r < 0.90 {
                                 Transition::To(self.make_lie_idle(ctx))
                             } else {
-                                let dur = self.rnd_range(cfg.floor.sleep_duration);
-                                Transition::To(State::Sleeping { elapsed: 0.0, duration: dur })
+                                Transition::To(self.make_sleeping(ctx))
                             }
                         } else {
                             Transition::To(State::CornerTransitionSide {
@@ -244,7 +284,11 @@ impl BehaviorScript for RustBehavior {
             }
 
             // ── SitIdle ──────────────────────────────────────────────
-            State::SitIdle { duration, .. } => {
+            State::SitIdle { duration, head_front, head_timer, .. } => {
+                // Head-turn tick (timer decremented by engine via elapsed).
+                if let Some(s) = self.tick_head_sit(e, *duration, *head_front, *head_timer, cfg) {
+                    return Transition::To(s);
+                }
                 if e < *duration { return Transition::Stay; }
                 // At a window-top edge: deeper idle (lie) or back to stand.
                 if ctx.at_edge {
@@ -280,14 +324,17 @@ impl BehaviorScript for RustBehavior {
             }
 
             // ── LieIdle ──────────────────────────────────────────────
-            State::LieIdle { duration, .. } => {
+            State::LieIdle { duration, head_front, head_timer, .. } => {
+                // Head-turn tick.
+                if let Some(s) = self.tick_head_lie(e, *duration, *head_front, *head_timer, cfg) {
+                    return Transition::To(s);
+                }
                 if e < *duration { return Transition::Stay; }
                 // At a window-top edge: sleep or back to sit.
                 if ctx.at_edge {
                     if let Surface::WindowTop { .. } = ctx.surface {
                         return if self.rnd_bool(cfg.floor.edge_lie_to_sleep_prob) {
-                            let dur = self.rnd_range(cfg.floor.sleep_duration);
-                            Transition::To(State::Sleeping { elapsed: 0.0, duration: dur })
+                            Transition::To(self.make_sleeping(ctx))
                         } else {
                             Transition::To(self.make_sit_idle(ctx))
                         };
@@ -308,8 +355,7 @@ impl BehaviorScript for RustBehavior {
                 }
                 let r = self.rnd();
                 if r < 0.15 {
-                    let dur = self.rnd_range(cfg.floor.sleep_duration);
-                    Transition::To(State::Sleeping { elapsed: 0.0, duration: dur })
+                    Transition::To(self.make_sleeping(ctx))
                 } else if r < 0.60 {
                     Transition::To(self.make_sit_idle(ctx))
                 } else {
@@ -318,7 +364,11 @@ impl BehaviorScript for RustBehavior {
             }
 
             // ── Sleeping ─────────────────────────────────────────────
-            State::Sleeping { duration, .. } => {
+            State::Sleeping { duration, head_front, head_timer, .. } => {
+                // Head-turn tick.
+                if let Some(s) = self.tick_head_sleep(e, *duration, *head_front, *head_timer, cfg) {
+                    return Transition::To(s);
+                }
                 if e < *duration { return Transition::Stay; }
                 Transition::To(self.make_lie_idle(ctx))
             }

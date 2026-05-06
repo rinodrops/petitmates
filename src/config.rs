@@ -52,6 +52,13 @@ pub struct FloorConfig {
 
     /// Observation phase duration after landing [min, max] s.
     pub observe_duration: [f64; 2],
+
+    /// How long the character looks sideways before turning head forward
+    /// during SitIdle / LieIdle / Sleeping [min, max] s.
+    pub head_side_duration: [f64; 2],
+    /// How long the character looks forward before turning head back to side
+    /// during SitIdle / LieIdle / Sleeping [min, max] s.
+    pub head_front_duration: [f64; 2],
 }
 
 impl Default for FloorConfig {
@@ -73,6 +80,8 @@ impl Default for FloorConfig {
             standup_duration: 0.8,
             turn_duration: 0.7,
             observe_duration: [3.0, 8.0],
+            head_side_duration:  [10.0, 25.0],
+            head_front_duration: [ 2.0,  6.0],
         }
     }
 }

@@ -21,11 +21,16 @@ pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
         | State::WallPause { elapsed, .. }
         | State::CornerTransitionSide { elapsed, .. }
         | State::CornerTransitionFront { elapsed, .. }
-        | State::CornerRest { elapsed, .. }
-        | State::SitIdle { elapsed, .. }
-        | State::LieIdle { elapsed, .. }
-        | State::Sleeping { elapsed, .. } => {
+        | State::CornerRest { elapsed, .. } => {
             *elapsed += dt;
+            *elapsed
+        }
+
+        State::SitIdle { elapsed, head_timer, .. }
+        | State::LieIdle { elapsed, head_timer, .. }
+        | State::Sleeping { elapsed, head_timer, .. } => {
+            *elapsed += dt;
+            *head_timer = (*head_timer - dt).max(-1.0); // clamp to avoid large negatives
             *elapsed
         }
 

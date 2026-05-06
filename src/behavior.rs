@@ -75,12 +75,13 @@ pub enum State {
     TurningAround { elapsed: f64, to_dir: Dir },
     /// Standing idle; head-bobs between `s-stand` and `s-stand-close`.
     StandIdle { elapsed: f64, duration: f64, bob_elapsed: f64, bob_phase: bool },
-    /// Sitting idle.
-    SitIdle { elapsed: f64, duration: f64 },
+    /// Sitting idle. `head_front` toggles between side view and front view;
+    /// `head_timer` counts down to the next head turn.
+    SitIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Lying idle.
-    LieIdle { elapsed: f64, duration: f64 },
+    LieIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Sleeping.
-    Sleeping { elapsed: f64, duration: f64 },
+    Sleeping { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Peeking down over the edge.
     PeekDown { elapsed: f64, dir: Dir },
     /// Short run-up before jumping to a wall.
