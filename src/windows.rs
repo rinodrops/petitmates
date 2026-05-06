@@ -709,7 +709,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             let (sw, sh) = s.assets.size(sr.name, sr.mirror);
                             let anchor_cx = s.char_pos.0 + sw / 2.0;
                             let anchor_cy = s.char_pos.1 + sh;
-                            let new_surface = windows_wm::find_surface_near(
+                            let new_surface = windows_wm::find_surface_for_drop(
                                 anchor_cx, anchor_cy, &wins, &si,
                             ).unwrap_or_else(|| {
                                 Surface::Desktop { x: anchor_cx.clamp(sw / 2.0, si.width - sw / 2.0) }

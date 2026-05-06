@@ -248,6 +248,55 @@ pub fn find_surface_near(
     None
 }
 
+/// Surface finder for drag-release.
+///
+/// First tries the normal SNAP-based edge detection.  If that yields nothing,
+/// falls back to a broader search: find the window whose top edge is closest
+/// to `cy` among windows that contain `cx` in their horizontal range.  This
+/// handles the common case where the user drops the character somewhere above
+/// or inside a window rather than precisely on its edge.
+///
+/// `cy` should be the **foot** of the sprite (top-left Y + sprite height) so
+/// that "dropping above a window" produces a `WindowTop` landing rather than
+/// missing the window entirely.
+pub fn find_surface_for_drop(
+    cx: f64,
+    cy: f64,
+    wins: &[WinInfo],
+    si: &ScreenInfo,
+) -> Option<Surface> {
+    // 1. Precise edge snap (same as normal tick landing).
+    if let Some(s) = find_surface_near(cx, cy, wins, si) {
+        return Some(s);
+    }
+
+    // 2. Broad fallback: closest window top within the x-range of the sprite centre.
+    //    We consider any window whose top is above cy (the foot) or at most
+    //    300 px below it, so that "dropped slightly above" and "dropped inside"
+    //    both resolve to that window's top edge.
+    let best_win = wins.iter()
+        .filter(|w| cx >= w.x - SNAP && cx <= w.right() + SNAP) // x-range
+        .filter(|w| cy >= w.y - 300.0 && cy <= w.bottom() + SNAP) // y-range (foot near/inside window)
+        .min_by(|a, b| {
+            // Prefer the window whose top is closest to cy (foot of sprite).
+            let da = (cy - a.y).abs();
+            let db = (cy - b.y).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+    if let Some(win) = best_win {
+        let x_local = (cx - win.x).clamp(0.0, win.w);
+        return Some(Surface::WindowTop { win_id: win.id, x_local });
+    }
+
+    // 3. Desktop floor fallback.
+    if cy >= si.floor_y() - 300.0 {
+        return Some(Surface::Desktop { x: cx });
+    }
+
+    None
+}
+
 /// Returns `false` when a window-attached surface's host window has closed
 /// or is no longer in the window list.
 pub fn surface_still_valid(surface: &Surface, wins: &[WinInfo]) -> bool {
