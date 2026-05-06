@@ -37,6 +37,18 @@ unsafe extern "C" {
     static NSRunLoopCommonModes: *const std::ffi::c_void;
 }
 
+// ---- Surface helpers ----
+
+/// Returns the CGWindowID of the window this surface is anchored to, if any.
+fn surface_host_win_id(surface: &Surface) -> Option<u32> {
+    match surface {
+        Surface::WindowTop { win_id, .. }
+        | Surface::WindowWall { win_id, .. }
+        | Surface::WindowUpperCorner { win_id, .. } => Some(*win_id),
+        _ => None,
+    }
+}
+
 // ---- Per-character state ----
 
 struct CharState {
@@ -84,7 +96,7 @@ fn make_panel(image: &NSImage, mt: MainThreadMarker) -> Retained<NSPanel> {
         panel.setBackgroundColor(Some(&NSColor::clearColor()));
         panel.setOpaque(false);
         panel.setHasShadow(false);
-        panel.setLevel(3); // NSFloatingWindowLevel
+        panel.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
         panel.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
@@ -1037,6 +1049,18 @@ fn tick_char(
         .unwrap_or((150.0, 150.0));
     let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
     unsafe { ch.panel.setFrameOrigin(origin) };
+
+    // Z-order: place the panel just above its host window so windows in front
+    // of the host naturally occlude the character.
+    unsafe {
+        if let Some(wid) = surface_host_win_id(&ch.surface) {
+            // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
+            let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
+        } else {
+            // Desktop / Airborne: bring to front within the normal level.
+            ch.panel.orderFront(None);
+        }
+    }
 
     // Hover alpha.
     update_hover_alpha(&ch.panel, cfg, false);
