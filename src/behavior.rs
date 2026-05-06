@@ -143,7 +143,11 @@ pub struct BehaviorContext<'a> {
     /// the direction it is heading (edge of window-top, top/bottom of wall, etc.).
     pub at_edge: bool,
     /// Nearest window and side eligible for a wall-jump (Desktop surface only).
+    /// Restricted to the current walking direction and `wall_jump_max_dist`.
     pub jump_target: Option<(u32, Side)>,
+    /// Nearest window within `climb_attract_dist` in either direction
+    /// (Desktop surface only). Used for spontaneous window-climbing attraction.
+    pub attract_target: Option<(u32, Side)>,
 }
 
 // ---- BehaviorScript trait ----

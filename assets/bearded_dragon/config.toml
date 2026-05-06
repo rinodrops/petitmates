@@ -49,7 +49,13 @@ lower_rest_duration = [1.0, 3.0]  # [min, max] s lower corner rest
 [jump]
 gravity           = 1.2           # factor; effective accel = gravity × 60 px/s²
 runup_duration    = 0.3           # seconds for jump run-up animation
-wall_jump_max_dist = 300.0        # max px from Dock for a wall-jump to trigger
+wall_jump_max_dist = 300.0        # max horizontal px to trigger jump while walking
+wall_jump_floor_margin = 150.0    # windows whose bottom is more than this many px
+                                  # above the Dock/taskbar are ignored for jumps
+climb_attract_dist = 600.0        # detection radius (px, either direction) for
+                                  # spontaneous window-climbing attraction
+climb_attract_prob = 0.35         # probability of being attracted when an idle
+                                  # state expires and a window is in range (0..1)
 
 # ---- Display ----
 [display]

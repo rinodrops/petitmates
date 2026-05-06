@@ -243,34 +243,37 @@ fn surface_to_screen_pos(
 
 // ---- Surface context ----
 
-/// Compute `surface_progress` [0..1], `at_edge`, and `jump_target` for the
-/// current surface.  Equivalent to `surface_context` in `macos.rs`.
+/// Compute `surface_progress`, `at_edge`, `jump_target`, and `attract_target`.
+/// Equivalent to `surface_context` in `macos.rs`.
 fn surface_context(
     surface: &Surface,
     char_pos: (f64, f64),
     sprite_w: f64,
     facing: Dir,
     jump_max_dist: f64,
+    jump_floor_margin: f64,
+    attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
-) -> (f64, bool, Option<(u32, Side)>) {
+) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
     let edge_margin = 2.0;
     match surface {
         Surface::WindowTop { win_id, x_local } => {
             let Some(win) = windows_wm::find_win(*win_id, wins) else {
-                return (0.5, false, None);
+                return (0.5, false, None, None);
             };
             let progress = (x_local / win.w).clamp(0.0, 1.0);
             let at_edge  = *x_local <= edge_margin + sprite_w / 2.0
                         || *x_local >= win.w - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, None)
+            (progress, at_edge, None, None)
         }
         Surface::Desktop { x } => {
             let progress = (x / si.width).clamp(0.0, 1.0);
             let (cx, _)  = char_pos;
             let floor_y  = si.floor_y();
+            // jump_target: current walking direction only, within jump_max_dist.
             let jump_target = wins.iter().find_map(|win| {
-                if win.bottom() < floor_y - 150.0 { return None; }
+                if win.bottom() < floor_y - jump_floor_margin { return None; }
                 match facing {
                     Dir::Left => {
                         let dist = cx - win.right();
@@ -284,19 +287,35 @@ fn surface_context(
                     }
                 }
             });
+            // attract_target: nearest window in either direction within attract_dist.
+            let attract_target = wins.iter()
+                .filter_map(|win| {
+                    if win.bottom() < floor_y - jump_floor_margin { return None; }
+                    let dist_r = win.x - cx;
+                    let dist_l = cx - win.right();
+                    if dist_r >= 0.0 && dist_r < attract_dist {
+                        Some((win.id, Side::Left, dist_r))
+                    } else if dist_l >= 0.0 && dist_l < attract_dist {
+                        Some((win.id, Side::Right, dist_l))
+                    } else {
+                        None
+                    }
+                })
+                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(id, side, _)| (id, side));
             let at_edge = *x <= edge_margin + sprite_w / 2.0
                        || *x >= si.width - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, jump_target)
+            (progress, at_edge, jump_target, attract_target)
         }
         Surface::WindowWall { win_id, y_local, .. } => {
             let Some(win) = windows_wm::find_win(*win_id, wins) else {
-                return (0.5, false, None);
+                return (0.5, false, None, None);
             };
             let progress = (y_local / win.h).clamp(0.0, 1.0);
             let at_edge  = *y_local <= edge_margin || *y_local >= win.h - edge_margin;
-            (progress, at_edge, None)
+            (progress, at_edge, None, None)
         }
-        _ => (0.5, false, None),
+        _ => (0.5, false, None, None),
     }
 }
 
@@ -375,7 +394,7 @@ fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Con
             state: &ch.anim_state, surface: &ch.surface,
             elapsed_secs: 0.0, config: cfg, rng01: 0.0,
             surface_progress: 0.5, facing: ch.facing,
-            at_edge: false, jump_target: None,
+            at_edge: false, jump_target: None, attract_target: None,
         };
         ch.anim_state = ch.behavior.on_surface_lost(&ctx);
         ch.surface = Surface::Airborne;
@@ -484,7 +503,7 @@ fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Con
                         state: &ch.anim_state, surface: &new_surface,
                         elapsed_secs: 0.0, config: cfg, rng01: 0.0,
                         surface_progress: 0.5, facing: ch.facing,
-                        at_edge: false, jump_target: None,
+                        at_edge: false, jump_target: None, attract_target: None,
                     };
                     ch.behavior.on_landed(&ctx)
                 };
@@ -514,9 +533,10 @@ fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Con
         other => sprite_for_state(other, ch.facing),
     };
     let sprite_w = assets.size(sr_for_ctx.name, sr_for_ctx.mirror).0;
-    let (surface_progress, at_edge, jump_target) = surface_context(
+    let (surface_progress, at_edge, jump_target, attract_target) = surface_context(
         &ch.surface, ch.char_pos, sprite_w, ch.facing,
-        cfg.jump.wall_jump_max_dist, wins, si,
+        cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
+        cfg.jump.climb_attract_dist, wins, si,
     );
 
     // Save to_dir if TurningAround completes this tick.
@@ -530,6 +550,7 @@ fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Con
             state: &ch.anim_state, surface: &ch.surface,
             elapsed_secs: elapsed, config: cfg, rng01: 0.0,
             surface_progress, facing: ch.facing, at_edge, jump_target,
+            attract_target,
         };
         ch.behavior.next_state(&ctx)
     };
@@ -782,7 +803,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                         state: &State::Grabbed, surface: &new_surface,
                                         elapsed_secs: 0.0, config: &cfg, rng01: 0.0,
                                         surface_progress: 0.5, facing: app.chars[i].facing,
-                                        at_edge: false, jump_target: None,
+                                        at_edge: false, jump_target: None, attract_target: None,
                                     };
                                     app.chars[i].behavior.on_landed(&ctx)
                                 };

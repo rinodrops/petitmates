@@ -453,6 +453,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                         facing: ch.facing,
                         at_edge: false,
                         jump_target: None,
+                        attract_target: None,
                     };
                     let new_anim = ch.behavior.on_landed(&ctx);
                     let stand_anchor = ch.assets.anchor("s-stand")
@@ -587,76 +588,81 @@ fn surface_to_ns_origin(
     }
 }
 
-/// Compute `surface_progress` [0..1] and `at_edge` for the current surface.
-/// `char_pos` is the CG position of the character.
-/// `facing` is used on the Desktop surface to restrict jump targets to the
-/// direction the character is currently walking, preventing false jumps.
+/// Compute `surface_progress`, `at_edge`, `jump_target`, and `attract_target`
+/// for the current surface.
+/// `jump_floor_margin` — windows above this many px from the Dock are excluded.
+/// `attract_dist` — detection radius (in either direction) for spontaneous attraction.
 fn surface_context(
     surface: &Surface,
     char_pos: (f64, f64),
     sprite_w: f64,
     facing: Dir,
     jump_max_dist: f64,
+    jump_floor_margin: f64,
+    attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
-) -> (f64, bool, Option<(u32, Side)>) {
+) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
     let edge_margin = 2.0;
     match surface {
         Surface::WindowTop { win_id, x_local } => {
             let Some(win) = wm::find_win(*win_id, wins) else {
-                return (0.5, false, None);
+                return (0.5, false, None, None);
             };
             let progress = (x_local / win.w).clamp(0.0, 1.0);
             let at_edge = *x_local <= edge_margin + sprite_w / 2.0
                 || *x_local >= win.w - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, None)
+            (progress, at_edge, None, None)
         }
         Surface::Desktop { x } => {
             let progress = (x / si.width).clamp(0.0, 1.0);
-            // Find a wall-jump target only in the direction the character is
-            // walking, and only for windows whose bottom is near the floor
-            // (within 150 px above the Dock, per the design spec).
-            // This prevents jumping toward windows behind the character or
-            // toward windows floating high on the screen.
             let (cx, _) = char_pos;
             let floor_y = si.floor_y();
+            // jump_target: only in current walking direction, within jump_max_dist.
             let jump_target = wins.iter().find_map(|win| {
-                // Window bottom must be within 150 px above the Dock.
-                if win.bottom() < floor_y - 150.0 { return None; }
+                if win.bottom() < floor_y - jump_floor_margin { return None; }
                 match facing {
                     Dir::Left => {
-                        // Jump left: attach to the RIGHT wall of a window to our left.
                         let dist = cx - win.right();
-                        if dist >= 0.0 && dist < jump_max_dist {
-                            Some((win.id, Side::Right))
-                        } else {
-                            None
-                        }
+                        if dist >= 0.0 && dist < jump_max_dist { Some((win.id, Side::Right)) }
+                        else { None }
                     }
                     Dir::Right => {
-                        // Jump right: attach to the LEFT wall of a window to our right.
                         let dist = win.x - cx;
-                        if dist >= 0.0 && dist < jump_max_dist {
-                            Some((win.id, Side::Left))
-                        } else {
-                            None
-                        }
+                        if dist >= 0.0 && dist < jump_max_dist { Some((win.id, Side::Left)) }
+                        else { None }
                     }
                 }
             });
+            // attract_target: nearest window in either direction within attract_dist.
+            let attract_target = wins.iter()
+                .filter_map(|win| {
+                    if win.bottom() < floor_y - jump_floor_margin { return None; }
+                    let dist_r = win.x - cx;
+                    let dist_l = cx - win.right();
+                    if dist_r >= 0.0 && dist_r < attract_dist {
+                        Some((win.id, Side::Left, dist_r))
+                    } else if dist_l >= 0.0 && dist_l < attract_dist {
+                        Some((win.id, Side::Right, dist_l))
+                    } else {
+                        None
+                    }
+                })
+                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(id, side, _)| (id, side));
             let at_edge = *x <= edge_margin + sprite_w / 2.0
                 || *x >= si.width - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, jump_target)
+            (progress, at_edge, jump_target, attract_target)
         }
         Surface::WindowWall { win_id, y_local, .. } => {
             let Some(win) = wm::find_win(*win_id, wins) else {
-                return (0.5, false, None);
+                return (0.5, false, None, None);
             };
             let progress = (y_local / win.h).clamp(0.0, 1.0);
             let at_edge = *y_local <= edge_margin || *y_local >= win.h - edge_margin;
-            (progress, at_edge, None)
+            (progress, at_edge, None, None)
         }
-        _ => (0.5, false, None),
+        _ => (0.5, false, None, None),
     }
 }
 
@@ -692,6 +698,7 @@ fn tick_char(
                 facing: ch.facing,
                 at_edge: false,
                 jump_target: None,
+                attract_target: None,
             };
             ch.behavior.on_surface_lost(&ctx)
         };
@@ -825,6 +832,7 @@ fn tick_char(
                         facing: ch.facing,
                         at_edge: false,
                         jump_target: None,
+                        attract_target: None,
                     };
                     ch.behavior.on_landed(&ctx)
                 };
@@ -861,9 +869,10 @@ fn tick_char(
     let sprite_sz = ch.assets.image(sr_for_ctx.name, sr_for_ctx.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
-    let (surface_progress, at_edge, jump_target) =
+    let (surface_progress, at_edge, jump_target, attract_target) =
         surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
-                        cfg.jump.wall_jump_max_dist, wins, si);
+                        cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
+                        cfg.jump.climb_attract_dist, wins, si);
 
     // Save to_dir if a TurningAround completes this tick.
     let turn_to_dir = if let State::TurningAround { to_dir, .. } = &ch.anim_state {
@@ -884,6 +893,7 @@ fn tick_char(
             facing: ch.facing,
             at_edge,
             jump_target,
+            attract_target,
         };
         ch.behavior.next_state(&ctx)
     };
