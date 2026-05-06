@@ -900,6 +900,12 @@ fn tick_char(
             }
             // Keep ch.surface in sync when the new state implies a surface change.
             let new_surface: Option<Surface> = match (&new_state, &ch.surface) {
+                // Falling always means the character is airborne, regardless of
+                // which surface it was on before.  Without this, the panel
+                // position would continue to be derived from wall coordinates
+                // (y_local) instead of char_pos, so the character would appear
+                // frozen despite physics updating char_pos.
+                (State::Falling { .. }, _) => Some(Surface::Airborne),
                 (State::CornerTransitionSide { side, .. }, Surface::WindowTop { win_id, .. }) => {
                     Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
                 }
