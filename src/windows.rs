@@ -955,6 +955,18 @@ fn remove_tray_icon(hwnd: HWND) {
 
 pub fn run() {
     unsafe {
+        // Single-instance guard: create a named mutex. If it already exists
+        // (ERROR_ALREADY_EXISTS), another instance is running — exit silently.
+        let mutex_name = to_wide("Local\\PetitMatesSingleInstance");
+        let _mutex = windows_sys::Win32::System::Threading::CreateMutexW(
+            ptr::null(), 1, mutex_name.as_ptr(),
+        );
+        if windows_sys::Win32::Foundation::GetLastError()
+            == windows_sys::Win32::Foundation::ERROR_ALREADY_EXISTS
+        {
+            return;
+        }
+
         let hinstance  = GetModuleHandleW(ptr::null());
         let class_name = to_wide("PetitMatesOverlay");
 
