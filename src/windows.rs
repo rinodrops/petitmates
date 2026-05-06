@@ -15,7 +15,6 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::mem;
-use std::path::PathBuf;
 use std::ptr;
 use std::time::Instant;
 
@@ -28,12 +27,12 @@ use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
-use crate::config::{make_shared, SharedConfig};
+use crate::config::{make_shared_win, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
 use crate::rust_behavior::RustBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
-use crate::windows_assets::{Anchor, SpriteAssets};
+use crate::windows_assets::{self, Anchor, SpriteAssets};
 use crate::windows_wm::{self, ScreenInfo, WinInfo};
 
 // ---- Constants ----
@@ -819,28 +818,6 @@ fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
-// ---- Asset directory ----
-
-fn char_dir() -> Option<PathBuf> {
-    let exe     = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent()?;
-
-    // Distribution: assets/ next to the .exe.
-    let dist = exe_dir.join("assets/bearded_dragon");
-    if dist.exists() { return Some(dist); }
-
-    // Dev cross-compiled: try 4 and 5 levels up from the exe directory.
-    for rel in &[
-        "../../../../assets/bearded_dragon",
-        "../../../../../assets/bearded_dragon",
-    ] {
-        if let Ok(p) = exe_dir.join(rel).canonicalize() {
-            if p.exists() { return Some(p); }
-        }
-    }
-    None
-}
-
 // ---- Entry point ----
 
 pub fn run() {
@@ -875,13 +852,14 @@ pub fn run() {
         );
         assert!(!hwnd.is_null(), "CreateWindowExW failed");
 
-        // Load assets.
-        let cdir    = char_dir().expect("character directory not found");
-        let mf      = manifest::load(&cdir).expect("manifest.toml missing or invalid");
-        let config  = make_shared(&cdir);
+        // Load assets from embedded bytes (sprite PNGs + manifest.toml are
+        // compiled into the exe by build.rs via include_bytes!).
+        let config    = make_shared_win();
         let display_w = config.lock().unwrap().current.display.display_width;
-        let assets  = SpriteAssets::load(&cdir, &mf, display_w)
-            .expect("failed to load sprites");
+        let mf        = manifest::load_from_bytes(windows_assets::embedded::MANIFEST_TOML)
+            .expect("embedded manifest.toml is invalid");
+        let assets    = SpriteAssets::load_embedded(&mf, display_w)
+            .expect("failed to decode embedded sprites");
 
         // Startup drop position.
         let si            = windows_wm::screen_info();

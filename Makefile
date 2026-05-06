@@ -130,15 +130,12 @@ _icns_build: | $(RES_DIR_T)
 
 win:
 	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
-	mkdir -p "$(WIN_DIR)/assets/bearded_dragon/sprite"
+	mkdir -p "$(WIN_DIR)"
 	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
-	cp $(CHAR_SRC)/manifest.toml "$(WIN_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/config.toml   "$(WIN_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/sprite/*.png  "$(WIN_DIR)/assets/bearded_dragon/sprite/"
 	@echo "Windows build: $(WIN_DIR)"
 
 win-zip: win
-	cd "$(BUILD_DIR)" && zip -r "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_DIR))"
+	cd "$(BUILD_DIR)" && zip "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_EXE))"
 	@echo "Windows package: $(WIN_ZIP)"
 
 # -----------------------------------------------------------------------
