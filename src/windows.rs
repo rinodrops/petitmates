@@ -673,7 +673,10 @@ unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
     let ms = unsafe { &*(lp as *const MSLLHOOKSTRUCT) };
     let cx = ms.pt.x as f64;
     let cy = ms.pt.y as f64;
-    let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } as u16 & 0x8000 != 0;
+    // GetAsyncKeyState reads the actual hardware state — more reliable than
+    // GetKeyState inside a WH_MOUSE_LL callback (which only sees the state as
+    // of the last processed message).
+    let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL as i32) } as u16 & 0x8000 != 0;
 
     match wp as u32 {
         WM_LBUTTONDOWN if ctrl => {
@@ -681,7 +684,8 @@ unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
             let in_sprite = APP.with(|cell| {
                 cell.borrow().as_ref().map(|s| {
                     let (rx, ry, rw, rh) = s.last_sprite_rect;
-                    cx >= rx as f64 && cx < (rx + rw) as f64
+                    rw > 0 && rh > 0
+                        && cx >= rx as f64 && cx < (rx + rw) as f64
                         && cy >= ry as f64 && cy < (ry + rh) as f64
                 }).unwrap_or(false)
             });
