@@ -534,6 +534,7 @@ fn tick(hwnd: HWND) {
 
                 // Keep surface in sync when the new state implies a surface change.
                 let new_surface: Option<Surface> = match (&new_state, &s.surface) {
+                    (State::Falling { .. }, _) => Some(Surface::Airborne),
                     (State::CornerTransitionSide { side, .. }, Surface::WindowTop { win_id, .. }) =>
                         Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side }),
                     (State::CornerTransitionSide { side, .. }, Surface::WindowWall { win_id, .. }) =>
