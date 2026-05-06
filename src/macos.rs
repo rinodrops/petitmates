@@ -4,24 +4,26 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::time::Instant;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{MainThreadOnly};
+use objc2::{define_class, msg_send, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
     NSEventMask, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSPanel,
-    NSRunningApplication, NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSBundle, NSPoint, NSRect, NSRunLoop, NSRunLoopMode, NSString, NSTimer,
+    MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop,
+    NSRunLoopMode, NSString, NSTimer,
 };
 
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
-use crate::config::{make_shared, SharedConfig};
+use crate::config::{make_shared, Config, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
 use crate::rust_behavior::RustBehavior;
@@ -35,25 +37,28 @@ unsafe extern "C" {
     static NSRunLoopCommonModes: *const std::ffi::c_void;
 }
 
-// ---- App state ----
+// ---- Per-character state ----
 
-struct AppState {
+struct CharState {
     panel: Retained<NSPanel>,
-    assets: SpriteAssets,
-    config: SharedConfig,
+    assets: Rc<SpriteAssets>,
     behavior: Box<dyn BehaviorScript>,
-    /// Current animation/behavior state.
     anim_state: State,
-    /// Which direction the character faces.
     facing: Dir,
-    /// Which surface the character is on.
     surface: Surface,
     /// Character position in CG coordinates (origin = screen top-left, Y down).
-    /// Updated each tick; converted to NS coords and applied to panel in Step 6e.
     char_pos: (f64, f64),
     last_tick: Instant,
-    /// Mouse offset from char_pos when drag started (NS coords delta), None if not dragging.
+    /// Mouse offset from panel origin in NS coords when dragging; None otherwise.
     drag_offset: Option<(f64, f64)>,
+}
+
+// ---- App-wide state (singletons) ----
+
+struct AppState {
+    chars: Vec<CharState>,
+    config: SharedConfig,
+    _menu_handler: Retained<MenuDelegate>,
     _status_item: Retained<objc2_app_kit::NSStatusItem>,
     _timer: Retained<NSTimer>,
     /// Keep event monitors alive for the lifetime of the app.
@@ -112,7 +117,10 @@ fn swap_sprite(
 
 // ---- Status item ----
 
-fn make_status_item(mt: MainThreadMarker) -> Retained<objc2_app_kit::NSStatusItem> {
+fn make_status_item(
+    handler: &MenuDelegate,
+    mt: MainThreadMarker,
+) -> Retained<objc2_app_kit::NSStatusItem> {
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(-2.0); // NSSquareStatusItemLength
@@ -126,6 +134,27 @@ fn make_status_item(mt: MainThreadMarker) -> Retained<objc2_app_kit::NSStatusIte
             }
         }
         let menu = NSMenu::init(NSMenu::alloc(mt));
+
+        // Character management items.
+        let add_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str("Add Bearded Dragon"),
+            Some(objc2::sel!(addCharacter:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*add_item, setTarget: handler] };
+        menu.addItem(&add_item);
+
+        let remove_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str("Remove Bearded Dragon"),
+            Some(objc2::sel!(removeCharacter:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*remove_item, setTarget: handler] };
+        menu.addItem(&remove_item);
+
+        menu.addItem(&NSMenuItem::separatorItem(mt));
 
         let about = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
@@ -195,6 +224,86 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
     (margin + offset, start_cg_y)
 }
 
+// ---- Spawn helper ----
+
+/// Create one character, place it in a startup-drop position, and return
+/// the fully initialised `CharState`.  Caller is responsible for pushing it
+/// into `AppState::chars`.
+fn spawn_char(assets: Rc<SpriteAssets>, si: &ScreenInfo, mt: MainThreadMarker) -> CharState {
+    let (start_cx, start_cy) = startup_drop(si, &assets);
+    let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
+    let panel = make_panel(init_img, mt);
+    let sz = unsafe { init_img.size() };
+    unsafe {
+        panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
+        panel.orderFront(None);
+    }
+    CharState {
+        panel,
+        assets,
+        behavior: Box::new(RustBehavior::new()),
+        anim_state: State::Falling { vx: 0.0, vy: 0.0 },
+        facing: Dir::Left,
+        surface: Surface::Airborne,
+        char_pos: (start_cx, start_cy),
+        last_tick: Instant::now(),
+        drag_offset: None,
+    }
+}
+
+// ---- Menu action delegate ----
+
+define_class!(
+    // SAFETY:
+    // - The superclass NSObject does not have any subclassing requirements.
+    // - `MenuDelegate` does not implement `Drop`.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    struct MenuDelegate;
+
+    // SAFETY: `NSObjectProtocol` has no additional safety requirements.
+    unsafe impl NSObjectProtocol for MenuDelegate {}
+
+    impl MenuDelegate {
+        /// Spawn one additional bearded dragon.
+        #[unsafe(method(addCharacter:))]
+        fn add_character(&self, _sender: &AnyObject) {
+            let mt = self.mtm();
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                    width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
+                });
+                if let Some(assets) = app.chars.first().map(|c| Rc::clone(&c.assets)) {
+                    app.chars.push(spawn_char(assets, &si, mt));
+                }
+            });
+        }
+
+        /// Remove the most recently added character (minimum 1 remains).
+        #[unsafe(method(removeCharacter:))]
+        fn remove_character(&self, _sender: &AnyObject) {
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                if app.chars.len() > 1 {
+                    unsafe { app.chars.last().unwrap().panel.orderOut(None) };
+                    app.chars.pop();
+                }
+            });
+        }
+    }
+);
+
+impl MenuDelegate {
+    fn new(mt: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mt);
+        // SAFETY: NSObject's `init` signature is correct.
+        unsafe { msg_send![this, init] }
+    }
+}
+
 // ---- Hover alpha ----
 
 fn update_hover_alpha(panel: &NSPanel, config: &crate::config::Config, dragging: bool) {
@@ -232,33 +341,25 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         if !flags.contains(NSEventModifierFlags::Command) {
             return;
         }
-        // Check whether the click landed inside the panel.
         let mouse_ns = unsafe { NSEvent::mouseLocation() };
-        let hit = APP.with(|cell| {
-            let b = cell.borrow();
-            let Some(s) = b.as_ref() else { return false };
-            let frame = unsafe { s.panel.frame() };
-            mouse_ns.x >= frame.origin.x
-                && mouse_ns.x < frame.origin.x + frame.size.width
-                && mouse_ns.y >= frame.origin.y
-                && mouse_ns.y < frame.origin.y + frame.size.height
-        });
-        if !hit { return; }
-
-        // Compute offset from panel origin in NS coords.
-        let offset = APP.with(|cell| {
-            let b = cell.borrow();
-            let Some(s) = b.as_ref() else { return (0.0, 0.0) };
-            let frame = unsafe { s.panel.frame() };
-            (mouse_ns.x - frame.origin.x, mouse_ns.y - frame.origin.y)
-        });
-
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
-            let Some(s) = b.as_mut() else { return };
-            s.drag_offset = Some(offset);
-            s.anim_state = State::Grabbed;
-            s.surface = Surface::Airborne;
+            let Some(app) = b.as_mut() else { return };
+            // Find the first panel that contains the click.
+            for ch in &mut app.chars {
+                let frame = unsafe { ch.panel.frame() };
+                if mouse_ns.x >= frame.origin.x
+                    && mouse_ns.x < frame.origin.x + frame.size.width
+                    && mouse_ns.y >= frame.origin.y
+                    && mouse_ns.y < frame.origin.y + frame.size.height
+                {
+                    let offset = (mouse_ns.x - frame.origin.x, mouse_ns.y - frame.origin.y);
+                    ch.drag_offset = Some(offset);
+                    ch.anim_state = State::Grabbed;
+                    ch.surface = Surface::Airborne;
+                    break; // only grab the topmost hit
+                }
+            }
         });
     });
     if let Some(m) = unsafe {
@@ -272,19 +373,17 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let blk_drag = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
-            let Some(s) = b.as_mut() else { return };
-            let Some(off) = s.drag_offset else { return };
-
+            let Some(app) = b.as_mut() else { return };
+            let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
+                else { return };
+            let off = app.chars[drag_idx].drag_offset.unwrap();
             let mouse_ns = unsafe { NSEvent::mouseLocation() };
-            // New NS panel origin.
             let new_ns_x = mouse_ns.x - off.0;
             let new_ns_y = mouse_ns.y - off.1;
-            unsafe { s.panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
-
-            // Keep char_pos in CG coords in sync (top-left of sprite).
-            let sz = unsafe { s.panel.frame().size };
+            unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
+            let sz = unsafe { app.chars[drag_idx].panel.frame().size };
             let si_height = wm::screen_info_raw();
-            s.char_pos = (new_ns_x, si_height - new_ns_y - sz.height);
+            app.chars[drag_idx].char_pos = (new_ns_x, si_height - new_ns_y - sz.height);
         });
     });
     if let Some(m) = unsafe {
@@ -298,62 +397,64 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let blk_up = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
-            let Some(s) = b.as_mut() else { return };
-            if s.drag_offset.is_none() { return; }
-            s.drag_offset = None;
+            let Some(app) = b.as_mut() else { return };
+            let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
+                else { return };
+            app.chars[drag_idx].drag_offset = None;
 
             let si = wm::screen_info_raw_full();
             let wins = wm::list_windows(&si);
+            let cfg = app.config.lock().unwrap().current.clone();
+
+            let ch = &mut app.chars[drag_idx];
 
             // Sprite dimensions for foot position.
-            let sr = sprite_for_state(&s.anim_state, s.facing);
-            let (fw, fh) = s.assets.image(sr.name, sr.mirror)
+            let sr = sprite_for_state(&ch.anim_state, ch.facing);
+            let (fw, fh) = ch.assets.image(sr.name, sr.mirror)
                 .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
                 .unwrap_or((150.0, 150.0));
-            let foot_x = s.char_pos.0 + fw / 2.0;
-            let foot_y = s.char_pos.1 + fh;
+            let foot_x = ch.char_pos.0 + fw / 2.0;
+            let foot_y = ch.char_pos.1 + fh;
 
             // Try to snap to a nearby surface.
             let new_surface = wm::find_surface_near(foot_x, foot_y, &wins, &si);
             match new_surface {
                 Some(surf) => {
-                    let cfg = s.config.lock().unwrap().current.clone();
                     let ctx = BehaviorContext {
-                        state: &s.anim_state,
+                        state: &ch.anim_state,
                         surface: &surf,
                         elapsed_secs: 0.0,
                         config: &cfg,
                         rng01: 0.0,
                         surface_progress: 0.5,
-                        facing: s.facing,
+                        facing: ch.facing,
                         at_edge: false,
                         jump_target: None,
                     };
-                    let new_anim = s.behavior.on_landed(&ctx);
-                    // Snap char_pos foot to the surface.
-                    let stand_anchor = s.assets.anchor("s-stand").unwrap_or(crate::assets::Anchor { x: 0.0, y: 0.0 });
-                    let stand_h = s.assets.image("s-stand", false)
+                    let new_anim = ch.behavior.on_landed(&ctx);
+                    let stand_anchor = ch.assets.anchor("s-stand")
+                        .unwrap_or(crate::assets::Anchor { x: 0.0, y: 0.0 });
+                    let stand_h = ch.assets.image("s-stand", false)
                         .map(|img| unsafe { img.size() }.height)
                         .unwrap_or(fh);
                     let snap_y = match &surf {
                         Surface::WindowTop { win_id, .. } =>
                             wm::find_win(*win_id, &wins).map(|w| w.y),
                         Surface::Desktop { .. } => {
-                            let si = wm::screen_info_raw_full();
-                            Some(si.floor_y())
+                            let si2 = wm::screen_info_raw_full();
+                            Some(si2.floor_y())
                         }
                         _ => None,
                     };
                     if let Some(surface_y) = snap_y {
-                        s.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
+                        ch.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
                     }
-                    s.surface = surf;
-                    s.anim_state = new_anim;
+                    ch.surface = surf;
+                    ch.anim_state = new_anim;
                 }
                 None => {
-                    // Drop from current position.
-                    s.surface = Surface::Airborne;
-                    s.anim_state = State::Falling { vx: 0.0, vy: 0.0 };
+                    ch.surface = Surface::Airborne;
+                    ch.anim_state = State::Falling { vx: 0.0, vy: 0.0 };
                 }
             }
         });
@@ -536,412 +637,394 @@ fn surface_context(
     }
 }
 
-fn tick() {
-    APP.with(|cell| {
-        let mut b = cell.borrow_mut();
-        let Some(s) = b.as_mut() else { return };
-        let mt = unsafe { MainThreadMarker::new_unchecked() };
+fn tick_char(
+    ch: &mut CharState,
+    cfg: &Config,
+    si: &ScreenInfo,
+    wins: &[WinInfo],
+    mt: MainThreadMarker,
+) {
+    // While dragging, skip physics and state machine — panel position is
+    // updated directly by the drag event monitor.
+    if ch.drag_offset.is_some() {
+        update_hover_alpha(&ch.panel, cfg, true);
+        return;
+    }
 
-        // While dragging, skip physics and state machine — panel position is
-        // updated directly by the drag event monitor.
-        if s.drag_offset.is_some() {
-            update_hover_alpha(&s.panel, &s.config.lock().unwrap().current.clone(), true);
-            return;
-        }
+    // Compute dt, capped to avoid large jumps after pauses.
+    let now = Instant::now();
+    let dt = now.duration_since(ch.last_tick).as_secs_f64().min(0.1);
+    ch.last_tick = now;
 
-        // Compute dt, capped to avoid large jumps after pauses.
-        let now = Instant::now();
-        let dt = now.duration_since(s.last_tick).as_secs_f64().min(0.1);
-        s.last_tick = now;
-
-        // Hot-reload config.
-        s.config.lock().unwrap().reload_if_changed();
-        let cfg = s.config.lock().unwrap().current.clone();
-
-        // Surface validity check.
-        let si = wm::screen_info(mt).unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
-        let wins = wm::list_windows(&si);
-        if !wm::surface_still_valid(&s.surface, &wins) {
-            let fallback = {
-                let ctx = BehaviorContext {
-                    state: &s.anim_state,
-                    surface: &s.surface,
-                    elapsed_secs: 0.0,
-                    config: &cfg,
-                    rng01: 0.0,
-                    surface_progress: 0.5,
-                    facing: s.facing,
-                    at_edge: false,
-                    jump_target: None,
-                };
-                s.behavior.on_surface_lost(&ctx)
+    // Surface validity check.
+    if !wm::surface_still_valid(&ch.surface, wins) {
+        let fallback = {
+            let ctx = BehaviorContext {
+                state: &ch.anim_state,
+                surface: &ch.surface,
+                elapsed_secs: 0.0,
+                config: cfg,
+                rng01: 0.0,
+                surface_progress: 0.5,
+                facing: ch.facing,
+                at_edge: false,
+                jump_target: None,
             };
-            s.anim_state = fallback;
-            s.surface = Surface::Airborne;
-        }
-
-        // Advance per-state animation timers / frame counters.
-        let elapsed = advance_anim(&mut s.anim_state, dt, &cfg);
-
-        // Save CG y before position update for swept landing detection.
-        let prev_cy = s.char_pos.1;
-
-        // Update char_pos for Airborne / Walking states.
-        match &s.anim_state {
-            State::Falling { vx, vy } => {
-                let (vx, vy) = (*vx, *vy);
-                let (cx, cy) = s.char_pos;
-                s.char_pos = (cx + vx * dt, cy + vy * dt);
-            }
-            State::Walking { dir, .. } => {
-                // Advance local position within the surface.
-                let speed = cfg.floor.walk_speed;
-                let delta = speed * dt;
-                match &mut s.surface {
-                    Surface::Desktop { x } => {
-                        *x += match dir { Dir::Left => -delta, Dir::Right => delta };
-                        // Clamp so the character never walks off the visible screen area.
-                        let half_w = cfg.display.display_width / 2.0;
-                        *x = x.clamp(half_w, si.width - half_w);
-                        s.char_pos.0 = *x;
-                    }
-                    Surface::WindowTop { x_local, .. } => {
-                        *x_local += match dir { Dir::Left => -delta, Dir::Right => delta };
-                    }
-                    _ => {}
-                }
-            }
-            State::ClimbingUp { .. } => {
-                if let Surface::WindowWall { y_local, .. } = &mut s.surface {
-                    *y_local -= cfg.wall.climb_speed * dt;
-                    *y_local = y_local.max(0.0);
-                }
-            }
-            State::ClimbingDown { .. } => {
-                // y_local update done via re-borrow below (borrow checker limitation)
-            }
-            _ => {}
-        }
-        // ClimbingDown separate borrow
-        if matches!(&s.anim_state, State::ClimbingDown { .. }) {
-            if let Surface::WindowWall { win_id, y_local, .. } = &mut s.surface {
-                if let Some(win) = wm::find_win(*win_id, &wins) {
-                    *y_local += cfg.wall.climb_speed * dt;
-                    *y_local = y_local.min(win.h);
-                }
-            }
-        }
-
-        // Gravity for Falling state (cap vy to prevent tunneling).
-        if let State::Falling { vy, .. } = &mut s.anim_state {
-            *vy = (*vy + cfg.jump.gravity * 60.0 * dt).min(600.0);
-        }
-
-        // Off-screen safeguard: if the character has fallen more than one
-        //     sprite-height below the screen bottom (or drifted far off the
-        //     sides), reset to a fresh startup drop so the run loop can
-        //     continue.
-        {
-            let (fw, fh) = s.assets.image("s-stand", false)
-                .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                .unwrap_or((150.0, 150.0));
-            let (cx, cy) = s.char_pos;
-            let below_screen = cy > si.height + fh;
-            let off_sides    = cx < -(fw * 3.0) || cx > si.width + fw * 3.0;
-            if below_screen || off_sides {
-                let (drop_x, drop_y) = startup_drop(&si, &s.assets);
-                s.char_pos  = (drop_x, drop_y);
-                s.surface   = Surface::Airborne;
-                s.anim_state = State::Falling { vx: 0.0, vy: 0.0 };
-            }
-        }
-
-        // Landing detection (swept check: did foot cross a surface boundary?).
-        if let State::Falling { vy, .. } = &s.anim_state {
-            if *vy >= 0.0 {
-                let (fw, fh) = s.assets.image("s-jump", false)
-                    .or_else(|| s.assets.image("s-stand", false))
-                    .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                    .unwrap_or((150.0, 150.0));
-                let foot_x = s.char_pos.0 + fw / 2.0;
-                let _foot_y_prev = prev_cy + fh;
-                let foot_y_now  = s.char_pos.1 + fh;
-
-                let floor_y = si.floor_y();
-
-                // Check window tops first.
-                // Use a full-body swept range: from the character's top edge at the
-                // previous tick (cy_prev) to the bottom edge at the current tick
-                // (cy_now + fh).  Any window top that falls within this range is a
-                // landing candidate.  We pick the topmost one (smallest win.y) so
-                // the character lands on the highest eligible window and doesn't
-                // tunnel through a window it only partially crossed.
-                let cy_prev = prev_cy;
-                let cy_now  = s.char_pos.1;
-                let landed_win = wins.iter()
-                    .filter(|win| {
-                        win.y < floor_y
-                            && foot_x >= win.x
-                            && foot_x <= win.right()
-                            && cy_prev < win.y
-                            && cy_now + fh >= win.y
-                    })
-                    .min_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
-                // Desktop floor: use a clamp check (foot at or past floor_y).
-                let landed_floor = landed_win.is_none()
-                    && foot_y_now >= floor_y;
-
-                let new_surface = landed_win
-                    .map(|win| Surface::WindowTop {
-                        win_id: win.id,
-                        x_local: (foot_x - win.x).clamp(0.0, win.w),
-                    })
-                    .or_else(|| landed_floor.then(|| {
-                    // Clamp landing x so the character stays within the visible screen.
-                    let half_w = cfg.display.display_width / 2.0;
-                    let clamped_x = foot_x.clamp(half_w, si.width - half_w);
-                    Surface::Desktop { x: clamped_x }
-                }));
-
-                if let Some(new_surface) = new_surface {
-                    let new_anim = {
-                        let ctx = BehaviorContext {
-                            state: &s.anim_state,
-                            surface: &new_surface,
-                            elapsed_secs: 0.0,
-                            config: &cfg,
-                            rng01: 0.0,
-                            surface_progress: 0.5,
-                            facing: s.facing,
-                            at_edge: false,
-                            jump_target: None,
-                        };
-                        s.behavior.on_landed(&ctx)
-                    };
-                    // Snap char_pos so the foot sits exactly on the surface.
-                    let stand_anchor = s.assets.anchor("s-stand").unwrap_or(Anchor { x: 0.0, y: 0.0 });
-                    let stand_h = s.assets.image("s-stand", false)
-                        .map(|img| unsafe { img.size() }.height)
-                        .unwrap_or(fh);
-                    let snap_y = match &new_surface {
-                        Surface::WindowTop { win_id, .. } =>
-                            wm::find_win(*win_id, &wins).map(|w| w.y),
-                        Surface::Desktop { .. } => Some(floor_y),
-                        _ => None,
-                    };
-                    if let Some(surface_y) = snap_y {
-                        s.char_pos = (
-                            foot_x - fw / 2.0,
-                            surface_y - stand_h + stand_anchor.y,
-                        );
-                    }
-                    s.surface = new_surface;
-                    s.anim_state = new_anim;
-                }
-            }
-        }
-
-        // Compute surface_progress, at_edge, jump_target.
-        let sr_for_ctx = match &s.anim_state {
-            State::TurningAround { elapsed, .. } => {
-                let progress = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
-                sprite_for_turn(progress, s.facing)
-            }
-            other => sprite_for_state(other, s.facing),
+            ch.behavior.on_surface_lost(&ctx)
         };
-        let sprite_sz = s.assets.image(sr_for_ctx.name, sr_for_ctx.mirror)
+        ch.anim_state = fallback;
+        ch.surface = Surface::Airborne;
+    }
+
+    // Advance per-state animation timers / frame counters.
+    let elapsed = advance_anim(&mut ch.anim_state, dt, cfg);
+
+    // Save CG y before position update for swept landing detection.
+    let prev_cy = ch.char_pos.1;
+
+    // Update char_pos for Airborne / Walking states.
+    match &ch.anim_state {
+        State::Falling { vx, vy } => {
+            let (vx, vy) = (*vx, *vy);
+            let (cx, cy) = ch.char_pos;
+            ch.char_pos = (cx + vx * dt, cy + vy * dt);
+        }
+        State::Walking { dir, .. } => {
+            // Advance local position within the surface.
+            let speed = cfg.floor.walk_speed;
+            let delta = speed * dt;
+            match &mut ch.surface {
+                Surface::Desktop { x } => {
+                    *x += match dir { Dir::Left => -delta, Dir::Right => delta };
+                    // Clamp so the character never walks off the visible screen area.
+                    let half_w = cfg.display.display_width / 2.0;
+                    *x = x.clamp(half_w, si.width - half_w);
+                    ch.char_pos.0 = *x;
+                }
+                Surface::WindowTop { x_local, .. } => {
+                    *x_local += match dir { Dir::Left => -delta, Dir::Right => delta };
+                }
+                _ => {}
+            }
+        }
+        State::ClimbingUp { .. } => {
+            if let Surface::WindowWall { y_local, .. } = &mut ch.surface {
+                *y_local -= cfg.wall.climb_speed * dt;
+                *y_local = y_local.max(0.0);
+            }
+        }
+        State::ClimbingDown { .. } => {
+            // y_local update done via re-borrow below (borrow checker limitation)
+        }
+        _ => {}
+    }
+    // ClimbingDown separate borrow
+    if matches!(&ch.anim_state, State::ClimbingDown { .. }) {
+        if let Surface::WindowWall { win_id, y_local, .. } = &mut ch.surface {
+            if let Some(win) = wm::find_win(*win_id, wins) {
+                *y_local += cfg.wall.climb_speed * dt;
+                *y_local = y_local.min(win.h);
+            }
+        }
+    }
+
+    // Gravity for Falling state (cap vy to prevent tunneling).
+    if let State::Falling { vy, .. } = &mut ch.anim_state {
+        *vy = (*vy + cfg.jump.gravity * 60.0 * dt).min(600.0);
+    }
+
+    // Off-screen safeguard: if the character has fallen more than one
+    //     sprite-height below the screen bottom (or drifted far off the
+    //     sides), reset to a fresh startup drop so the run loop can
+    //     continue.
+    {
+        let (fw, fh) = ch.assets.image("s-stand", false)
             .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
             .unwrap_or((150.0, 150.0));
-        let (surface_progress, at_edge, jump_target) =
-            surface_context(&s.surface, s.char_pos, sprite_sz.0, s.facing,
-                            cfg.jump.wall_jump_max_dist, &wins, &si);
+        let (cx, cy) = ch.char_pos;
+        let below_screen = cy > si.height + fh;
+        let off_sides    = cx < -(fw * 3.0) || cx > si.width + fw * 3.0;
+        if below_screen || off_sides {
+            let (drop_x, drop_y) = startup_drop(si, &ch.assets);
+            ch.char_pos  = (drop_x, drop_y);
+            ch.surface   = Surface::Airborne;
+            ch.anim_state = State::Falling { vx: 0.0, vy: 0.0 };
+        }
+    }
 
-        // Save to_dir if a TurningAround completes this tick.
-        let turn_to_dir = if let State::TurningAround { to_dir, .. } = &s.anim_state {
-            Some(*to_dir)
-        } else {
-            None
-        };
+    // Landing detection (swept check: did foot cross a surface boundary?).
+    if let State::Falling { vy, .. } = &ch.anim_state {
+        if *vy >= 0.0 {
+            let (fw, fh) = ch.assets.image("s-jump", false)
+                .or_else(|| ch.assets.image("s-stand", false))
+                .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+                .unwrap_or((150.0, 150.0));
+            let foot_x = ch.char_pos.0 + fw / 2.0;
+            let _foot_y_prev = prev_cy + fh;
+            let foot_y_now  = ch.char_pos.1 + fh;
 
-        // Run behavior state machine.
-        let transition = {
-            let ctx = BehaviorContext {
-                state: &s.anim_state,
-                surface: &s.surface,
-                elapsed_secs: elapsed,
-                config: &cfg,
-                rng01: 0.0,
-                surface_progress,
-                facing: s.facing,
-                at_edge,
-                jump_target,
-            };
-            s.behavior.next_state(&ctx)
-        };
-        match transition {
-            Transition::Stay => {}
-            Transition::To(new_state) => {
-                // Complete a turn: update facing before entering the new state.
-                if let Some(dir) = turn_to_dir {
-                    s.facing = dir;
-                }
-                // When transitioning to Falling from a wall surface, compute
-                // char_pos (CG top-left of sprite) from the wall position now,
-                // before the surface is overwritten with Airborne.
-                if matches!(&new_state, State::Falling { .. }) {
-                    let fall_pos: Option<(f64, f64)> = (|| {
-                        let (sw, sh) = s.assets.image("s-jump", false)
-                            .or_else(|| s.assets.image("s-stand", false))
-                            .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                            .map(|sz| (sz.0, sz.1))
-                            .or(Some((150.0, 150.0)))?;
-                        match &s.surface {
-                            Surface::WindowWall { win_id, side, y_local } => {
-                                let win = wm::find_win(*win_id, &wins)?;
-                                let cg_y = win.y + y_local - sh / 2.0;
-                                let cg_x = match side {
-                                    Side::Right => win.right() - sw,
-                                    Side::Left  => win.x,
-                                };
-                                Some((cg_x, cg_y))
-                            }
-                            _ => None,
-                        }
-                    })();
-                    if let Some(pos) = fall_pos {
-                        s.char_pos = pos;
-                    }
-                }
-                // Keep s.surface in sync when the new state implies a surface change.
-                let new_surface: Option<Surface> = match (&new_state, &s.surface) {
-                    // Walking off window-top edge → start corner descent → upper corner
-                    (State::CornerTransitionSide { side, .. }, Surface::WindowTop { win_id, .. }) => {
-                        Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
-                    }
-                    // ClimbingUp reached the wall top → upper corner
-                    (State::CornerTransitionSide { side, .. }, Surface::WindowWall { win_id, .. }) => {
-                        Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
-                    }
-                    // Upper corner → descend the wall → attach just below the top-edge
-                    // threshold (edge_margin=2) so ClimbingDown doesn't immediately
-                    // trigger an "at_edge" lower-corner transition.
-                    // y_local = sh/2 so the sprite top aligns with the window top edge
-                    // (the current formula centers the sprite on the grip row).
-                    (State::ClimbingDown { .. }, Surface::WindowUpperCorner { win_id, side }) => {
-                        let y_local = s.assets.image("s-hang-wall-0", false)
-                            .map(|img| unsafe { img.size() }.height / 2.0)
-                            .unwrap_or(4.0);
-                        Some(Surface::WindowWall { win_id: *win_id, side: *side, y_local })
-                    }
-                    // Upper corner → step onto window top.
-                    // x_local=0 or x_local=win.w both satisfy the at_edge condition
-                    // (edge_margin + sprite_w/2) immediately, causing an instant warp
-                    // back to the opposite corner on the very next tick.
-                    // Offset by walk-sprite half-width + edge_margin + 1 to land just
-                    // inside the threshold so the character actually walks across.
-                    (State::Walking { .. }, Surface::WindowUpperCorner { win_id, side }) => {
-                        let walk_w = s.assets.image("s-walk-0", false)
-                            .map(|img| unsafe { img.size() }.width)
-                            .unwrap_or(sprite_sz.0);
-                        let x_offset = walk_w / 2.0 + 3.0; // > edge_margin(2) + sprite_w/2
-                        let x = match side {
-                            Side::Left  => x_offset,
-                            Side::Right => wm::find_win(*win_id, &wins)
-                                .map(|w| w.w - x_offset)
-                                .unwrap_or(400.0 - x_offset),
-                        };
-                        Some(Surface::WindowTop { win_id: *win_id, x_local: x })
-                    }
-                    // Jump runup complete → snap directly to the target wall.
-                    // The target window and side are stored in the JumpRunup state;
-                    // we read them here before new_state overwrites anim_state.
-                    (State::WallEntry { .. }, Surface::Desktop { .. })
-                    | (State::WallEntry { .. }, Surface::WindowTop { .. }) => {
-                        // Only snap when coming from a JumpRunup (previous state).
-                        if let State::JumpRunup { target_win_id, target_side, .. } = &s.anim_state {
-                            if let Some(win) = wm::find_win(*target_win_id, &wins) {
-                                let side = *target_side;
-                                // Attach near the bottom of the wall (jumping from the floor),
-                                // just high enough that ClimbingUp doesn't immediately see at_edge.
-                                let hang_h = s.assets.image("s-hang-wall-0", false)
-                                    .map(|img| unsafe { img.size() }.height)
-                                    .unwrap_or(150.0);
-                                let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
-                                // Update char_pos to the wall position.
-                                let stand_w = s.assets.image("s-stand", false)
-                                    .map(|img| unsafe { img.size() }.width)
-                                    .unwrap_or(150.0);
-                                s.char_pos.0 = match side {
-                                    Side::Right => win.right() - stand_w,
-                                    Side::Left  => win.x,
-                                };
-                                s.char_pos.1 = win.y + y_local;
-                                s.facing = match side {
-                                    Side::Left  => Dir::Right,
-                                    Side::Right => Dir::Left,
-                                };
-                                Some(Surface::WindowWall { win_id: win.id, side, y_local })
-                            } else { None }
-                        } else { None }
-                    }
+            let floor_y = si.floor_y();
+
+            let cy_prev = prev_cy;
+            let cy_now  = ch.char_pos.1;
+            let landed_win = wins.iter()
+                .filter(|win| {
+                    win.y < floor_y
+                        && foot_x >= win.x
+                        && foot_x <= win.right()
+                        && cy_prev < win.y
+                        && cy_now + fh >= win.y
+                })
+                .min_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
+            let landed_floor = landed_win.is_none()
+                && foot_y_now >= floor_y;
+
+            let new_surface = landed_win
+                .map(|win| Surface::WindowTop {
+                    win_id: win.id,
+                    x_local: (foot_x - win.x).clamp(0.0, win.w),
+                })
+                .or_else(|| landed_floor.then(|| {
+                let half_w = cfg.display.display_width / 2.0;
+                let clamped_x = foot_x.clamp(half_w, si.width - half_w);
+                Surface::Desktop { x: clamped_x }
+            }));
+
+            if let Some(new_surface) = new_surface {
+                let new_anim = {
+                    let ctx = BehaviorContext {
+                        state: &ch.anim_state,
+                        surface: &new_surface,
+                        elapsed_secs: 0.0,
+                        config: cfg,
+                        rng01: 0.0,
+                        surface_progress: 0.5,
+                        facing: ch.facing,
+                        at_edge: false,
+                        jump_target: None,
+                    };
+                    ch.behavior.on_landed(&ctx)
+                };
+                let stand_anchor = ch.assets.anchor("s-stand").unwrap_or(Anchor { x: 0.0, y: 0.0 });
+                let stand_h = ch.assets.image("s-stand", false)
+                    .map(|img| unsafe { img.size() }.height)
+                    .unwrap_or(fh);
+                let snap_y = match &new_surface {
+                    Surface::WindowTop { win_id, .. } =>
+                        wm::find_win(*win_id, wins).map(|w| w.y),
+                    Surface::Desktop { .. } => Some(floor_y),
                     _ => None,
                 };
-                if let Some(ns) = new_surface {
-                    s.surface = ns;
+                if let Some(surface_y) = snap_y {
+                    ch.char_pos = (
+                        foot_x - fw / 2.0,
+                        surface_y - stand_h + stand_anchor.y,
+                    );
                 }
-                // Sync facing when entering wall / corner-transition states so that
-                // wall_side_from_surface() returns the correct side and corner sprites
-                // are rendered facing inward (left corner → right, right corner → left).
-                if matches!(&new_state, State::ClimbingUp { .. } | State::ClimbingDown { .. }) {
-                    if let Surface::WindowWall { side, .. }
-                         | Surface::WindowUpperCorner { side, .. } = &s.surface
-                    {
-                        s.facing = match side {
-                            Side::Left  => Dir::Right,
-                            Side::Right => Dir::Left,
-                        };
+                ch.surface = new_surface;
+                ch.anim_state = new_anim;
+            }
+        }
+    }
+
+    // Compute surface_progress, at_edge, jump_target.
+    let sr_for_ctx = match &ch.anim_state {
+        State::TurningAround { elapsed, .. } => {
+            let progress = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
+            sprite_for_turn(progress, ch.facing)
+        }
+        other => sprite_for_state(other, ch.facing),
+    };
+    let sprite_sz = ch.assets.image(sr_for_ctx.name, sr_for_ctx.mirror)
+        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+        .unwrap_or((150.0, 150.0));
+    let (surface_progress, at_edge, jump_target) =
+        surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
+                        cfg.jump.wall_jump_max_dist, wins, si);
+
+    // Save to_dir if a TurningAround completes this tick.
+    let turn_to_dir = if let State::TurningAround { to_dir, .. } = &ch.anim_state {
+        Some(*to_dir)
+    } else {
+        None
+    };
+
+    // Run behavior state machine.
+    let transition = {
+        let ctx = BehaviorContext {
+            state: &ch.anim_state,
+            surface: &ch.surface,
+            elapsed_secs: elapsed,
+            config: cfg,
+            rng01: 0.0,
+            surface_progress,
+            facing: ch.facing,
+            at_edge,
+            jump_target,
+        };
+        ch.behavior.next_state(&ctx)
+    };
+    match transition {
+        Transition::Stay => {}
+        Transition::To(new_state) => {
+            // Complete a turn: update facing before entering the new state.
+            if let Some(dir) = turn_to_dir {
+                ch.facing = dir;
+            }
+            // When transitioning to Falling from a wall surface, compute
+            // char_pos (CG top-left of sprite) from the wall position now,
+            // before the surface is overwritten with Airborne.
+            if matches!(&new_state, State::Falling { .. }) {
+                let fall_pos: Option<(f64, f64)> = (|| {
+                    let (sw, sh) = ch.assets.image("s-jump", false)
+                        .or_else(|| ch.assets.image("s-stand", false))
+                        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+                        .map(|sz| (sz.0, sz.1))
+                        .or(Some((150.0, 150.0)))?;
+                    match &ch.surface {
+                        Surface::WindowWall { win_id, side, y_local } => {
+                            let win = wm::find_win(*win_id, wins)?;
+                            let cg_y = win.y + y_local - sh / 2.0;
+                            let cg_x = match side {
+                                Side::Right => win.right() - sw,
+                                Side::Left  => win.x,
+                            };
+                            Some((cg_x, cg_y))
+                        }
+                        _ => None,
                     }
+                })();
+                if let Some(pos) = fall_pos {
+                    ch.char_pos = pos;
                 }
-                // CornerTransitionSide: character has just rounded the corner;
-                // face inward so the corner-hang sprite looks correct.
-                if let State::CornerTransitionSide { side, .. } = &new_state {
-                    s.facing = match side {
+            }
+            // Keep ch.surface in sync when the new state implies a surface change.
+            let new_surface: Option<Surface> = match (&new_state, &ch.surface) {
+                (State::CornerTransitionSide { side, .. }, Surface::WindowTop { win_id, .. }) => {
+                    Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
+                }
+                (State::CornerTransitionSide { side, .. }, Surface::WindowWall { win_id, .. }) => {
+                    Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
+                }
+                (State::ClimbingDown { .. }, Surface::WindowUpperCorner { win_id, side }) => {
+                    let y_local = ch.assets.image("s-hang-wall-0", false)
+                        .map(|img| unsafe { img.size() }.height / 2.0)
+                        .unwrap_or(4.0);
+                    Some(Surface::WindowWall { win_id: *win_id, side: *side, y_local })
+                }
+                (State::Walking { .. }, Surface::WindowUpperCorner { win_id, side }) => {
+                    let walk_w = ch.assets.image("s-walk-0", false)
+                        .map(|img| unsafe { img.size() }.width)
+                        .unwrap_or(sprite_sz.0);
+                    let x_offset = walk_w / 2.0 + 3.0;
+                    let x = match side {
+                        Side::Left  => x_offset,
+                        Side::Right => wm::find_win(*win_id, wins)
+                            .map(|w| w.w - x_offset)
+                            .unwrap_or(400.0 - x_offset),
+                    };
+                    Some(Surface::WindowTop { win_id: *win_id, x_local: x })
+                }
+                (State::WallEntry { .. }, Surface::Desktop { .. })
+                | (State::WallEntry { .. }, Surface::WindowTop { .. }) => {
+                    if let State::JumpRunup { target_win_id, target_side, .. } = &ch.anim_state {
+                        if let Some(win) = wm::find_win(*target_win_id, wins) {
+                            let side = *target_side;
+                            let hang_h = ch.assets.image("s-hang-wall-0", false)
+                                .map(|img| unsafe { img.size() }.height)
+                                .unwrap_or(150.0);
+                            let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
+                            let stand_w = ch.assets.image("s-stand", false)
+                                .map(|img| unsafe { img.size() }.width)
+                                .unwrap_or(150.0);
+                            ch.char_pos.0 = match side {
+                                Side::Right => win.right() - stand_w,
+                                Side::Left  => win.x,
+                            };
+                            ch.char_pos.1 = win.y + y_local;
+                            ch.facing = match side {
+                                Side::Left  => Dir::Right,
+                                Side::Right => Dir::Left,
+                            };
+                            Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                        } else { None }
+                    } else { None }
+                }
+                _ => None,
+            };
+            if let Some(ns) = new_surface {
+                ch.surface = ns;
+            }
+            if matches!(&new_state, State::ClimbingUp { .. } | State::ClimbingDown { .. }) {
+                if let Surface::WindowWall { side, .. }
+                     | Surface::WindowUpperCorner { side, .. } = &ch.surface
+                {
+                    ch.facing = match side {
                         Side::Left  => Dir::Right,
                         Side::Right => Dir::Left,
                     };
                 }
-                s.anim_state = new_state;
             }
-        }
-
-        // Keep facing in sync with Walking direction.
-        if let State::Walking { dir, .. } = &s.anim_state {
-            s.facing = *dir;
-        }
-
-        // Select sprite and update panel position.
-        let sr = match &s.anim_state {
-            State::TurningAround { elapsed, .. } => {
-                let progress = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
-                sprite_for_turn(progress, s.facing)
+            if let State::CornerTransitionSide { side, .. } = &new_state {
+                ch.facing = match side {
+                    Side::Left  => Dir::Right,
+                    Side::Right => Dir::Left,
+                };
             }
-            other => sprite_for_state(other, s.facing),
-        };
-        swap_sprite(&s.panel, &s.assets, sr.name, sr.mirror, mt);
+            ch.anim_state = new_state;
+        }
+    }
 
-        // Move panel to surface-derived NS origin.
-        let anchor = s.assets.anchor(sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
-        let stand_anchor_y = s.assets.anchor("s-stand").map(|a| a.y).unwrap_or(0.0);
-        let sz = s.assets.image(sr.name, sr.mirror)
-            .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-            .unwrap_or((150.0, 150.0));
-        let origin = surface_to_ns_origin(&s.surface, s.char_pos, sz, anchor, stand_anchor_y, &wins, &si);
-        unsafe { s.panel.setFrameOrigin(origin) };
+    // Keep facing in sync with Walking direction.
+    if let State::Walking { dir, .. } = &ch.anim_state {
+        ch.facing = *dir;
+    }
 
-        // Hover alpha.
-        update_hover_alpha(&s.panel, &cfg, false);
+    // Select sprite and update panel position.
+    let sr = match &ch.anim_state {
+        State::TurningAround { elapsed, .. } => {
+            let progress = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
+            sprite_for_turn(progress, ch.facing)
+        }
+        other => sprite_for_state(other, ch.facing),
+    };
+    swap_sprite(&ch.panel, &ch.assets, sr.name, sr.mirror, mt);
+
+    // Move panel to surface-derived NS origin.
+    let anchor = ch.assets.anchor(sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
+    let stand_anchor_y = ch.assets.anchor("s-stand").map(|a| a.y).unwrap_or(0.0);
+    let sz = ch.assets.image(sr.name, sr.mirror)
+        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+        .unwrap_or((150.0, 150.0));
+    let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
+    unsafe { ch.panel.setFrameOrigin(origin) };
+
+    // Hover alpha.
+    update_hover_alpha(&ch.panel, cfg, false);
+}
+
+fn tick() {
+    APP.with(|cell| {
+        let mut b = cell.borrow_mut();
+        let Some(app) = b.as_mut() else { return };
+        let mt = unsafe { MainThreadMarker::new_unchecked() };
+
+        // Hot-reload config once for all characters.
+        app.config.lock().unwrap().reload_if_changed();
+        let cfg = app.config.lock().unwrap().current.clone();
+
+        // Compute screen info and window list once for all characters.
+        let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+            width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
+        });
+        let wins = wm::list_windows(&si);
+
+        for ch in &mut app.chars {
+            tick_char(ch, &cfg, &si, &wins, mt);
+        }
     });
 }
+
 
 // ---- Entry point ----
 
@@ -950,40 +1033,18 @@ pub fn run() {
     let app = NSApplication::sharedApplication(mt);
     unsafe { app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) };
 
-    // Single-instance guard
-    if let Some(bid) = unsafe { NSBundle::mainBundle().bundleIdentifier() } {
-        let others =
-            unsafe { NSRunningApplication::runningApplicationsWithBundleIdentifier(&bid) };
-        let my_pid = std::process::id() as i32;
-        if unsafe { others.iter().any(|a| a.processIdentifier() != my_pid) } {
-            unsafe { app.terminate(None) };
-            return;
-        }
-    }
-
     let cdir = char_dir().expect("character directory not found");
     let mf = manifest::load(&cdir).expect("manifest.toml missing or invalid");
     let config = make_shared(&cdir);
     let display_w = config.lock().unwrap().current.display.display_width;
-    let assets = SpriteAssets::load(&cdir, &mf, display_w).expect("failed to load sprites");
+    let assets = Rc::new(SpriteAssets::load(&cdir, &mf, display_w).expect("failed to load sprites"));
 
-    // Startup drop position (random x within center 80% of screen).
     let si = wm::screen_info(mt)
         .unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
-    let (start_cx, start_cy) = startup_drop(&si, &assets);
+    let first_char = spawn_char(Rc::clone(&assets), &si, mt);
 
-    let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
-    let panel = make_panel(init_img, mt);
-    let sz = unsafe { init_img.size() };
-    // Start off-screen above; tick() moves it each frame.
-    unsafe {
-        // Place the panel at screen top: NS y = si.height - start_cy - sprite_height.
-        // With start_cy=0 this is si.height - sz.height (sprite occupies top of screen).
-        panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
-        panel.orderFront(None);
-    }
-
-    let status_item = make_status_item(mt);
+    let menu_handler = MenuDelegate::new(mt);
+    let status_item = make_status_item(&menu_handler, mt);
 
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();
@@ -999,16 +1060,9 @@ pub fn run() {
 
     APP.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
-            panel,
-            assets,
+            chars: vec![first_char],
             config,
-            behavior: Box::new(RustBehavior::new()),
-            anim_state: State::Falling { vx: 0.0, vy: 0.0 },
-            facing: Dir::Left,
-            surface: Surface::Airborne,
-            char_pos: (start_cx, start_cy),
-            last_tick: Instant::now(),
-            drag_offset: None,
+            _menu_handler: menu_handler,
             _status_item: status_item,
             _timer: timer,
             _event_monitors: event_monitors,
