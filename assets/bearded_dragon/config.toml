@@ -29,6 +29,9 @@ turn_duration     = 0.7           # seconds for turn-around animation
 
 observe_duration  = [3.0, 8.0]    # [min, max] s observation phase after landing
 
+head_side_duration  = [10.0, 25.0] # [min, max] s looking sideways before turning forward
+head_front_duration = [ 2.0,  6.0] # [min, max] s looking forward before turning back to side
+
 # ---- Wall (vertical climb) ----
 [wall]
 climb_speed       = 120.0          # px/s (display coords)

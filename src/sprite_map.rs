@@ -86,11 +86,14 @@ pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
         State::StandIdle { bob_phase: false, .. } => SpriteRef::side("s-stand", facing),
         State::StandIdle { bob_phase: true, .. } => SpriteRef::side("s-stand-close", facing),
 
-        State::SitIdle { .. } => SpriteRef::side("s-sit", facing),
+        State::SitIdle { head_front: false, .. } => SpriteRef::side("s-sit", facing),
+        State::SitIdle { head_front: true,  .. } => SpriteRef::front("f-sit"),
 
-        State::LieIdle { .. } => SpriteRef::side("s-lie", facing),
+        State::LieIdle { head_front: false, .. } => SpriteRef::side("s-lie", facing),
+        State::LieIdle { head_front: true,  .. } => SpriteRef::front("f-lie"),
 
-        State::Sleeping { .. } => SpriteRef::side("s-lie-sleep", facing),
+        State::Sleeping { head_front: false, .. } => SpriteRef::side("s-lie-sleep", facing),
+        State::Sleeping { head_front: true,  .. } => SpriteRef::front("f-lie-sleep"),
 
         State::PeekDown { dir, .. } => SpriteRef::side("s-peek-down", *dir),
 
