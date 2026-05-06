@@ -13,7 +13,7 @@ use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
-    NSEventMask, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSPanel,
+    NSEventMask, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel,
     NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
@@ -152,7 +152,9 @@ fn make_status_item(
             &NSString::from_str(""),
         );
         let (): () = unsafe { objc2::msg_send![&*remove_item, setTarget: handler] };
+        let (): () = unsafe { objc2::msg_send![&*remove_item, setTag: 1_isize] };
         menu.addItem(&remove_item);
+        let (): () = unsafe { objc2::msg_send![&*menu, setDelegate: handler] };
 
         menu.addItem(&NSMenuItem::separatorItem(mt));
 
@@ -264,7 +266,26 @@ define_class!(
     // SAFETY: `NSObjectProtocol` has no additional safety requirements.
     unsafe impl NSObjectProtocol for MenuDelegate {}
 
+    unsafe impl NSMenuDelegate for MenuDelegate {}
+
     impl MenuDelegate {
+        /// Gray out "Remove" when only one character remains.
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, menu: &NSMenu) {
+            APP.with(|cell| {
+                let b = cell.borrow();
+                let Some(app) = b.as_ref() else { return };
+                let enabled = app.chars.len() > 1;
+                unsafe {
+                    // Tag 1 is set on the Remove item in make_status_item.
+                    let item: Option<&NSMenuItem> = msg_send![menu, itemWithTag: 1_isize];
+                    if let Some(item) = item {
+                        let (): () = msg_send![item, setEnabled: enabled];
+                    }
+                }
+            });
+        }
+
         /// Spawn one additional bearded dragon.
         #[unsafe(method(addCharacter:))]
         fn add_character(&self, _sender: &AnyObject) {
