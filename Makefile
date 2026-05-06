@@ -37,7 +37,7 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-.PHONY: all app dev win win-zip zip sign notarize clean
+.PHONY: all app dev win win-zip mac-zip sign notarize inspect-mac inspect-win clean
 
 all: app
 
@@ -130,10 +130,8 @@ _icns_build: | $(RES_DIR_T)
 
 win:
 	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
-	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build          --bin wm_inspect_win --target x86_64-pc-windows-gnu
 	mkdir -p "$(WIN_DIR)/assets/bearded_dragon/sprite"
 	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
-	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/debug/wm_inspect_win.exe" "$(WIN_DIR)/wm_inspect_win.exe"
 	cp $(CHAR_SRC)/manifest.toml "$(WIN_DIR)/assets/bearded_dragon/"
 	cp $(CHAR_SRC)/config.toml   "$(WIN_DIR)/assets/bearded_dragon/"
 	cp $(CHAR_SRC)/sprite/*.png  "$(WIN_DIR)/assets/bearded_dragon/sprite/"
@@ -144,10 +142,24 @@ win-zip: win
 	@echo "Windows package: $(WIN_ZIP)"
 
 # -----------------------------------------------------------------------
-# Distribution zip
+# Diagnostic tools (developer only, not included in distribution)
 # -----------------------------------------------------------------------
 
-zip: app
+inspect-mac:
+	cargo build --bin wm_inspect
+	@echo "Built: target/debug/wm_inspect"
+	@echo "Run:   ./target/debug/wm_inspect"
+
+inspect-win:
+	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --bin wm_inspect_win \
+		--features inspect-win --target x86_64-pc-windows-gnu
+	@echo "Built: $(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/debug/wm_inspect_win.exe"
+
+# -----------------------------------------------------------------------
+# Distribution zip (macOS)
+# -----------------------------------------------------------------------
+
+mac-zip: app
 	ditto -c -k --keepParent "$(APP)" "$(APP_ZIP)"
 	@echo "Package: $(APP_ZIP)"
 
