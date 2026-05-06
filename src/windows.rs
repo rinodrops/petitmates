@@ -74,23 +74,6 @@ fn is_dark_mode() -> bool {
     }
 }
 
-// ---- Drag state ----
-
-/// Offset from the sprite top-left to the cursor at drag start (screen coords).
-struct DragState {
-    /// hwnd of the overlay window, needed to re-render during the hook.
-    hwnd: HWND,
-    /// Cursor offset from sprite top-left when the drag started.
-    offset_x: f64,
-    offset_y: f64,
-}
-
-thread_local! {
-    static DRAG: RefCell<Option<DragState>> = RefCell::new(None);
-    /// HHOOK handle, stored so we can remove it on exit.
-    static HOOK: RefCell<HHOOK> = RefCell::new(ptr::null_mut());
-}
-
 // ---- App state ----
 
 struct AppState {
@@ -105,9 +88,9 @@ struct AppState {
     char_pos: (f64, f64),
     last_tick: Instant,
     visible: bool,
-    /// Screen-space sprite top-left of the last rendered frame. Used by the
-    /// mouse hook to hit-test the sprite without re-computing surface_to_screen.
-    last_sprite_rect: (i32, i32, i32, i32), // x, y, w, h
+    /// Cursor offset from sprite top-left at drag start (screen coords).
+    /// `Some` while Ctrl+dragging, `None` otherwise.
+    drag_offset: Option<(f64, f64)>,
 }
 
 thread_local! {
@@ -330,13 +313,12 @@ fn tick(hwnd: HWND) {
         let Some(s) = b.as_mut() else { return };
 
         // While being dragged, skip the state machine and just render at the
-        // position set by the mouse hook.
-        if matches!(s.anim_state, State::Grabbed) {
+        // position set by WM_MOUSEMOVE.
+        if s.drag_offset.is_some() {
             s.last_tick = Instant::now(); // keep dt fresh so release doesn't jump
             let sr = sprite_for_state(&s.anim_state, s.facing);
             let Some(sprite) = s.assets.sprite(sr.name, sr.mirror) else { return };
             let (px, py) = (s.char_pos.0 as i32, s.char_pos.1 as i32);
-            s.last_sprite_rect = (px, py, sprite.w, sprite.h);
             let bgra = sprite.bgra.clone();
             unsafe { set_layered_content(hwnd, &bgra, sprite.w, sprite.h, px, py, 200); }
             return;
@@ -648,9 +630,6 @@ fn tick(hwnd: HWND) {
             else    { 255 }
         };
 
-        // Record the sprite rect for drag hit-testing.
-        s.last_sprite_rect = (px, py, sprite.w, sprite.h);
-
         // Render.
         let bgra = sprite.bgra.clone();
         unsafe {
@@ -663,154 +642,81 @@ fn tick(hwnd: HWND) {
     });
 }
 
-// ---- Low-level mouse hook (Ctrl+drag) ----
-
-unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    if code < 0 {
-        return unsafe { CallNextHookEx(ptr::null_mut(), code, wp, lp) };
-    }
-
-    let ms = unsafe { &*(lp as *const MSLLHOOKSTRUCT) };
-    let cx = ms.pt.x as f64;
-    let cy = ms.pt.y as f64;
-    // GetAsyncKeyState reads the actual hardware state — more reliable than
-    // GetKeyState inside a WH_MOUSE_LL callback (which only sees the state as
-    // of the last processed message).
-    let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL as i32) } as u16 & 0x8000 != 0;
-
-    match wp as u32 {
-        WM_LBUTTONDOWN if ctrl => {
-            // Hit-test the sprite rect.
-            let in_sprite = APP.with(|cell| {
-                cell.borrow().as_ref().map(|s| {
-                    let (rx, ry, rw, rh) = s.last_sprite_rect;
-                    rw > 0 && rh > 0
-                        && cx >= rx as f64 && cx < (rx + rw) as f64
-                        && cy >= ry as f64 && cy < (ry + rh) as f64
-                }).unwrap_or(false)
-            });
-            if in_sprite {
-                let hwnd = APP.with(|cell| {
-                    cell.borrow().as_ref().map(|s| {
-                        let (rx, ry, _, _) = s.last_sprite_rect;
-                        (DRAG.with(|d| {
-                            *d.borrow_mut() = Some(DragState {
-                                hwnd: ptr::null_mut(), // filled below
-                                offset_x: cx - rx as f64,
-                                offset_y: cy - ry as f64,
-                            });
-                        }), s.last_sprite_rect)
-                    })
-                });
-                // Set Grabbed state.
-                APP.with(|cell| {
-                    if let Some(s) = cell.borrow_mut().as_mut() {
-                        s.anim_state = State::Grabbed;
-                        s.surface    = Surface::Airborne;
-                    }
-                });
-                // We need the hwnd — stored separately in HWND_OVERLAY.
-                let hwnd_val = HWND_OVERLAY.with(|h| *h.borrow());
-                DRAG.with(|d| {
-                    if let Some(ref mut ds) = *d.borrow_mut() {
-                        ds.hwnd = hwnd_val;
-                    }
-                });
-                // Consume the click so it doesn't reach the window below.
-                return 1;
-            }
-        }
-        WM_MOUSEMOVE => {
-            let dragging = DRAG.with(|d| d.borrow().is_some());
-            if dragging {
-                let (offset_x, offset_y, hwnd_val) = DRAG.with(|d| {
-                    let b = d.borrow();
-                    let ds = b.as_ref().unwrap();
-                    (ds.offset_x, ds.offset_y, ds.hwnd)
-                });
-                let new_x = cx - offset_x;
-                let new_y = cy - offset_y;
-                APP.with(|cell| {
-                    if let Some(s) = cell.borrow_mut().as_mut() {
-                        s.char_pos = (new_x, new_y);
-                    }
-                });
-                // Render immediately (don't wait for the 100 ms tick).
-                tick(hwnd_val);
-                // Don't consume mousemove — allow normal cursor behaviour.
-            }
-        }
-        WM_LBUTTONUP => {
-            let was_dragging = DRAG.with(|d| d.borrow().is_some());
-            if was_dragging {
-                DRAG.with(|d| *d.borrow_mut() = None);
-                // Find the nearest surface and land.
-                let hwnd_val = HWND_OVERLAY.with(|h| *h.borrow());
-                APP.with(|cell| {
-                    if let Some(s) = cell.borrow_mut().as_mut() {
-                        let si   = windows_wm::screen_info();
-                        let wins = windows_wm::list_windows(&si);
-                        // Use sprite centre as the anchor point.
-                        let sr = sprite_for_state(&s.anim_state, s.facing);
-                        let (sw, sh) = s.assets.size(sr.name, sr.mirror);
-                        let anchor_cx = s.char_pos.0 + sw / 2.0;
-                        let anchor_cy = s.char_pos.1 + sh;
-                        let new_surface = windows_wm::find_surface_near(
-                            anchor_cx, anchor_cy, &wins, &si,
-                        ).unwrap_or_else(|| {
-                            let half_w = sw / 2.0;
-                            Surface::Desktop { x: anchor_cx.clamp(half_w, si.width - half_w) }
-                        });
-                        let ctx = crate::behavior::BehaviorContext {
-                            state: &State::Grabbed,
-                            surface: &new_surface,
-                            elapsed_secs: 0.0,
-                            config: &s.config.lock().unwrap().current.clone(),
-                            rng01: 0.0,
-                            surface_progress: 0.5,
-                            facing: s.facing,
-                            at_edge: false,
-                            jump_target: None,
-                        };
-                        s.anim_state = s.behavior.on_landed(&ctx);
-                        s.surface    = new_surface;
-                    }
-                });
-                tick(hwnd_val);
-                return 1; // consume the button-up
-            }
-        }
-        _ => {}
-    }
-
-    unsafe { CallNextHookEx(ptr::null_mut(), code, wp, lp) }
-}
-
-thread_local! {
-    static HWND_OVERLAY: RefCell<HWND> = RefCell::new(ptr::null_mut());
-}
-
-fn install_mouse_hook() {
-    unsafe {
-        let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), ptr::null_mut(), 0);
-        HOOK.with(|h| *h.borrow_mut() = hook);
-    }
-}
-
-fn remove_mouse_hook() {
-    HOOK.with(|h| {
-        let hook = *h.borrow();
-        if !hook.is_null() {
-            unsafe { UnhookWindowsHookEx(hook); }
-        }
-    });
-}
-
 // ---- Window procedure ----
 
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
+            // Pass-through by default; capture when Ctrl is held.
+            // This replaces WS_EX_TRANSPARENT: we return HTTRANSPARENT normally
+            // so clicks reach the window behind us, and HTCLIENT when Ctrl is
+            // pressed so our window receives the click for dragging.
+            WM_NCHITTEST => {
+                let ctrl = GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000 != 0;
+                if ctrl { HTCLIENT as LRESULT } else { HTTRANSPARENT as LRESULT }
+            }
+            WM_LBUTTONDOWN => {
+                let mut pt = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                APP.with(|cell| {
+                    if let Some(s) = cell.borrow_mut().as_mut() {
+                        s.drag_offset = Some((pt.x as f64 - s.char_pos.0, pt.y as f64 - s.char_pos.1));
+                        s.anim_state  = State::Grabbed;
+                        s.surface     = Surface::Airborne;
+                    }
+                });
+                SetCapture(hwnd);
+                0
+            }
+            WM_MOUSEMOVE => {
+                let dragging = APP.with(|cell| cell.borrow().as_ref().map(|s| s.drag_offset.is_some()).unwrap_or(false));
+                if dragging {
+                    let mut pt = POINT { x: 0, y: 0 };
+                    GetCursorPos(&mut pt);
+                    APP.with(|cell| {
+                        if let Some(s) = cell.borrow_mut().as_mut() {
+                            if let Some((ox, oy)) = s.drag_offset {
+                                s.char_pos = (pt.x as f64 - ox, pt.y as f64 - oy);
+                            }
+                        }
+                    });
+                    tick(hwnd);
+                }
+                0
+            }
+            WM_LBUTTONUP => {
+                let was_dragging = APP.with(|cell| cell.borrow().as_ref().map(|s| s.drag_offset.is_some()).unwrap_or(false));
+                if was_dragging {
+                    ReleaseCapture();
+                    APP.with(|cell| {
+                        if let Some(s) = cell.borrow_mut().as_mut() {
+                            s.drag_offset = None;
+                            let si   = windows_wm::screen_info();
+                            let wins = windows_wm::list_windows(&si);
+                            let sr   = sprite_for_state(&s.anim_state, s.facing);
+                            let (sw, sh) = s.assets.size(sr.name, sr.mirror);
+                            let anchor_cx = s.char_pos.0 + sw / 2.0;
+                            let anchor_cy = s.char_pos.1 + sh;
+                            let new_surface = windows_wm::find_surface_near(
+                                anchor_cx, anchor_cy, &wins, &si,
+                            ).unwrap_or_else(|| {
+                                Surface::Desktop { x: anchor_cx.clamp(sw / 2.0, si.width - sw / 2.0) }
+                            });
+                            let cfg = s.config.lock().unwrap().current.clone();
+                            let ctx = BehaviorContext {
+                                state: &State::Grabbed, surface: &new_surface,
+                                elapsed_secs: 0.0, config: &cfg, rng01: 0.0,
+                                surface_progress: 0.5, facing: s.facing,
+                                at_edge: false, jump_target: None,
+                            };
+                            s.anim_state = s.behavior.on_landed(&ctx);
+                            s.surface    = new_surface;
+                        }
+                    });
+                    tick(hwnd);
+                }
+                0
+            }
             WM_TIMER if wp == TIMER_TICK => {
                 tick(hwnd);
                 0
@@ -947,7 +853,8 @@ pub fn run() {
         RegisterClassExW(&wc);
 
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            // No WS_EX_TRANSPARENT: we handle pass-through dynamically in WM_NCHITTEST.
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             ptr::null(),
             WS_POPUP,
@@ -983,13 +890,11 @@ pub fn run() {
                 char_pos:    (sx, sy),
                 last_tick:   Instant::now(),
                 visible:     false,
-                last_sprite_rect: (-4096, -4096, 0, 0),
+                drag_offset: None,
             });
         });
 
         add_tray_icon(hwnd, hinstance);
-        HWND_OVERLAY.with(|h| *h.borrow_mut() = hwnd);
-        install_mouse_hook();
         SetTimer(hwnd, TIMER_TICK, 100, None);
 
         // Message loop.
@@ -999,7 +904,6 @@ pub fn run() {
             DispatchMessageW(&msg);
         }
 
-        remove_mouse_hook();
         remove_tray_icon(hwnd);
     }
 }
