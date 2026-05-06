@@ -189,9 +189,15 @@ pub struct ConfigLoader {
 }
 
 impl ConfigLoader {
-    /// Create a loader. If `config.toml` does not exist, default values are used.
+    /// Create a loader that watches `char_dir/config.toml`.
+    /// If the file does not exist, defaults are used.
     pub fn new(char_dir: &Path) -> Self {
-        let path = char_dir.join("config.toml");
+        Self::new_with_path(char_dir.join("config.toml"))
+    }
+
+    /// Create a loader that watches a specific path.
+    /// If the path does not exist (or cannot be read), defaults are used.
+    pub fn new_with_path(path: PathBuf) -> Self {
         let mut loader = Self {
             path,
             last_modified: None,
@@ -225,6 +231,19 @@ impl ConfigLoader {
 /// Thread-safe shared handle to a `ConfigLoader`.
 pub type SharedConfig = Arc<Mutex<ConfigLoader>>;
 
+/// macOS / Windows-with-file: watch `char_dir/config.toml`, hot-reload on change.
 pub fn make_shared(char_dir: &Path) -> SharedConfig {
     Arc::new(Mutex::new(ConfigLoader::new(char_dir)))
+}
+
+/// Windows standalone (embedded assets): watch for a `config.toml` placed
+/// next to `petitmates.exe`.  Falls back to built-in defaults if the file is
+/// absent, allowing the exe to run with no external files at all.
+#[cfg(target_os = "windows")]
+pub fn make_shared_win() -> SharedConfig {
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("config.toml")))
+        .unwrap_or_default();
+    Arc::new(Mutex::new(ConfigLoader::new_with_path(path)))
 }
