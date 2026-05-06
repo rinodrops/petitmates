@@ -333,6 +333,21 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
     (margin + offset, -stand_h)
 }
 
+// ---- Surface helpers ----
+
+/// Returns the HWND of the window this surface is anchored to, if any.
+/// `WinInfo::id` is stored as `hwnd as u32`; safe to cast back on Windows
+/// where HWNDs always fit in 32 bits.
+fn surface_host_hwnd(surface: &crate::behavior::Surface) -> Option<HWND> {
+    use crate::behavior::Surface;
+    match surface {
+        Surface::WindowTop { win_id, .. }
+        | Surface::WindowWall { win_id, .. }
+        | Surface::WindowUpperCorner { win_id, .. } => Some(*win_id as HWND),
+        _ => None,
+    }
+}
+
 // ---- Spawn a new character window ----
 
 /// Create a new layered `HWND` and return its initial `CharState`.
@@ -342,7 +357,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: &SpriteAssets) -> CharState {
     let class_name = to_wide("PetitMatesOverlay");
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             ptr::null(),
             WS_POPUP,
@@ -685,6 +700,18 @@ fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Con
     let bgra = sprite.bgra.clone();
     unsafe {
         set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, alpha);
+
+        // Z-order: place the character just above its host window so other
+        // windows in front of the host naturally occlude the character.
+        // On Desktop / Airborne: place at HWND_TOP (front of non-topmost).
+        let insert_after: HWND = surface_host_hwnd(&ch.surface)
+            .unwrap_or(HWND_TOP);
+        SetWindowPos(
+            ch.hwnd, insert_after,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+
         if !ch.visible {
             ShowWindow(ch.hwnd, SW_SHOWNOACTIVATE);
             ch.visible = true;
