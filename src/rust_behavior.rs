@@ -95,6 +95,20 @@ impl BehaviorScript for RustBehavior {
             // ── Observation phase ─────────────────────────────────────
             State::Observing { duration, .. } => {
                 if e < *duration { return Transition::Stay; }
+                // Spontaneous window attraction: jump toward a nearby window before
+                // defaulting to the usual corner-walk / peek cycle.
+                if let Surface::Desktop { .. } = ctx.surface {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.rnd_bool(cfg.jump.climb_attract_prob) {
+                            let dir = match side {
+                                Side::Right => Dir::Left,
+                                Side::Left  => Dir::Right,
+                            };
+                            return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
+                        }
+                        let _ = win_id; // suppress unused warning
+                    }
+                }
                 let dir = Self::toward_corner(ctx.surface_progress);
                 if self.rnd_bool(cfg.floor.peek_prob) {
                     Transition::To(State::PeekDown { elapsed: 0.0, dir })
@@ -201,6 +215,19 @@ impl BehaviorScript for RustBehavior {
                         };
                     }
                 }
+                // Spontaneous window attraction (Desktop only).
+                if let Surface::Desktop { .. } = ctx.surface {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.rnd_bool(cfg.jump.climb_attract_prob) {
+                            let dir = match side {
+                                Side::Right => Dir::Left,
+                                Side::Left  => Dir::Right,
+                            };
+                            let _ = win_id;
+                            return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
+                        }
+                    }
+                }
                 let r = self.rnd();
                 if r < 0.40 {
                     Transition::To(self.make_sit_idle(ctx))
@@ -229,6 +256,19 @@ impl BehaviorScript for RustBehavior {
                         };
                     }
                 }
+                // Spontaneous window attraction (Desktop only).
+                if let Surface::Desktop { .. } = ctx.surface {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.rnd_bool(cfg.jump.climb_attract_prob) {
+                            let dir = match side {
+                                Side::Right => Dir::Left,
+                                Side::Left  => Dir::Right,
+                            };
+                            let _ = win_id;
+                            return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
+                        }
+                    }
+                }
                 let r = self.rnd();
                 if r < 0.30 {
                     Transition::To(self.make_lie_idle(ctx))
@@ -251,6 +291,19 @@ impl BehaviorScript for RustBehavior {
                         } else {
                             Transition::To(self.make_sit_idle(ctx))
                         };
+                    }
+                }
+                // Spontaneous window attraction (Desktop only).
+                if let Surface::Desktop { .. } = ctx.surface {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.rnd_bool(cfg.jump.climb_attract_prob) {
+                            let dir = match side {
+                                Side::Right => Dir::Left,
+                                Side::Left  => Dir::Right,
+                            };
+                            let _ = win_id;
+                            return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
+                        }
                     }
                 }
                 let r = self.rnd();

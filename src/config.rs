@@ -140,6 +140,16 @@ pub struct JumpConfig {
     pub runup_duration: f64,
     /// Max distance from Dock for wall-jump to be allowed (px, display coords).
     pub wall_jump_max_dist: f64,
+    /// Windows whose bottom is more than this many px above the Dock/taskbar
+    /// are ignored for wall-jump and window-attraction purposes.
+    pub wall_jump_floor_margin: f64,
+    /// Horizontal detection radius for spontaneous window-climbing attraction
+    /// (px, from character centre to window edge). Checked in both directions.
+    pub climb_attract_dist: f64,
+    /// Probability of being spontaneously attracted to a nearby window when an
+    /// idle state (Observing / StandIdle / SitIdle / LieIdle) expires on the
+    /// Desktop surface (0..1).
+    pub climb_attract_prob: f64,
 }
 
 impl Default for JumpConfig {
@@ -148,6 +158,9 @@ impl Default for JumpConfig {
             gravity: 0.6,
             runup_duration: 0.3,
             wall_jump_max_dist: 80.0,
+            wall_jump_floor_margin: 150.0,
+            climb_attract_dist: 600.0,
+            climb_attract_prob: 0.35,
         }
     }
 }
