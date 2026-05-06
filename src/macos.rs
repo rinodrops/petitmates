@@ -134,6 +134,8 @@ fn make_status_item(
             }
         }
         let menu = NSMenu::init(NSMenu::alloc(mt));
+        // Disable auto-enable so menuWillOpen: has full manual control.
+        let (): () = unsafe { objc2::msg_send![&*menu, setAutoenablesItems: false] };
 
         // Character management items.
         let add_item = NSMenuItem::initWithTitle_action_keyEquivalent(
