@@ -91,6 +91,10 @@ struct AppState {
     /// Cursor offset from sprite top-left at drag start (screen coords).
     /// `Some` while Ctrl+dragging, `None` otherwise.
     drag_offset: Option<(f64, f64)>,
+    /// Last rendered sprite top-left in screen coords.
+    /// Updated every tick so `WM_LBUTTONDOWN` can compute a correct drag offset
+    /// even when `char_pos` holds surface-local coordinates.
+    last_screen_pos: (i32, i32),
 }
 
 thread_local! {
@@ -639,6 +643,7 @@ fn tick(hwnd: HWND) {
                 s.visible = true;
             }
         }
+        s.last_screen_pos = (px, py);
     });
 }
 
@@ -660,7 +665,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 GetCursorPos(&mut pt);
                 APP.with(|cell| {
                     if let Some(s) = cell.borrow_mut().as_mut() {
-                        s.drag_offset = Some((pt.x as f64 - s.char_pos.0, pt.y as f64 - s.char_pos.1));
+                        // Use last_screen_pos (sprite top-left in screen coords)
+                        // rather than char_pos, which may be in surface-local coords
+                        // (e.g. x_local on a WindowTop surface).
+                        let (lx, ly) = s.last_screen_pos;
+                        s.drag_offset = Some((pt.x as f64 - lx as f64, pt.y as f64 - ly as f64));
+                        // Seed char_pos with the actual screen top-left so that
+                        // the drag render and WM_MOUSEMOVE position math are consistent.
+                        s.char_pos   = (lx as f64, ly as f64);
                         s.anim_state  = State::Grabbed;
                         s.surface     = Surface::Airborne;
                     }
@@ -891,6 +903,7 @@ pub fn run() {
                 last_tick:   Instant::now(),
                 visible:     false,
                 drag_offset: None,
+                last_screen_pos: (-4096, -4096),
             });
         });
 
