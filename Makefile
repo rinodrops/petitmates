@@ -15,8 +15,9 @@ RES_DIR   := $(CONTENTS)/Resources
 EXE       := $(MACOS_DIR)/$(EXE_NAME)
 
 APP_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.zip
-WIN_DIR   := $(BUILD_DIR)/petitmates-windows
-WIN_EXE   := $(WIN_DIR)/petitmates.exe
+WIN_DIR     := $(BUILD_DIR)/petitmates-windows
+WIN_EXE_NAME := Petit Mates
+WIN_EXE   := $(WIN_DIR)/$(WIN_EXE_NAME).exe
 WIN_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-windows-x86_64.zip
 WIN_TARGET_DIR := /tmp/pm-win
 
