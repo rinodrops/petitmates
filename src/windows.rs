@@ -701,11 +701,20 @@ fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Con
     unsafe {
         set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, alpha);
 
-        // Z-order: place the character just above its host window so other
-        // windows in front of the host naturally occlude the character.
+        // Z-order: place the character just above its host window so the host
+        // is visible underneath the character, but windows in front of the host
+        // occlude the character.
+        // GetWindow(host, GW_HWNDPREV) returns the window directly above host
+        // in Z order; using it as hWndInsertAfter inserts the character between
+        // that window and the host. If result == ch.hwnd the character is
+        // already correctly positioned and SetWindowPos becomes a no-op.
         // On Desktop / Airborne: place at HWND_TOP (front of non-topmost).
-        let insert_after: HWND = surface_host_hwnd(&ch.surface)
-            .unwrap_or(HWND_TOP);
+        let insert_after: HWND = if let Some(host) = surface_host_hwnd(&ch.surface) {
+            let above = GetWindow(host, GW_HWNDPREV);
+            if above.is_null() { HWND_TOP } else { above }
+        } else {
+            HWND_TOP
+        };
         SetWindowPos(
             ch.hwnd, insert_after,
             0, 0, 0, 0,
