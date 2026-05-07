@@ -19,10 +19,10 @@ edge_idle_prob    = 0.90          # probability of idling at window-top edge ins
 
 # Initial edge-idle state weights: 40% stand, 30% sit, 20% lie, 10% lie-sleep (hardcoded).
 # Subsequent transitions while staying at the edge are controlled by the probabilities below.
+# sleep always wakes to lie, then the lie→sleep cycle repeats.
 edge_stand_to_sit_prob  = 0.50   # stand → sit  (else round corner)
 edge_sit_to_lie_prob    = 0.50   # sit → lie    (else back to stand)
 edge_lie_to_sleep_prob  = 0.30   # lie → sleep  (else back to sit)
-# sleep always wakes to lie, then the lie→sleep cycle repeats.
 
 standup_duration  = 0.8           # seconds for stand-up animation after landing
 turn_duration     = 0.7           # seconds for turn-around animation
