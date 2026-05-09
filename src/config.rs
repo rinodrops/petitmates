@@ -26,8 +26,10 @@ pub struct FloorConfig {
     /// How long the character sleeps [min, max] s.
     pub sleep_duration: [f64; 2],
 
-    /// Period of one head-bob cycle (stand ↔ stand-close) [min, max] s.
+    /// Interval between head-bobs (mouth closed → open) [min, max] s.
     pub headbob_period: [f64; 2],
+    /// How long the mouth stays open during a single head-bob [min, max] s.
+    pub headbob_open_duration: [f64; 2],
 
     /// Probability of peek-down when arriving at an edge (0..1).
     pub peek_prob: f64,
@@ -59,6 +61,36 @@ pub struct FloorConfig {
     /// How long the character looks forward before turning head back to side
     /// during SitIdle / LieIdle / Sleeping [min, max] s.
     pub head_front_duration: [f64; 2],
+
+    // ---- State-transition probabilities ----
+
+    /// After PeekDown: probability of walking (vs turning around) (0..1).
+    pub peek_walk_prob: f64,
+    /// After TurningAround: probability of walking (vs entering StandIdle) (0..1).
+    pub turn_walk_prob: f64,
+
+    /// After StandIdle (non-edge): cumulative thresholds.
+    /// r < sit  → SitIdle; r < walk → walk; r < turn → TurningAround; else PeekDown.
+    pub stand_idle_sit_prob: f64,
+    pub stand_idle_walk_prob: f64,
+    pub stand_idle_turn_prob: f64,
+
+    /// After SitIdle (non-edge): cumulative thresholds.
+    /// r < lie → LieIdle; r < stand → StandIdle; else walk.
+    pub sit_idle_lie_prob: f64,
+    pub sit_idle_stand_prob: f64,
+
+    /// After LieIdle (non-edge): cumulative thresholds.
+    /// r < sleep → Sleeping; r < sit → SitIdle; else walk.
+    pub lie_idle_sleep_prob: f64,
+    pub lie_idle_sit_prob: f64,
+
+    /// Initial idle state when arriving at a window-top edge while Walking.
+    /// Cumulative thresholds (only used when edge_idle_prob fires):
+    /// r < stand → StandIdle; r < sit → SitIdle; r < lie → LieIdle; else Sleeping.
+    pub edge_arrive_stand_prob: f64,
+    pub edge_arrive_sit_prob: f64,
+    pub edge_arrive_lie_prob: f64,
 }
 
 impl Default for FloorConfig {
@@ -70,7 +102,8 @@ impl Default for FloorConfig {
             sit_duration: [5.0, 15.0],
             lie_duration: [20.0, 60.0],
             sleep_duration: [60.0, 180.0],
-            headbob_period: [0.8, 1.2],
+            headbob_period: [30.0, 90.0],
+            headbob_open_duration: [0.3, 0.5],
             peek_prob: 0.20,
             peek_duration: 0.5,
             edge_idle_prob: 0.40,
@@ -82,6 +115,23 @@ impl Default for FloorConfig {
             observe_duration: [3.0, 8.0],
             head_side_duration:  [10.0, 25.0],
             head_front_duration: [ 2.0,  6.0],
+
+            peek_walk_prob: 0.5,
+            turn_walk_prob: 0.7,
+
+            stand_idle_sit_prob:  0.40,
+            stand_idle_walk_prob: 0.60,
+            stand_idle_turn_prob: 0.80,
+
+            sit_idle_lie_prob:   0.30,
+            sit_idle_stand_prob: 0.65,
+
+            lie_idle_sleep_prob: 0.15,
+            lie_idle_sit_prob:   0.60,
+
+            edge_arrive_stand_prob: 0.40,
+            edge_arrive_sit_prob:   0.70,
+            edge_arrive_lie_prob:   0.90,
         }
     }
 }
@@ -126,6 +176,10 @@ pub struct CornerConfig {
     pub rest_duration: [f64; 2],
     /// Lower corner rest duration [min, max] s.
     pub lower_rest_duration: [f64; 2],
+    /// Probability of lying (vs sitting) when entering CornerRest (0..1).
+    pub rest_lying_prob: f64,
+    /// After CornerRest: probability of descending the wall (vs walking inward) (0..1).
+    pub rest_descend_prob: f64,
 }
 
 impl Default for CornerConfig {
@@ -136,6 +190,8 @@ impl Default for CornerConfig {
             rest_prob: 0.30,
             rest_duration: [3.0, 8.0],
             lower_rest_duration: [1.0, 3.0],
+            rest_lying_prob: 0.5,
+            rest_descend_prob: 0.5,
         }
     }
 }
@@ -258,14 +314,26 @@ pub fn make_shared(char_dir: &Path) -> SharedConfig {
     Arc::new(Mutex::new(ConfigLoader::new(char_dir)))
 }
 
-/// Windows standalone (embedded assets): watch for a `config.toml` placed
-/// next to `petitmates.exe`.  Falls back to built-in defaults if the file is
-/// absent, allowing the exe to run with no external files at all.
+/// Windows standalone (embedded assets): watch for a `{char_name}_config.toml`
+/// placed next to `petitmates.exe`.  Falls back to built-in defaults if the
+/// file is absent, allowing the exe to run with no external files at all.
+///
+/// Example: `make_shared_win_for("bearded_dragon")` watches
+/// `bearded_dragon_config.toml` in the same directory as the executable.
 #[cfg(target_os = "windows")]
-pub fn make_shared_win() -> SharedConfig {
+pub fn make_shared_win_for(char_name: &str) -> SharedConfig {
+    let filename = format!("{char_name}_config.toml");
     let path = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("config.toml")))
+        .and_then(|exe| exe.parent().map(|p| p.join(&filename)))
         .unwrap_or_default();
     Arc::new(Mutex::new(ConfigLoader::new_with_path(path)))
+}
+
+/// Convenience alias: watch for a single `config.toml` next to the exe.
+/// Kept for compatibility; prefer `make_shared_win_for` for per-character use.
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+pub fn make_shared_win() -> SharedConfig {
+    make_shared_win_for("config")
 }

@@ -34,13 +34,18 @@ pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
             *elapsed
         }
 
-        State::StandIdle { elapsed, bob_elapsed, bob_phase, .. } => {
+        State::StandIdle { elapsed, bob_elapsed, bob_phase, bob_next, .. } => {
             *elapsed += dt;
             *bob_elapsed += dt;
-            let period = (cfg.floor.headbob_period[0] + cfg.floor.headbob_period[1]) / 2.0;
-            while *bob_elapsed >= period {
-                *bob_elapsed -= period;
+            if *bob_elapsed >= *bob_next {
+                *bob_elapsed = 0.0;
                 *bob_phase = !*bob_phase;
+                // Mouth just opened → use open duration; mouth just closed → use long interval.
+                *bob_next = if *bob_phase {
+                    (cfg.floor.headbob_open_duration[0] + cfg.floor.headbob_open_duration[1]) / 2.0
+                } else {
+                    (cfg.floor.headbob_period[0] + cfg.floor.headbob_period[1]) / 2.0
+                };
             }
             *elapsed
         }

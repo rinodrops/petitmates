@@ -54,6 +54,7 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
 struct CharState {
     panel: Retained<NSPanel>,
     assets: Rc<SpriteAssets>,
+    config: SharedConfig,
     behavior: Box<dyn BehaviorScript>,
     anim_state: State,
     facing: Dir,
@@ -69,7 +70,10 @@ struct CharState {
 
 struct AppState {
     chars: Vec<CharState>,
-    config: SharedConfig,
+    bd_assets: Rc<SpriteAssets>,
+    pt_assets: Rc<SpriteAssets>,
+    bd_config: SharedConfig,
+    pt_config: SharedConfig,
     _menu_handler: Retained<MenuDelegate>,
     _status_item: Retained<objc2_app_kit::NSStatusItem>,
     _timer: Retained<NSTimer>,
@@ -150,18 +154,27 @@ fn make_status_item(
         let (): () = unsafe { objc2::msg_send![&*menu, setAutoenablesItems: false] };
 
         // Character management items.
-        let add_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        let add_bd = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
             &NSString::from_str("Add Bearded Dragon"),
-            Some(objc2::sel!(addCharacter:)),
+            Some(objc2::sel!(addBeardedDragon:)),
             &NSString::from_str(""),
         );
-        let (): () = unsafe { objc2::msg_send![&*add_item, setTarget: handler] };
-        menu.addItem(&add_item);
+        let (): () = unsafe { objc2::msg_send![&*add_bd, setTarget: handler] };
+        menu.addItem(&add_bd);
+
+        let add_pt = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str("Add Pond Turtle"),
+            Some(objc2::sel!(addPondTurtle:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*add_pt, setTarget: handler] };
+        menu.addItem(&add_pt);
 
         let remove_item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Remove Bearded Dragon"),
+            &NSString::from_str("Remove Last"),
             Some(objc2::sel!(removeCharacter:)),
             &NSString::from_str(""),
         );
@@ -195,13 +208,14 @@ fn make_status_item(
 
 // ---- Asset directory ----
 
-pub fn char_dir() -> Option<PathBuf> {
+pub fn char_dir_for(name: &str) -> Option<PathBuf> {
+    let rel = format!("assets/{name}");
     let bundle_path = unsafe {
         let bundle = NSBundle::mainBundle();
         bundle
             .resourceURL()
             .and_then(|base| {
-                let r = NSString::from_str("assets/bearded_dragon");
+                let r = NSString::from_str(&rel);
                 base.URLByAppendingPathComponent(&r)
             })
             .and_then(|url| url.path())
@@ -213,7 +227,7 @@ pub fn char_dir() -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     exe.parent()?
-        .join("../../assets/bearded_dragon")
+        .join(format!("../../assets/{name}"))
         .canonicalize()
         .ok()
 }
@@ -245,7 +259,7 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
 /// Create one character, place it in a startup-drop position, and return
 /// the fully initialised `CharState`.  Caller is responsible for pushing it
 /// into `AppState::chars`.
-fn spawn_char(assets: Rc<SpriteAssets>, si: &ScreenInfo, mt: MainThreadMarker) -> CharState {
+fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker) -> CharState {
     let (start_cx, start_cy) = startup_drop(si, &assets);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
     let panel = make_panel(init_img, mt);
@@ -257,6 +271,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, si: &ScreenInfo, mt: MainThreadMarker) -
     CharState {
         panel,
         assets,
+        config,
         behavior: Box::new(RustBehavior::new()),
         anim_state: State::Falling { vx: 0.0, vy: 0.0 },
         facing: Dir::Left,
@@ -301,8 +316,8 @@ define_class!(
         }
 
         /// Spawn one additional bearded dragon.
-        #[unsafe(method(addCharacter:))]
-        fn add_character(&self, _sender: &AnyObject) {
+        #[unsafe(method(addBeardedDragon:))]
+        fn add_bearded_dragon(&self, _sender: &AnyObject) {
             let mt = self.mtm();
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
@@ -310,9 +325,25 @@ define_class!(
                 let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                if let Some(assets) = app.chars.first().map(|c| Rc::clone(&c.assets)) {
-                    app.chars.push(spawn_char(assets, &si, mt));
-                }
+                let assets = Rc::clone(&app.bd_assets);
+                let config = app.bd_config.clone();
+                app.chars.push(spawn_char(assets, config, &si, mt));
+            });
+        }
+
+        /// Spawn one additional pond turtle.
+        #[unsafe(method(addPondTurtle:))]
+        fn add_pond_turtle(&self, _sender: &AnyObject) {
+            let mt = self.mtm();
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                    width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
+                });
+                let assets = Rc::clone(&app.pt_assets);
+                let config = app.pt_config.clone();
+                app.chars.push(spawn_char(assets, config, &si, mt));
             });
         }
 
@@ -439,7 +470,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
 
             let si = wm::screen_info_raw_full();
             let wins = wm::list_windows(&si);
-            let cfg = app.config.lock().unwrap().current.clone();
+            let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
 
             let ch = &mut app.chars[drag_idx];
 
@@ -1072,10 +1103,6 @@ fn tick() {
         let Some(app) = b.as_mut() else { return };
         let mt = unsafe { MainThreadMarker::new_unchecked() };
 
-        // Hot-reload config once for all characters.
-        app.config.lock().unwrap().reload_if_changed();
-        let cfg = app.config.lock().unwrap().current.clone();
-
         // Compute screen info and window list once for all characters.
         let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
@@ -1083,6 +1110,8 @@ fn tick() {
         let wins = wm::list_windows(&si);
 
         for ch in &mut app.chars {
+            ch.config.lock().unwrap().reload_if_changed();
+            let cfg = ch.config.lock().unwrap().current.clone();
             tick_char(ch, &cfg, &si, &wins, mt);
         }
     });
@@ -1096,15 +1125,21 @@ pub fn run() {
     let app = NSApplication::sharedApplication(mt);
     unsafe { app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) };
 
-    let cdir = char_dir().expect("character directory not found");
-    let mf = manifest::load(&cdir).expect("manifest.toml missing or invalid");
-    let config = make_shared(&cdir);
-    let display_w = config.lock().unwrap().current.display.display_width;
-    let assets = Rc::new(SpriteAssets::load(&cdir, &mf, display_w).expect("failed to load sprites"));
+    let bd_cdir = char_dir_for("bearded_dragon").expect("bearded_dragon asset directory not found");
+    let pt_cdir = char_dir_for("pond_turtle").expect("pond_turtle asset directory not found");
+    let bd_mf = manifest::load(&bd_cdir).expect("bearded_dragon manifest.toml missing or invalid");
+    let pt_mf = manifest::load(&pt_cdir).expect("pond_turtle manifest.toml missing or invalid");
+    let bd_config = make_shared(&bd_cdir);
+    let pt_config = make_shared(&pt_cdir);
+    let bd_display_w = bd_config.lock().unwrap().current.display.display_width;
+    let pt_display_w = pt_config.lock().unwrap().current.display.display_width;
+    let bd_assets = Rc::new(SpriteAssets::load(&bd_cdir, &bd_mf, bd_display_w).expect("failed to load bearded_dragon sprites"));
+    let pt_assets = Rc::new(SpriteAssets::load(&pt_cdir, &pt_mf, pt_display_w).expect("failed to load pond_turtle sprites"));
 
     let si = wm::screen_info(mt)
         .unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
-    let first_char = spawn_char(Rc::clone(&assets), &si, mt);
+    let bd_char = spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt);
+    let pt_char = spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt);
 
     let menu_handler = MenuDelegate::new(mt);
     let status_item = make_status_item(&menu_handler, mt);
@@ -1123,8 +1158,11 @@ pub fn run() {
 
     APP.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
-            chars: vec![first_char],
-            config,
+            chars: vec![bd_char, pt_char],
+            bd_assets,
+            pt_assets,
+            bd_config,
+            pt_config,
             _menu_handler: menu_handler,
             _status_item: status_item,
             _timer: timer,

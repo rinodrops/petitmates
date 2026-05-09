@@ -5,55 +5,71 @@ fn main() {
     }
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let base      = std::path::Path::new(&manifest_dir).join("assets");
-    let char_base = std::path::Path::new(&manifest_dir).join("assets/bearded_dragon");
-    let sprite_dir = char_base.join("sprite");
+    let base = std::path::Path::new(&manifest_dir).join("assets");
+
+    let chars = ["bearded_dragon", "pond_turtle"];
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", base.join("appicon.ico").display());
-    println!("cargo:rerun-if-changed={}", char_base.join("manifest.toml").display());
-    println!("cargo:rerun-if-changed={}", char_base.join("config.toml").display());
-    for entry in std::fs::read_dir(&sprite_dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().map_or(false, |e| e == "png") {
-            println!("cargo:rerun-if-changed={}", path.display());
+
+    for char_name in &chars {
+        let char_base  = base.join(char_name);
+        let sprite_dir = char_base.join("sprite");
+        println!("cargo:rerun-if-changed={}", char_base.join("manifest.toml").display());
+        for entry in std::fs::read_dir(&sprite_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().map_or(false, |e| e == "png") {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
         }
     }
 
     // ----------------------------------------------------------------
     // Generate OUT_DIR/embedded_assets.rs
     // Contains compile-time include_bytes! references for every sprite
-    // and the manifest.toml, so the Windows exe is fully self-contained.
+    // and the manifest.toml for each character, so the Windows exe is
+    // fully self-contained.
     // ----------------------------------------------------------------
     let out_dir  = std::env::var("OUT_DIR").unwrap();
     let out_path = std::path::Path::new(&out_dir).join("embedded_assets.rs");
 
     let mut code = String::new();
-    // manifest.toml
-    code.push_str(&format!(
-        "pub const MANIFEST_TOML: &[u8] = include_bytes!({:?});\n",
-        char_base.join("manifest.toml"),
-    ));
-    // All sprite PNGs, sorted for deterministic output.
-    let mut sprites: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(&sprite_dir)
-        .unwrap()
-        .filter_map(|e| {
-            let path = e.ok()?.path();
-            if path.extension()? == "png" {
-                let name = path.file_stem()?.to_string_lossy().into_owned();
-                Some((name, path))
-            } else {
-                None
-            }
-        })
-        .collect();
-    sprites.sort_by(|a, b| a.0.cmp(&b.0));
 
-    code.push_str("pub const SPRITES: &[(&str, &[u8])] = &[\n");
-    for (name, path) in &sprites {
-        code.push_str(&format!("    ({:?}, include_bytes!({:?})),\n", name, path));
+    for char_name in &chars {
+        let char_base  = base.join(char_name);
+        let sprite_dir = char_base.join("sprite");
+
+        code.push_str(&format!("pub mod {char_name} {{\n"));
+
+        // manifest.toml
+        code.push_str(&format!(
+            "    pub const MANIFEST_TOML: &[u8] = include_bytes!({:?});\n",
+            char_base.join("manifest.toml"),
+        ));
+
+        // All sprite PNGs, sorted for deterministic output.
+        let mut sprites: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(&sprite_dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                if path.extension()? == "png" {
+                    let name = path.file_stem()?.to_string_lossy().into_owned();
+                    Some((name, path))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        sprites.sort_by(|a, b| a.0.cmp(&b.0));
+
+        code.push_str("    pub const SPRITES: &[(&str, &[u8])] = &[\n");
+        for (name, path) in &sprites {
+            code.push_str(&format!("        ({:?}, include_bytes!({:?})),\n", name, path));
+        }
+        code.push_str("    ];\n");
+
+        code.push_str("}\n\n");
     }
-    code.push_str("];\n");
 
     std::fs::write(out_path, code).unwrap();
 

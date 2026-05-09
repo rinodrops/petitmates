@@ -28,7 +28,8 @@ CONTENTS_T  := $(subst $(space),\ ,$(CONTENTS))
 MACOS_DIR_T := $(subst $(space),\ ,$(MACOS_DIR))
 RES_DIR_T   := $(subst $(space),\ ,$(RES_DIR))
 
-CHAR_SRC  := assets/bearded_dragon
+BD_SRC    := assets/bearded_dragon
+PT_SRC    := assets/pond_turtle
 ICON_SRC  := assets/appicon.png
 ICONSET   := $(BUILD_DIR)/AppIcon.iconset
 ICNS      := $(RES_DIR)/AppIcon.icns
@@ -50,9 +51,13 @@ dev: | $(MACOS_DIR_T) $(RES_DIR_T)
 	cargo build --release
 	cp target/release/$(EXE_NAME) "$(EXE)"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
-	cp $(CHAR_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
+	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/config.toml     "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
 	$(MAKE) _plist _icns_if_present
 	@echo "Dev build: $(APP)"
 
@@ -67,9 +72,13 @@ app: | $(MACOS_DIR_T) $(RES_DIR_T)
 		target/aarch64-apple-darwin/release/$(EXE_NAME) \
 		target/x86_64-apple-darwin/release/$(EXE_NAME)
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
-	cp $(CHAR_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
+	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/config.toml     "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
 	$(MAKE) _plist _icns_if_present
 	@echo "App bundle: $(APP)"
 

@@ -28,7 +28,7 @@ use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
-use crate::config::{make_shared_win, SharedConfig};
+use crate::config::{make_shared_win_for, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
 use crate::rust_behavior::RustBehavior;
@@ -41,8 +41,9 @@ use crate::windows_wm::{self, ScreenInfo, WinInfo};
 const WM_TRAY: u32 = WM_APP + 1;
 const IDM_ABOUT: usize = 1;
 const IDM_EXIT: usize = 2;
-const IDM_ADD_CHAR: usize = 3;
+const IDM_ADD_BD: usize = 3;
 const IDM_REMOVE_CHAR: usize = 4;
+const IDM_ADD_PT: usize = 5;
 const TIMER_TICK: usize = 1;
 
 fn to_wide(s: &str) -> Vec<u16> {
@@ -80,6 +81,8 @@ fn is_dark_mode() -> bool {
 
 struct CharState {
     hwnd: HWND,
+    assets: Rc<SpriteAssets>,
+    config: SharedConfig,
     behavior: Box<dyn BehaviorScript>,
     anim_state: State,
     facing: Dir,
@@ -96,8 +99,10 @@ struct CharState {
 
 struct AppState {
     chars: Vec<CharState>,
-    assets: Rc<SpriteAssets>,
-    config: SharedConfig,
+    bd_assets: Rc<SpriteAssets>,
+    pt_assets: Rc<SpriteAssets>,
+    bd_config: SharedConfig,
+    pt_config: SharedConfig,
     /// HWND of the first character's window; receives WM_TIMER and WM_TRAY.
     host_hwnd: HWND,
 }
@@ -352,7 +357,7 @@ fn surface_host_hwnd(surface: &crate::behavior::Surface) -> Option<HWND> {
 
 /// Create a new layered `HWND` and return its initial `CharState`.
 /// The window class must already be registered.
-unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: &SpriteAssets) -> CharState {
+unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig) -> CharState {
     let hinstance  = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide("PetitMatesOverlay");
     let hwnd = unsafe {
@@ -365,12 +370,14 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: &SpriteAssets) -> CharState {
             ptr::null_mut(), ptr::null_mut(), hinstance, ptr::null(),
         )
     };
-    let (sx, sy) = startup_drop(si, assets);
+    let (sx, sy) = startup_drop(si, &assets);
     if let Some(init) = assets.sprite("s-stand", false) {
         unsafe { set_layered_content(hwnd, &init.bgra, init.w, init.h, -4096, -4096, 255) };
     }
     CharState {
         hwnd,
+        assets,
+        config,
         behavior:        Box::new(RustBehavior::new()),
         anim_state:      State::Falling { vx: 0.0, vy: 0.0 },
         facing:          Dir::Left,
@@ -385,7 +392,8 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: &SpriteAssets) -> CharState {
 
 // ---- Per-character tick ----
 
-fn tick_char(ch: &mut CharState, assets: &SpriteAssets, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo]) {
+fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo]) {
+    let assets: &SpriteAssets = &ch.assets;
     // While being dragged, skip the state machine and just render at the
     // position set by WM_MOUSEMOVE.
     if ch.drag_offset.is_some() {
@@ -736,18 +744,14 @@ fn tick_all() {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
 
-        // Hot-reload config once per tick cycle.
-        app.config.lock().unwrap().reload_if_changed();
-        let cfg = app.config.lock().unwrap().current.clone();
-
         let si   = windows_wm::screen_info();
         let wins = windows_wm::list_windows(&si);
 
-        // Clone the Rc so we can borrow app.chars mutably at the same time.
-        let assets = Rc::clone(&app.assets);
         let n = app.chars.len();
         for i in 0..n {
-            tick_char(&mut app.chars[i], &assets, &cfg, &si, &wins);
+            app.chars[i].config.lock().unwrap().reload_if_changed();
+            let cfg = app.chars[i].config.lock().unwrap().current.clone();
+            tick_char(&mut app.chars[i], &cfg, &si, &wins);
         }
     });
 }
@@ -862,11 +866,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         cell.borrow().as_ref().map(|app| app.chars.len()).unwrap_or(1)
                     });
                     let menu       = CreatePopupMenu();
-                    let add_str    = to_wide("Add Bearded Dragon");
-                    let remove_str = to_wide("Remove Bearded Dragon");
-                    let about_str  = to_wide("About Petit Mates");
-                    let exit_str   = to_wide("Quit");
-                    AppendMenuW(menu, MF_STRING, IDM_ADD_CHAR, add_str.as_ptr());
+                    let add_bd_str  = to_wide("Add Bearded Dragon");
+                    let add_pt_str  = to_wide("Add Pond Turtle");
+                    let remove_str  = to_wide("Remove Last");
+                    let about_str   = to_wide("About Petit Mates");
+                    let exit_str    = to_wide("Quit");
+                    AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -881,12 +887,25 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 }
                 0
             }
-            WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_CHAR => {
+            WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_BD => {
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
                         let si     = windows_wm::screen_info();
-                        let assets = Rc::clone(&app.assets);
-                        let ch     = spawn_char_hwnd(&si, &assets);
+                        let assets = Rc::clone(&app.bd_assets);
+                        let config = app.bd_config.clone();
+                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        app.chars.push(ch);
+                    }
+                });
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_PT => {
+                APP.with(|cell| {
+                    if let Some(app) = cell.borrow_mut().as_mut() {
+                        let si     = windows_wm::screen_info();
+                        let assets = Rc::clone(&app.pt_assets);
+                        let config = app.pt_config.clone();
+                        let ch     = spawn_char_hwnd(&si, assets, config);
                         app.chars.push(ch);
                     }
                 });
@@ -1023,25 +1042,35 @@ pub fn run() {
         RegisterClassExW(&wc);
 
         // Load shared assets from embedded bytes.
-        let config    = make_shared_win();
-        let display_w = config.lock().unwrap().current.display.display_width;
-        let mf        = manifest::load_from_bytes(windows_assets::embedded::MANIFEST_TOML)
-            .expect("embedded manifest.toml is invalid");
-        let assets = Rc::new(
-            SpriteAssets::load_embedded(&mf, display_w)
-                .expect("failed to decode embedded sprites"),
+        let bd_config = make_shared_win_for("bearded_dragon");
+        let pt_config = make_shared_win_for("pond_turtle");
+        let bd_display_w = bd_config.lock().unwrap().current.display.display_width;
+        let pt_display_w = pt_config.lock().unwrap().current.display.display_width;
+        let bd_mf = manifest::load_from_bytes(windows_assets::embedded::bearded_dragon::MANIFEST_TOML)
+            .expect("embedded bearded_dragon manifest.toml is invalid");
+        let pt_mf = manifest::load_from_bytes(windows_assets::embedded::pond_turtle::MANIFEST_TOML)
+            .expect("embedded pond_turtle manifest.toml is invalid");
+        let bd_assets = Rc::new(
+            SpriteAssets::load_embedded(windows_assets::embedded::bearded_dragon::SPRITES, &bd_mf, bd_display_w)
+                .expect("failed to decode embedded bearded_dragon sprites"),
+        );
+        let pt_assets = Rc::new(
+            SpriteAssets::load_embedded(windows_assets::embedded::pond_turtle::SPRITES, &pt_mf, pt_display_w)
+                .expect("failed to decode embedded pond_turtle sprites"),
         );
 
         // Create the first character window (also serves as the host for timer+tray).
         let si         = windows_wm::screen_info();
-        let first_char = spawn_char_hwnd(&si, &assets);
+        let first_char = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone());
         let host_hwnd  = first_char.hwnd;
 
         APP.with(|cell| {
             *cell.borrow_mut() = Some(AppState {
                 chars:     vec![first_char],
-                assets,
-                config,
+                bd_assets,
+                pt_assets,
+                bd_config,
+                pt_config,
                 host_hwnd,
             });
         });
