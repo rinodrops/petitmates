@@ -194,6 +194,10 @@ pub struct CornerConfig {
     pub corner_jump_prob: f64,
     /// Horizontal + vertical detection radius for corner-to-window jump (px, display coords).
     pub corner_jump_dist: f64,
+    /// Forced outing interval [min, max] s. After this time without a window-to-window
+    /// jump, the next eligible idle state will trigger a jump if a target is in range.
+    /// Set to [0, 0] to disable forced outings.
+    pub outing_interval: [f64; 2],
 }
 
 impl Default for CornerConfig {
@@ -206,7 +210,9 @@ impl Default for CornerConfig {
             lower_rest_duration: [1.0, 3.0],
             rest_lying_prob: 0.5,
             rest_descend_prob: 0.5,            corner_jump_prob:  0.20,
-            corner_jump_dist:  300.0,        }
+            corner_jump_dist:  300.0,
+            outing_interval:   [300.0, 900.0],
+        }
     }
 }
 
