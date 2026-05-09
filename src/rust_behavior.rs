@@ -190,32 +190,33 @@ impl BehaviorScript for RustBehavior {
                 if !ctx.at_edge { return Transition::Stay; }
                 match ctx.surface {
                     Surface::WindowTop { .. } => {
-                        // Small chance of stepping off the edge (surprised fall).
+                        // edge_idle_prob is checked first so its value is the exact
+                        // idle rate (90% → idle 90% of the time, period).
+                        if self.rnd_bool(cfg.floor.edge_idle_prob) {
+                            let r = self.rnd();
+                            if r < cfg.floor.edge_arrive_stand_prob {
+                                return Transition::To(self.make_stand_idle(ctx));
+                            } else if r < cfg.floor.edge_arrive_sit_prob {
+                                return Transition::To(self.make_sit_idle(ctx));
+                            } else if r < cfg.floor.edge_arrive_lie_prob {
+                                return Transition::To(self.make_lie_idle(ctx));
+                            } else {
+                                return Transition::To(self.make_sleeping(ctx));
+                            }
+                        }
+                        // Among the (1 - edge_idle_prob) fraction: small chance of
+                        // surprised fall, otherwise round the corner.
                         if self.rnd_bool(cfg.floor.edge_fall_prob) {
                             return Transition::To(State::Falling {
                                 vx: 0.0, vy: 0.0,
                                 shocked: cfg.floor.shocked_duration,
                             });
                         }
-                        // Possibly idle at the edge before rounding the corner.
-                        if self.rnd_bool(cfg.floor.edge_idle_prob) {
-                            let r = self.rnd();
-                            if r < cfg.floor.edge_arrive_stand_prob {
-                                Transition::To(self.make_stand_idle(ctx))
-                            } else if r < cfg.floor.edge_arrive_sit_prob {
-                                Transition::To(self.make_sit_idle(ctx))
-                            } else if r < cfg.floor.edge_arrive_lie_prob {
-                                Transition::To(self.make_lie_idle(ctx))
-                            } else {
-                                Transition::To(self.make_sleeping(ctx))
-                            }
-                        } else {
-                            Transition::To(State::CornerTransitionSide {
-                                elapsed: 0.0,
-                                going_up: false,
-                                side: dir_to_side(*dir),
-                            })
-                        }
+                        Transition::To(State::CornerTransitionSide {
+                            elapsed: 0.0,
+                            going_up: false,
+                            side: dir_to_side(*dir),
+                        })
                     }
                     Surface::Desktop { .. } => {
                         if let Some((win_id, side)) = &ctx.jump_target {

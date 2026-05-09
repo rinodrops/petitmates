@@ -45,7 +45,7 @@ edge_arrive_stand_prob = 0.25  # turtles rarely stand
 edge_arrive_sit_prob   = 0.60
 edge_arrive_lie_prob   = 0.85
 
-edge_fall_prob        = 0.05          # turtles rarely fall off edges
+edge_fall_prob        = 0.20          # among non-idle edge arrivals: probability of falling instead of rounding corner
 shocked_duration      = 0.6           # seconds to show f-shocked sprite after edge fall
 
 standup_duration  = 0.8           # seconds for stand-up animation after landing
