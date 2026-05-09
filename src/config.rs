@@ -92,8 +92,9 @@ pub struct FloorConfig {
     pub edge_arrive_sit_prob: f64,
     pub edge_arrive_lie_prob: f64,
 
-    /// Probability of stepping off the edge (falling) instead of idling or rounding the
-    /// corner when Walking reaches a window-top edge (0..1). Shows `f-shocked` on the way down.
+    /// Probability of falling (surprised) instead of rounding the corner,
+    /// applied only among the (1 - edge_idle_prob) fraction that don't idle.
+    /// Shows `f-shocked` on the way down.
     pub edge_fall_prob: f64,
     /// How long the `f-shocked` sprite is shown after an edge-fall (seconds).
     pub shocked_duration: f64,

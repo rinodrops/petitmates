@@ -45,7 +45,7 @@ edge_arrive_stand_prob = 0.40
 edge_arrive_sit_prob   = 0.70
 edge_arrive_lie_prob   = 0.90
 
-edge_fall_prob        = 0.10          # probability of stepping off a window edge (surprised fall)
+edge_fall_prob        = 0.40          # among non-idle edge arrivals: probability of falling instead of rounding corner
 shocked_duration      = 0.6           # seconds to show f-shocked sprite after edge fall
 
 standup_duration  = 0.8           # seconds for stand-up animation after landing
