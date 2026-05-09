@@ -28,12 +28,14 @@ pub struct Manifest {
     pub sprites: HashMap<String, SpriteInfo>,
 }
 
+#[allow(dead_code)]
 pub fn load(char_dir: &Path) -> Option<Manifest> {
     let text = std::fs::read_to_string(char_dir.join("manifest.toml")).ok()?;
     toml::from_str(&text).ok()
 }
 
 /// Parse a `Manifest` from raw TOML bytes (used for embedded assets on Windows).
+#[allow(dead_code)]
 pub fn load_from_bytes(bytes: &[u8]) -> Option<Manifest> {
     let text = std::str::from_utf8(bytes).ok()?;
     toml::from_str(text).ok()

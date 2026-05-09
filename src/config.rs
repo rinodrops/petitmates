@@ -289,6 +289,7 @@ pub struct ConfigLoader {
 impl ConfigLoader {
     /// Create a loader that watches `char_dir/config.toml`.
     /// If the file does not exist, defaults are used.
+    #[allow(dead_code)]
     pub fn new(char_dir: &Path) -> Self {
         Self::new_with_path(char_dir.join("config.toml"))
     }
@@ -330,6 +331,7 @@ impl ConfigLoader {
 pub type SharedConfig = Arc<Mutex<ConfigLoader>>;
 
 /// macOS / Windows-with-file: watch `char_dir/config.toml`, hot-reload on change.
+#[allow(dead_code)]
 pub fn make_shared(char_dir: &Path) -> SharedConfig {
     Arc::new(Mutex::new(ConfigLoader::new(char_dir)))
 }

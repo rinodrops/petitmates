@@ -103,8 +103,6 @@ struct AppState {
     pt_assets: Rc<SpriteAssets>,
     bd_config: SharedConfig,
     pt_config: SharedConfig,
-    /// HWND of the first character's window; receives WM_TIMER and WM_TRAY.
-    host_hwnd: HWND,
 }
 
 thread_local! {
@@ -125,46 +123,48 @@ unsafe fn set_layered_content(
     y: i32,
     alpha: u8,
 ) {
-    let hdc_screen = GetDC(ptr::null_mut());
-    let hdc_mem    = CreateCompatibleDC(hdc_screen);
+    unsafe {
+        let hdc_screen = GetDC(ptr::null_mut());
+        let hdc_mem    = CreateCompatibleDC(hdc_screen);
 
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize:          mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth:         width,
-            biHeight:        -height, // top-down
-            biPlanes:        1,
-            biBitCount:      32,
-            biCompression:   BI_RGB,
-            biSizeImage:     0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed:       0,
-            biClrImportant:  0,
-        },
-        bmiColors: [RGBQUAD { rgbBlue: 0, rgbGreen: 0, rgbRed: 0, rgbReserved: 0 }],
-    };
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize:          mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth:         width,
+                biHeight:        -height, // top-down
+                biPlanes:        1,
+                biBitCount:      32,
+                biCompression:   BI_RGB,
+                biSizeImage:     0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed:       0,
+                biClrImportant:  0,
+            },
+            bmiColors: [RGBQUAD { rgbBlue: 0, rgbGreen: 0, rgbRed: 0, rgbReserved: 0 }],
+        };
 
-    let mut bits: *mut c_void = ptr::null_mut();
-    let hbmp = CreateDIBSection(hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
-    ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, bgra.len());
+        let mut bits: *mut c_void = ptr::null_mut();
+        let hbmp = CreateDIBSection(hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
+        ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, bgra.len());
 
-    let old   = SelectObject(hdc_mem, hbmp);
-    let pt_dst = POINT { x, y };
-    let size   = SIZE  { cx: width, cy: height };
-    let pt_src = POINT { x: 0, y: 0 };
-    let blend  = BLENDFUNCTION {
-        BlendOp:             AC_SRC_OVER as u8,
-        BlendFlags:          0,
-        SourceConstantAlpha: alpha,
-        AlphaFormat:         AC_SRC_ALPHA as u8,
-    };
-    UpdateLayeredWindow(hwnd, hdc_screen, &pt_dst, &size, hdc_mem, &pt_src, 0, &blend, ULW_ALPHA);
+        let old   = SelectObject(hdc_mem, hbmp);
+        let pt_dst = POINT { x, y };
+        let size   = SIZE  { cx: width, cy: height };
+        let pt_src = POINT { x: 0, y: 0 };
+        let blend  = BLENDFUNCTION {
+            BlendOp:             AC_SRC_OVER as u8,
+            BlendFlags:          0,
+            SourceConstantAlpha: alpha,
+            AlphaFormat:         AC_SRC_ALPHA as u8,
+        };
+        UpdateLayeredWindow(hwnd, hdc_screen, &pt_dst, &size, hdc_mem, &pt_src, 0, &blend, ULW_ALPHA);
 
-    SelectObject(hdc_mem, old);
-    DeleteObject(hbmp);
-    DeleteDC(hdc_mem);
-    ReleaseDC(ptr::null_mut(), hdc_screen);
+        SelectObject(hdc_mem, old);
+        DeleteObject(hbmp);
+        DeleteDC(hdc_mem);
+        ReleaseDC(ptr::null_mut(), hdc_screen);
+    }
 }
 
 // ---- Surface → screen position ----
@@ -258,6 +258,7 @@ fn surface_context(
     jump_max_dist: f64,
     jump_floor_margin: f64,
     attract_dist: f64,
+    corner_attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
 ) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
@@ -286,10 +287,10 @@ fn surface_context(
                     if w.id == *win_id { return None; }
                     let dist_r = w.x - corner_cx;
                     let dist_l = corner_cx - w.right();
-                    let vert_ok = (w.y - corner_cy).abs() < attract_dist;
-                    if dist_r >= 0.0 && dist_r < attract_dist && vert_ok {
+                    let vert_ok = (w.y - corner_cy).abs() < corner_attract_dist;
+                    if dist_r >= 0.0 && dist_r < corner_attract_dist && vert_ok {
                         Some((w.id, Side::Left, dist_r))
-                    } else if dist_l >= 0.0 && dist_l < attract_dist && vert_ok {
+                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist && vert_ok {
                         Some((w.id, Side::Right, dist_l))
                     } else {
                         None
@@ -587,7 +588,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     let (surface_progress, at_edge, jump_target, attract_target) = surface_context(
         &ch.surface, ch.char_pos, sprite_w, ch.facing,
         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
-        cfg.jump.climb_attract_dist, wins, si,
+        cfg.jump.climb_attract_dist, cfg.corner.corner_jump_dist, wins, si,
     );
 
     // Save to_dir if TurningAround completes this tick.
@@ -1101,7 +1102,6 @@ pub fn run() {
                 pt_assets,
                 bd_config,
                 pt_config,
-                host_hwnd,
             });
         });
 
