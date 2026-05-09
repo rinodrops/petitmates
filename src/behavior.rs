@@ -62,7 +62,9 @@ pub enum Surface {
 pub enum State {
     // -- Airborne --
     /// Falling or jumping. `vx`/`vy` in px/s (positive y = downward in CG coords).
-    Falling { vx: f64, vy: f64 },
+    /// `shocked > 0` means the character just fell off a ledge; shows `f-shocked`
+    /// sprite until it counts down to zero.
+    Falling { vx: f64, vy: f64, shocked: f64 },
 
     // -- Floor / WindowTop --
     /// Playing `s-stand-up` after landing.

@@ -91,6 +91,12 @@ pub struct FloorConfig {
     pub edge_arrive_stand_prob: f64,
     pub edge_arrive_sit_prob: f64,
     pub edge_arrive_lie_prob: f64,
+
+    /// Probability of stepping off the edge (falling) instead of idling or rounding the
+    /// corner when Walking reaches a window-top edge (0..1). Shows `f-shocked` on the way down.
+    pub edge_fall_prob: f64,
+    /// How long the `f-shocked` sprite is shown after an edge-fall (seconds).
+    pub shocked_duration: f64,
 }
 
 impl Default for FloorConfig {
@@ -132,6 +138,9 @@ impl Default for FloorConfig {
             edge_arrive_stand_prob: 0.40,
             edge_arrive_sit_prob:   0.70,
             edge_arrive_lie_prob:   0.90,
+
+            edge_fall_prob:    0.10,
+            shocked_duration:  0.6,
         }
     }
 }
@@ -180,6 +189,10 @@ pub struct CornerConfig {
     pub rest_lying_prob: f64,
     /// After CornerRest: probability of descending the wall (vs walking inward) (0..1).
     pub rest_descend_prob: f64,
+    /// Probability of jumping to a nearby window at the end of CornerRest (0..1).
+    pub corner_jump_prob: f64,
+    /// Horizontal + vertical detection radius for corner-to-window jump (px, display coords).
+    pub corner_jump_dist: f64,
 }
 
 impl Default for CornerConfig {
@@ -191,8 +204,8 @@ impl Default for CornerConfig {
             rest_duration: [3.0, 8.0],
             lower_rest_duration: [1.0, 3.0],
             rest_lying_prob: 0.5,
-            rest_descend_prob: 0.5,
-        }
+            rest_descend_prob: 0.5,            corner_jump_prob:  0.20,
+            corner_jump_dist:  300.0,        }
     }
 }
 
