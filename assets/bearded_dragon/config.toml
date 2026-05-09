@@ -31,8 +31,8 @@ peek_walk_prob        = 0.50  # 50% walk, 50% turn
 # After TurningAround: walk vs StandIdle
 turn_walk_prob        = 0.70  # 70% walk, 30% idle
 # After StandIdle (cumulative): r < sit → sit, r < walk → walk, r < turn → turn, else peek
-stand_idle_sit_prob   = 0.40
-stand_idle_walk_prob  = 0.60
+stand_idle_sit_prob   = 0.60
+stand_idle_walk_prob  = 0.40
 stand_idle_turn_prob  = 0.80
 # After SitIdle (cumulative): r < lie → lie, r < stand → stand, else walk
 sit_idle_lie_prob     = 0.30

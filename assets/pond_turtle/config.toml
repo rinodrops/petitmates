@@ -31,15 +31,15 @@ peek_walk_prob        = 0.40  # 40% walk, 60% turn (cautious)
 # After TurningAround: walk vs StandIdle
 turn_walk_prob        = 0.50  # 50/50 (less energetic)
 # After StandIdle (cumulative): r < sit → sit, r < walk → walk, r < turn → turn, else peek
-stand_idle_sit_prob   = 0.55  # turtles prefer sitting
-stand_idle_walk_prob  = 0.70
+stand_idle_sit_prob   = 0.55
+stand_idle_walk_prob  = 0.60
 stand_idle_turn_prob  = 0.85
 # After SitIdle (cumulative): r < lie → lie, r < stand → stand, else walk
-sit_idle_lie_prob     = 0.50  # turtles often move to lying
+sit_idle_lie_prob     = 0.50
 sit_idle_stand_prob   = 0.75
 # After LieIdle (cumulative): r < sleep → sleep, r < sit → sit, else walk
-lie_idle_sleep_prob   = 0.30  # turtles fall asleep more readily
-lie_idle_sit_prob     = 0.70
+lie_idle_sleep_prob   = 0.50
+lie_idle_sit_prob     = 0.50
 # Initial idle on window-top edge arrival (cumulative): r < stand → stand, r < sit → sit, r < lie → lie, else sleep
 edge_arrive_stand_prob = 0.25  # turtles rarely stand
 edge_arrive_sit_prob   = 0.60
