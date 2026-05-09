@@ -272,6 +272,34 @@ fn surface_context(
                         || *x_local >= win.w - edge_margin - sprite_w / 2.0;
             (progress, at_edge, None, None)
         }
+        Surface::WindowUpperCorner { win_id, side } => {
+            let Some(win) = windows_wm::find_win(*win_id, wins) else {
+                return (0.5, false, None, None);
+            };
+            let corner_cx = match side {
+                Side::Left  => win.x,
+                Side::Right => win.right(),
+            };
+            let corner_cy = win.y;
+            let attract_target = wins.iter()
+                .filter_map(|w| {
+                    if w.id == *win_id { return None; }
+                    let dist_r = w.x - corner_cx;
+                    let dist_l = corner_cx - w.right();
+                    let vert_ok = (w.y - corner_cy).abs() < attract_dist;
+                    if dist_r >= 0.0 && dist_r < attract_dist && vert_ok {
+                        Some((w.id, Side::Left, dist_r))
+                    } else if dist_l >= 0.0 && dist_l < attract_dist && vert_ok {
+                        Some((w.id, Side::Right, dist_l))
+                    } else {
+                        None
+                    }
+                })
+                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(id, s, _)| (id, s));
+            let progress = if *side == Side::Left { 0.0 } else { 1.0 };
+            (progress, false, None, attract_target)
+        }
         Surface::Desktop { x } => {
             let progress = (x / si.width).clamp(0.0, 1.0);
             let (cx, _)  = char_pos;
@@ -379,7 +407,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         assets,
         config,
         behavior:        Box::new(RustBehavior::new()),
-        anim_state:      State::Falling { vx: 0.0, vy: 0.0 },
+        anim_state:      State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 },
         facing:          Dir::Left,
         surface:         Surface::Airborne,
         char_pos:        (sx, sy),
@@ -431,7 +459,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
 
     // Update char_pos for Airborne / Walking states.
     match &ch.anim_state {
-        State::Falling { vx, vy } => {
+        State::Falling { vx, vy, .. } => {
             let (vx, vy) = (*vx, *vy);
             let (cx, cy) = ch.char_pos;
             ch.char_pos = (cx + vx * dt, cy + vy * dt);
@@ -485,7 +513,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             let (dx, dy) = startup_drop(si, assets);
             ch.char_pos   = (dx, dy);
             ch.surface    = Surface::Airborne;
-            ch.anim_state = State::Falling { vx: 0.0, vy: 0.0 };
+            ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
         }
     }
 
@@ -627,7 +655,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                     Some(Surface::WindowTop { win_id: *win_id, x_local: x })
                 }
                 (State::WallEntry { .. }, Surface::Desktop { .. })
-                | (State::WallEntry { .. }, Surface::WindowTop { .. }) => {
+                | (State::WallEntry { .. }, Surface::WindowTop { .. })
+                | (State::WallEntry { .. }, Surface::WindowUpperCorner { .. }) => {
                     if let State::JumpRunup { target_win_id, target_side, .. } = &ch.anim_state {
                         if let Some(win) = windows_wm::find_win(*target_win_id, wins) {
                             let side   = *target_side;

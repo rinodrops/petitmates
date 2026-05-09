@@ -66,7 +66,10 @@ fn climb_frame_name(frame: u8) -> &'static str {
 pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
     match state {
         // ── Airborne ─────────────────────────────────────────────────
-        State::Falling { .. } => SpriteRef::side("s-jump", facing),
+        State::Falling { shocked, .. } => {
+            if *shocked > 0.0 { SpriteRef::front("f-shocked") }
+            else { SpriteRef::side("s-jump", facing) }
+        }
 
         // ── Floor / Window top ────────────────────────────────────────
         State::LandingStandUp { .. } => SpriteRef::side("s-stand-up", facing),

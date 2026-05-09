@@ -190,6 +190,13 @@ impl BehaviorScript for RustBehavior {
                 if !ctx.at_edge { return Transition::Stay; }
                 match ctx.surface {
                     Surface::WindowTop { .. } => {
+                        // Small chance of stepping off the edge (surprised fall).
+                        if self.rnd_bool(cfg.floor.edge_fall_prob) {
+                            return Transition::To(State::Falling {
+                                vx: 0.0, vy: 0.0,
+                                shocked: cfg.floor.shocked_duration,
+                            });
+                        }
                         // Possibly idle at the edge before rounding the corner.
                         if self.rnd_bool(cfg.floor.edge_idle_prob) {
                             let r = self.rnd();
@@ -423,7 +430,7 @@ impl BehaviorScript for RustBehavior {
                     // Reached the bottom of the wall — drop off.
                     // (Only fires when descending from the top; jumps from the
                     //  desktop climb *up* and never reach this branch.)
-                    return Transition::To(State::Falling { vx: 0.0, vy: 0.0 });
+                    return Transition::To(State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 });
                 }
                 if *wall_frames > 0 && wall_frames % 3 == 0 && self.rnd_bool(cfg.wall.pause_prob) {
                     let dur = self.rnd_range(cfg.wall.pause_duration);
@@ -485,6 +492,16 @@ impl BehaviorScript for RustBehavior {
             // ── CornerRest ───────────────────────────────────────────
             State::CornerRest { duration, .. } => {
                 if e < *duration { return Transition::Stay; }
+                // Check for a nearby window to jump to (B: window-to-window movement).
+                if let Some((win_id, side)) = ctx.attract_target {
+                    if self.rnd_bool(cfg.corner.corner_jump_prob) {
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: win_id,
+                            target_side: side,
+                        });
+                    }
+                }
                 // Decide: descend wall or walk inward on window top
                 if self.rnd_bool(cfg.corner.rest_descend_prob) {
                     if let Surface::WindowUpperCorner { side, .. } = ctx.surface {
@@ -512,7 +529,7 @@ impl BehaviorScript for RustBehavior {
     }
 
     fn on_surface_lost(&self, _ctx: &BehaviorContext) -> State {
-        State::Falling { vx: 0.0, vy: 0.0 }
+        State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 }
     }
 
     fn on_landed(&self, _ctx: &BehaviorContext) -> State {

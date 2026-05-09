@@ -10,7 +10,11 @@ use crate::config::Config;
 /// Returns the current `elapsed` value for `BehaviorContext::elapsed_secs`.
 pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
     match state {
-        State::Falling { .. } | State::Grabbed => 0.0,
+        State::Falling { shocked, .. } => {
+            *shocked = (*shocked - dt).max(0.0);
+            0.0
+        }
+        State::Grabbed => 0.0,
 
         State::LandingStandUp { elapsed }
         | State::Observing { elapsed, .. }

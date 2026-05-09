@@ -45,6 +45,9 @@ edge_arrive_stand_prob = 0.25  # turtles rarely stand
 edge_arrive_sit_prob   = 0.60
 edge_arrive_lie_prob   = 0.85
 
+edge_fall_prob        = 0.05          # turtles rarely fall off edges
+shocked_duration      = 0.6           # seconds to show f-shocked sprite after edge fall
+
 standup_duration  = 0.8           # seconds for stand-up animation after landing
 turn_duration     = 0.7           # seconds for turn-around animation
 
@@ -70,6 +73,8 @@ rest_duration     = [3.0, 8.0]    # [min, max] s upper corner rest
 lower_rest_duration = [1.0, 3.0]  # [min, max] s lower corner rest
 rest_lying_prob   = 0.65          # turtles prefer lying at corners
 rest_descend_prob = 0.35          # turtles tend to stay at the corner longer
+corner_jump_prob  = 0.10          # turtles rarely jump to other windows
+corner_jump_dist  = 300.0         # detection radius (px) for corner-to-window jump
 
 # ---- Jump (desktop floor → wall) ----
 [jump]
