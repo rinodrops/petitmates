@@ -3,11 +3,11 @@
 
 # ---- Floor / Window-top ----
 [floor]
-walk_speed        = 40.0          # px/s (display coords) — turtles move slower
+walk_speed        = 40.0          # px/s (display coords)
 walk_frame_secs   = 0.18          # seconds per walk animation frame
 
 stand_duration    = [3.0,  8.0]   # [min, max] s standing idle
-sit_duration      = [5.0, 20.0]   # [min, max] s sitting idle — turtles rest longer
+sit_duration      = [5.0, 20.0]   # [min, max] s sitting idle
 lie_duration      = [30.0, 90.0]  # [min, max] s lying idle
 sleep_duration    = [60.0, 180.0] # [min, max] s sleeping
 
