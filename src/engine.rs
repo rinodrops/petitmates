@@ -34,7 +34,7 @@ pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
         | State::LieIdle { elapsed, head_timer, .. }
         | State::Sleeping { elapsed, head_timer, .. } => {
             *elapsed += dt;
-            *head_timer = (*head_timer - dt).max(-1.0); // clamp to avoid large negatives
+            *head_timer = (*head_timer - dt).max(0.0);
             *elapsed
         }
 

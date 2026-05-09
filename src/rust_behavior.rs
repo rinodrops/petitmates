@@ -284,16 +284,17 @@ impl BehaviorScript for RustBehavior {
             State::StandIdle { duration, .. } => {
                 if e < *duration { return Transition::Stay; }
                 // Forced outing: jump to a nearby window if the cooldown has elapsed.
-                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
                     if let Some((win_id, side)) = ctx.attract_target {
-                        if self.outing_due(cfg) {
-                            self.record_outing(cfg);
-                            return Transition::To(State::JumpRunup {
-                                elapsed: 0.0,
-                                target_win_id: win_id,
-                                target_side: side,
-                            });
-                        }
+                        self.record_outing(cfg);
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: win_id,
+                            target_side: side,
+                        });
+                    } else {
+                        // No window in range; reset timer to retry after the next interval.
+                        self.record_outing(cfg);
                     }
                 }
                 // At a window-top edge: either deepen the idle chain or round the corner.
@@ -346,16 +347,16 @@ impl BehaviorScript for RustBehavior {
                 }
                 if e < *duration { return Transition::Stay; }
                 // Forced outing.
-                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
                     if let Some((win_id, side)) = ctx.attract_target {
-                        if self.outing_due(cfg) {
-                            self.record_outing(cfg);
-                            return Transition::To(State::JumpRunup {
-                                elapsed: 0.0,
-                                target_win_id: win_id,
-                                target_side: side,
-                            });
-                        }
+                        self.record_outing(cfg);
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: win_id,
+                            target_side: side,
+                        });
+                    } else {
+                        self.record_outing(cfg);
                     }
                 }
                 // At a window-top edge: deeper idle (lie) or back to stand.
@@ -399,16 +400,16 @@ impl BehaviorScript for RustBehavior {
                 }
                 if e < *duration { return Transition::Stay; }
                 // Forced outing.
-                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
                     if let Some((win_id, side)) = ctx.attract_target {
-                        if self.outing_due(cfg) {
-                            self.record_outing(cfg);
-                            return Transition::To(State::JumpRunup {
-                                elapsed: 0.0,
-                                target_win_id: win_id,
-                                target_side: side,
-                            });
-                        }
+                        self.record_outing(cfg);
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: win_id,
+                            target_side: side,
+                        });
+                    } else {
+                        self.record_outing(cfg);
                     }
                 }
                 // At a window-top edge: sleep or back to sit.
@@ -452,16 +453,16 @@ impl BehaviorScript for RustBehavior {
                 }
                 if e < *duration { return Transition::Stay; }
                 // Forced outing.
-                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
                     if let Some((win_id, side)) = ctx.attract_target {
-                        if self.outing_due(cfg) {
-                            self.record_outing(cfg);
-                            return Transition::To(State::JumpRunup {
-                                elapsed: 0.0,
-                                target_win_id: win_id,
-                                target_side: side,
-                            });
-                        }
+                        self.record_outing(cfg);
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: win_id,
+                            target_side: side,
+                        });
+                    } else {
+                        self.record_outing(cfg);
                     }
                 }
                 Transition::To(self.make_lie_idle(ctx))
@@ -579,8 +580,8 @@ impl BehaviorScript for RustBehavior {
             State::CornerRest { duration, .. } => {
                 if e < *duration { return Transition::Stay; }
                 // Check for a nearby window to jump to (B: window-to-window movement).
+                let forced = self.outing_due(cfg);
                 if let Some((win_id, side)) = ctx.attract_target {
-                    let forced = self.outing_due(cfg);
                     if forced || self.rnd_bool(cfg.corner.corner_jump_prob) {
                         self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
@@ -589,6 +590,9 @@ impl BehaviorScript for RustBehavior {
                             target_side: side,
                         });
                     }
+                } else if forced {
+                    // No nearby window; reset timer to retry after the next interval.
+                    self.record_outing(cfg);
                 }
                 // Decide: descend wall or walk inward on window top
                 if self.rnd_bool(cfg.corner.rest_descend_prob) {
