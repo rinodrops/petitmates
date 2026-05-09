@@ -827,7 +827,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                 app.chars[i].drag_offset = None;
                                 let si   = windows_wm::screen_info();
                                 let wins = windows_wm::list_windows(&si);
-                                let assets = Rc::clone(&app.assets);
+                                let assets = Rc::clone(&app.chars[i].assets);
                                 let sr   = sprite_for_state(&app.chars[i].anim_state, app.chars[i].facing);
                                 let (sw, sh) = assets.size(sr.name, sr.mirror);
                                 let anchor_cx = app.chars[i].char_pos.0 + sw / 2.0;
@@ -837,7 +837,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                 ).unwrap_or_else(|| {
                                     Surface::Desktop { x: anchor_cx.clamp(sw / 2.0, si.width - sw / 2.0) }
                                 });
-                                let cfg = app.config.lock().unwrap().current.clone();
+                                let cfg = app.chars[i].config.lock().unwrap().current.clone();
                                 let new_anim = {
                                     let ctx = BehaviorContext {
                                         state: &State::Grabbed, surface: &new_surface,
@@ -1059,14 +1059,15 @@ pub fn run() {
                 .expect("failed to decode embedded pond_turtle sprites"),
         );
 
-        // Create the first character window (also serves as the host for timer+tray).
+        // Create both character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
-        let first_char = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone());
-        let host_hwnd  = first_char.hwnd;
+        let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone());
+        let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone());
+        let host_hwnd  = bd_char.hwnd;
 
         APP.with(|cell| {
             *cell.borrow_mut() = Some(AppState {
-                chars:     vec![first_char],
+                chars:     vec![bd_char, pt_char],
                 bd_assets,
                 pt_assets,
                 bd_config,
