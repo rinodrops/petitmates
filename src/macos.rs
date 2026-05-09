@@ -634,7 +634,8 @@ fn surface_to_ns_origin(
 /// Compute `surface_progress`, `at_edge`, `jump_target`, and `attract_target`
 /// for the current surface.
 /// `jump_floor_margin` — windows above this many px from the Dock are excluded.
-/// `attract_dist` — detection radius (in either direction) for spontaneous attraction.
+/// `attract_dist` — detection radius for spontaneous floor→window attraction.
+/// `corner_attract_dist` — detection radius for corner-to-window jump (corner_jump_dist).
 fn surface_context(
     surface: &Surface,
     char_pos: (f64, f64),
@@ -643,6 +644,7 @@ fn surface_context(
     jump_max_dist: f64,
     jump_floor_margin: f64,
     attract_dist: f64,
+    corner_attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
 ) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
@@ -671,10 +673,10 @@ fn surface_context(
                     if w.id == *win_id { return None; }
                     let dist_r = w.x - corner_cx;
                     let dist_l = corner_cx - w.right();
-                    let vert_ok = (w.y - corner_cy).abs() < attract_dist;
-                    if dist_r >= 0.0 && dist_r < attract_dist && vert_ok {
+                    let vert_ok = (w.y - corner_cy).abs() < corner_attract_dist;
+                    if dist_r >= 0.0 && dist_r < corner_attract_dist && vert_ok {
                         Some((w.id, Side::Left, dist_r))
-                    } else if dist_l >= 0.0 && dist_l < attract_dist && vert_ok {
+                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist && vert_ok {
                         Some((w.id, Side::Right, dist_l))
                     } else {
                         None
@@ -943,7 +945,7 @@ fn tick_char(
     let (surface_progress, at_edge, jump_target, attract_target) =
         surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
                         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
-                        cfg.jump.climb_attract_dist, wins, si);
+                        cfg.jump.climb_attract_dist, cfg.corner.corner_jump_dist, wins, si);
 
     // Save to_dir if a TurningAround completes this tick.
     let turn_to_dir = if let State::TurningAround { to_dir, .. } = &ch.anim_state {

@@ -58,6 +58,7 @@ pub struct SpriteAssets {
 impl SpriteAssets {
     /// Load every sprite listed in `manifest` from `char_dir/sprite/`.
     /// Returns `None` if any listed sprite is missing or unreadable.
+    #[allow(dead_code)]
     pub fn load(char_dir: &Path, manifest: &Manifest, display_width: f64) -> Option<Self> {
         let scale = display_width / manifest.canonical_width;
         let sprite_dir = char_dir.join("sprite");
