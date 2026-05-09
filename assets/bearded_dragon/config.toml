@@ -75,6 +75,7 @@ rest_lying_prob   = 0.50          # probability of lying (vs sitting) at upper c
 rest_descend_prob = 0.50          # after corner rest: probability of descending wall (vs walking inward)
 corner_jump_prob  = 0.25          # probability of jumping to a nearby window at end of corner rest
 corner_jump_dist  = 300.0         # detection radius (px) for corner-to-window jump
+outing_interval   = [300.0, 600.0] # [min, max] s before forced window-to-window outing (lizards are restless)
 
 # ---- Jump (desktop floor → wall) ----
 [jump]

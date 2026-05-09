@@ -75,6 +75,7 @@ rest_lying_prob   = 0.65          # turtles prefer lying at corners
 rest_descend_prob = 0.35          # turtles tend to stay at the corner longer
 corner_jump_prob  = 0.10          # turtles rarely jump to other windows
 corner_jump_dist  = 300.0         # detection radius (px) for corner-to-window jump
+outing_interval   = [600.0, 900.0] # [min, max] s before forced window-to-window outing (turtles are slow)
 
 # ---- Jump (desktop floor → wall) ----
 [jump]

@@ -5,6 +5,7 @@
 //! this module only decides *which state to enter next*.
 
 use std::sync::Mutex;
+use std::time::Instant;
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -26,11 +27,43 @@ fn dir_to_side(dir: Dir) -> Side {
 
 pub struct RustBehavior {
     rng: Mutex<SmallRng>,
+    /// Instant of the last window-to-window jump (or app start).
+    last_outing: Mutex<Instant>,
+    /// Next forced-outing deadline in seconds (randomised on each jump).
+    next_outing_secs: Mutex<f64>,
 }
 
 impl RustBehavior {
     pub fn new() -> Self {
-        Self { rng: Mutex::new(SmallRng::from_os_rng()) }
+        Self {
+            rng: Mutex::new(SmallRng::from_os_rng()),
+            last_outing: Mutex::new(Instant::now()),
+            next_outing_secs: Mutex::new(f64::MAX), // filled on first config read
+        }
+    }
+
+    /// Returns true if the forced-outing cooldown has elapsed.
+    fn outing_due(&self, cfg: &crate::config::Config) -> bool {
+        let interval = cfg.corner.outing_interval;
+        // Disabled when both bounds are 0.
+        if interval[0] <= 0.0 && interval[1] <= 0.0 {
+            return false;
+        }
+        let deadline = *self.next_outing_secs.lock().unwrap();
+        // Initialise deadline on first call (deadline == MAX means not set yet).
+        if deadline == f64::MAX {
+            let secs = self.rnd_range(interval);
+            *self.next_outing_secs.lock().unwrap() = secs;
+            return false;
+        }
+        self.last_outing.lock().unwrap().elapsed().as_secs_f64() >= deadline
+    }
+
+    /// Record that a window-to-window jump just happened and reset the timer.
+    fn record_outing(&self, cfg: &crate::config::Config) {
+        *self.last_outing.lock().unwrap() = Instant::now();
+        let secs = self.rnd_range(cfg.corner.outing_interval);
+        *self.next_outing_secs.lock().unwrap() = secs;
     }
 
     fn rnd(&self) -> f64 {
@@ -250,6 +283,19 @@ impl BehaviorScript for RustBehavior {
             // Head-bob advancement (bob_elapsed / bob_phase) is done by the engine.
             State::StandIdle { duration, .. } => {
                 if e < *duration { return Transition::Stay; }
+                // Forced outing: jump to a nearby window if the cooldown has elapsed.
+                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.outing_due(cfg) {
+                            self.record_outing(cfg);
+                            return Transition::To(State::JumpRunup {
+                                elapsed: 0.0,
+                                target_win_id: win_id,
+                                target_side: side,
+                            });
+                        }
+                    }
+                }
                 // At a window-top edge: either deepen the idle chain or round the corner.
                 if ctx.at_edge {
                     if let Surface::WindowTop { .. } = ctx.surface {
@@ -299,6 +345,19 @@ impl BehaviorScript for RustBehavior {
                     return Transition::To(s);
                 }
                 if e < *duration { return Transition::Stay; }
+                // Forced outing.
+                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.outing_due(cfg) {
+                            self.record_outing(cfg);
+                            return Transition::To(State::JumpRunup {
+                                elapsed: 0.0,
+                                target_win_id: win_id,
+                                target_side: side,
+                            });
+                        }
+                    }
+                }
                 // At a window-top edge: deeper idle (lie) or back to stand.
                 if ctx.at_edge {
                     if let Surface::WindowTop { .. } = ctx.surface {
@@ -339,6 +398,19 @@ impl BehaviorScript for RustBehavior {
                     return Transition::To(s);
                 }
                 if e < *duration { return Transition::Stay; }
+                // Forced outing.
+                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.outing_due(cfg) {
+                            self.record_outing(cfg);
+                            return Transition::To(State::JumpRunup {
+                                elapsed: 0.0,
+                                target_win_id: win_id,
+                                target_side: side,
+                            });
+                        }
+                    }
+                }
                 // At a window-top edge: sleep or back to sit.
                 if ctx.at_edge {
                     if let Surface::WindowTop { .. } = ctx.surface {
@@ -379,6 +451,19 @@ impl BehaviorScript for RustBehavior {
                     return Transition::To(s);
                 }
                 if e < *duration { return Transition::Stay; }
+                // Forced outing.
+                if !matches!(ctx.surface, Surface::Desktop { .. }) {
+                    if let Some((win_id, side)) = ctx.attract_target {
+                        if self.outing_due(cfg) {
+                            self.record_outing(cfg);
+                            return Transition::To(State::JumpRunup {
+                                elapsed: 0.0,
+                                target_win_id: win_id,
+                                target_side: side,
+                            });
+                        }
+                    }
+                }
                 Transition::To(self.make_lie_idle(ctx))
             }
 
@@ -495,7 +580,9 @@ impl BehaviorScript for RustBehavior {
                 if e < *duration { return Transition::Stay; }
                 // Check for a nearby window to jump to (B: window-to-window movement).
                 if let Some((win_id, side)) = ctx.attract_target {
-                    if self.rnd_bool(cfg.corner.corner_jump_prob) {
+                    let forced = self.outing_due(cfg);
+                    if forced || self.rnd_bool(cfg.corner.corner_jump_prob) {
+                        self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0,
                             target_win_id: win_id,
