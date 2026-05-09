@@ -89,9 +89,11 @@ impl SpriteAssets {
         Some(SpriteAssets { images, mirrored, anchors })
     }
 
-    /// Load all sprites from the bytes embedded at compile time.
-    /// Used for the standalone exe where no external asset directory exists.
-    pub fn load_embedded(manifest: &Manifest, display_width: f64) -> Option<Self> {
+    /// Load all sprites from embedded byte slices.
+    /// `sprites` is the per-character `SPRITES` constant from the generated
+    /// `embedded_assets.rs` module.  Used for the standalone exe where no
+    /// external asset directory exists.
+    pub fn load_embedded(sprites: &[(&str, &[u8])], manifest: &Manifest, display_width: f64) -> Option<Self> {
         let scale = display_width / manifest.canonical_width;
 
         let mut images   = HashMap::new();
@@ -99,7 +101,7 @@ impl SpriteAssets {
         let mut anchors  = HashMap::new();
 
         for (name, info) in &manifest.sprites {
-            let png_bytes = embedded::SPRITES.iter()
+            let png_bytes = sprites.iter()
                 .find(|(n, _)| *n == name.as_str())
                 .map(|(_, b)| *b)?;
 

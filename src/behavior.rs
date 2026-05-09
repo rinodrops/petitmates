@@ -73,8 +73,9 @@ pub enum State {
     Walking { dir: Dir, frame: u8, frame_elapsed: f64 },
     /// Turning around (side → front → mirrored side).
     TurningAround { elapsed: f64, to_dir: Dir },
-    /// Standing idle; head-bobs between `s-stand` and `s-stand-close`.
-    StandIdle { elapsed: f64, duration: f64, bob_elapsed: f64, bob_phase: bool },
+    /// Standing idle; occasionally opens mouth once (`s-stand-close`) then returns to `s-stand`.
+    /// `bob_next` is the seconds until the next phase change (long when closed, brief when open).
+    StandIdle { elapsed: f64, duration: f64, bob_elapsed: f64, bob_phase: bool, bob_next: f64 },
     /// Sitting idle. `head_front` toggles between side view and front view;
     /// `head_timer` counts down to the next head turn.
     SitIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },

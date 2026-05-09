@@ -1,14 +1,14 @@
-# Petit Mates — Bearded Dragon behavior configuration
+# Petit Mates — Pond Turtle behavior configuration
 # All values are hot-reloaded: edit and save while the app is running.
 
 # ---- Floor / Window-top ----
 [floor]
-walk_speed        = 60.0          # px/s (display coords)
-walk_frame_secs   = 0.14          # seconds per walk animation frame
+walk_speed        = 40.0          # px/s (display coords) — turtles move slower
+walk_frame_secs   = 0.18          # seconds per walk animation frame
 
 stand_duration    = [3.0,  8.0]   # [min, max] s standing idle
-sit_duration      = [5.0, 15.0]   # [min, max] s sitting idle
-lie_duration      = [20.0, 60.0]  # [min, max] s lying idle
+sit_duration      = [5.0, 20.0]   # [min, max] s sitting idle — turtles rest longer
+lie_duration      = [30.0, 90.0]  # [min, max] s lying idle
 sleep_duration    = [60.0, 180.0] # [min, max] s sleeping
 
 headbob_period    = [30.0, 90.0]  # [min, max] s between mouth-open events
@@ -21,29 +21,29 @@ edge_idle_prob    = 0.90          # probability of idling at window-top edge ins
 # Initial edge-idle state choice when arriving at a window-top edge.
 # Subsequent transitions while staying at the edge are controlled by the probabilities below.
 # sleep always wakes to lie, then the lie→sleep cycle repeats.
-edge_stand_to_sit_prob  = 0.50   # stand → sit  (else round corner)
-edge_sit_to_lie_prob    = 0.50   # sit → lie    (else back to stand)
-edge_lie_to_sleep_prob  = 0.30   # lie → sleep  (else back to sit)
+edge_stand_to_sit_prob  = 0.70   # stand → sit  (turtles prefer sitting)
+edge_sit_to_lie_prob    = 0.65   # sit → lie
+edge_lie_to_sleep_prob  = 0.45   # lie → sleep  (turtles sleep more)
 
 # Transition probabilities (state machine)
 # After PeekDown: walk vs turn around
-peek_walk_prob        = 0.50  # 50% walk, 50% turn
+peek_walk_prob        = 0.40  # 40% walk, 60% turn (cautious)
 # After TurningAround: walk vs StandIdle
-turn_walk_prob        = 0.70  # 70% walk, 30% idle
+turn_walk_prob        = 0.50  # 50/50 (less energetic)
 # After StandIdle (cumulative): r < sit → sit, r < walk → walk, r < turn → turn, else peek
-stand_idle_sit_prob   = 0.40
-stand_idle_walk_prob  = 0.60
-stand_idle_turn_prob  = 0.80
+stand_idle_sit_prob   = 0.55  # turtles prefer sitting
+stand_idle_walk_prob  = 0.70
+stand_idle_turn_prob  = 0.85
 # After SitIdle (cumulative): r < lie → lie, r < stand → stand, else walk
-sit_idle_lie_prob     = 0.30
-sit_idle_stand_prob   = 0.65
+sit_idle_lie_prob     = 0.50  # turtles often move to lying
+sit_idle_stand_prob   = 0.75
 # After LieIdle (cumulative): r < sleep → sleep, r < sit → sit, else walk
-lie_idle_sleep_prob   = 0.15
-lie_idle_sit_prob     = 0.60
+lie_idle_sleep_prob   = 0.30  # turtles fall asleep more readily
+lie_idle_sit_prob     = 0.70
 # Initial idle on window-top edge arrival (cumulative): r < stand → stand, r < sit → sit, r < lie → lie, else sleep
-edge_arrive_stand_prob = 0.40
-edge_arrive_sit_prob   = 0.70
-edge_arrive_lie_prob   = 0.90
+edge_arrive_stand_prob = 0.25  # turtles rarely stand
+edge_arrive_sit_prob   = 0.60
+edge_arrive_lie_prob   = 0.85
 
 standup_duration  = 0.8           # seconds for stand-up animation after landing
 turn_duration     = 0.7           # seconds for turn-around animation
@@ -55,9 +55,9 @@ head_front_duration = [ 2.0,  6.0] # [min, max] s looking forward before turning
 
 # ---- Wall (vertical climb) ----
 [wall]
-climb_speed       = 120.0          # px/s (display coords)
-climb_frame_secs  = 0.11          # seconds per climb animation frame
-pause_prob        = 0.15          # probability of pausing per 3 climb frames (0..1)
+climb_speed       = 80.0          # px/s (display coords) — turtles climb slower
+climb_frame_secs  = 0.15          # seconds per climb animation frame
+pause_prob        = 0.20          # probability of pausing per 3 climb frames (0..1)
 pause_duration    = [2.0, 5.0]    # [min, max] s wall pause
 entry_hold        = 0.5           # seconds to hold hang-wall-0 on first attach
 
@@ -68,8 +68,8 @@ front_corner_secs = 0.5           # seconds to display f-hang-corner
 rest_prob         = 0.80          # probability of resting at upper corner (0..1)
 rest_duration     = [3.0, 8.0]    # [min, max] s upper corner rest
 lower_rest_duration = [1.0, 3.0]  # [min, max] s lower corner rest
-rest_lying_prob   = 0.50          # probability of lying (vs sitting) at upper corner
-rest_descend_prob = 0.50          # after corner rest: probability of descending wall (vs walking inward)
+rest_lying_prob   = 0.65          # turtles prefer lying at corners
+rest_descend_prob = 0.35          # turtles tend to stay at the corner longer
 
 # ---- Jump (desktop floor → wall) ----
 [jump]

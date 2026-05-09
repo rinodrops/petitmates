@@ -52,7 +52,8 @@ impl RustBehavior {
 
     fn make_stand_idle(&self, ctx: &BehaviorContext) -> State {
         let dur = self.rnd_range(ctx.config.floor.stand_duration);
-        State::StandIdle { elapsed: 0.0, duration: dur, bob_elapsed: 0.0, bob_phase: false }
+        let bob_next = self.rnd_range(ctx.config.floor.headbob_period);
+        State::StandIdle { elapsed: 0.0, duration: dur, bob_elapsed: 0.0, bob_phase: false, bob_next }
     }
 
     fn make_sit_idle(&self, ctx: &BehaviorContext) -> State {
@@ -161,7 +162,7 @@ impl BehaviorScript for RustBehavior {
             // ── PeekDown ─────────────────────────────────────────────
             State::PeekDown { dir, .. } => {
                 if e < cfg.floor.peek_duration { return Transition::Stay; }
-                if self.rnd_bool(0.5) {
+                if self.rnd_bool(cfg.floor.peek_walk_prob) {
                     Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 })
                 } else {
                     Transition::To(State::TurningAround { elapsed: 0.0, to_dir: dir.opposite() })
@@ -192,11 +193,11 @@ impl BehaviorScript for RustBehavior {
                         // Possibly idle at the edge before rounding the corner.
                         if self.rnd_bool(cfg.floor.edge_idle_prob) {
                             let r = self.rnd();
-                            if r < 0.40 {
+                            if r < cfg.floor.edge_arrive_stand_prob {
                                 Transition::To(self.make_stand_idle(ctx))
-                            } else if r < 0.70 {
+                            } else if r < cfg.floor.edge_arrive_sit_prob {
                                 Transition::To(self.make_sit_idle(ctx))
-                            } else if r < 0.90 {
+                            } else if r < cfg.floor.edge_arrive_lie_prob {
                                 Transition::To(self.make_lie_idle(ctx))
                             } else {
                                 Transition::To(self.make_sleeping(ctx))
@@ -230,7 +231,7 @@ impl BehaviorScript for RustBehavior {
             // ── TurningAround ─────────────────────────────────────────
             State::TurningAround { to_dir, .. } => {
                 if e < cfg.floor.turn_duration { return Transition::Stay; }
-                if self.rnd_bool(0.7) {
+                if self.rnd_bool(cfg.floor.turn_walk_prob) {
                     Transition::To(State::Walking { dir: *to_dir, frame: 0, frame_elapsed: 0.0 })
                 } else {
                     Transition::To(self.make_stand_idle(ctx))
@@ -269,11 +270,11 @@ impl BehaviorScript for RustBehavior {
                     }
                 }
                 let r = self.rnd();
-                if r < 0.40 {
+                if r < cfg.floor.stand_idle_sit_prob {
                     Transition::To(self.make_sit_idle(ctx))
-                } else if r < 0.60 {
+                } else if r < cfg.floor.stand_idle_walk_prob {
                     Transition::To(self.walk_to_corner(ctx))
-                } else if r < 0.80 {
+                } else if r < cfg.floor.stand_idle_turn_prob {
                     Transition::To(State::TurningAround {
                         elapsed: 0.0,
                         to_dir: ctx.facing.opposite(),
@@ -314,9 +315,9 @@ impl BehaviorScript for RustBehavior {
                     }
                 }
                 let r = self.rnd();
-                if r < 0.30 {
+                if r < cfg.floor.sit_idle_lie_prob {
                     Transition::To(self.make_lie_idle(ctx))
-                } else if r < 0.65 {
+                } else if r < cfg.floor.sit_idle_stand_prob {
                     Transition::To(self.make_stand_idle(ctx))
                 } else {
                     Transition::To(self.walk_to_corner(ctx))
@@ -354,9 +355,9 @@ impl BehaviorScript for RustBehavior {
                     }
                 }
                 let r = self.rnd();
-                if r < 0.15 {
+                if r < cfg.floor.lie_idle_sleep_prob {
                     Transition::To(self.make_sleeping(ctx))
-                } else if r < 0.60 {
+                } else if r < cfg.floor.lie_idle_sit_prob {
                     Transition::To(self.make_sit_idle(ctx))
                 } else {
                     Transition::To(self.walk_to_corner(ctx))
@@ -465,7 +466,7 @@ impl BehaviorScript for RustBehavior {
                     // Arrived at upper corner from the wall
                     if self.rnd_bool(cfg.corner.rest_prob) {
                         let dur = self.rnd_range(cfg.corner.rest_duration);
-                        let lying = self.rnd_bool(0.5);
+                        let lying = self.rnd_bool(cfg.corner.rest_lying_prob);
                         Transition::To(State::CornerRest { elapsed: 0.0, duration: dur, lying })
                     } else {
                         // Step onto the window top and walk inward
@@ -484,8 +485,8 @@ impl BehaviorScript for RustBehavior {
             // ── CornerRest ───────────────────────────────────────────
             State::CornerRest { duration, .. } => {
                 if e < *duration { return Transition::Stay; }
-                // Decide: descend wall (50%) or walk inward on window top (50%)
-                if self.rnd_bool(0.5) {
+                // Decide: descend wall or walk inward on window top
+                if self.rnd_bool(cfg.corner.rest_descend_prob) {
                     if let Surface::WindowUpperCorner { side, .. } = ctx.surface {
                         Transition::To(State::CornerTransitionFront {
                             elapsed: 0.0,
