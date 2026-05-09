@@ -529,8 +529,8 @@ impl BehaviorScript for RustBehavior {
         }
     }
 
-    fn on_surface_lost(&self, _ctx: &BehaviorContext) -> State {
-        State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 }
+    fn on_surface_lost(&self, ctx: &BehaviorContext) -> State {
+        State::Falling { vx: 0.0, vy: 0.0, shocked: ctx.config.floor.shocked_duration }
     }
 
     fn on_landed(&self, _ctx: &BehaviorContext) -> State {
