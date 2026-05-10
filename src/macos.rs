@@ -10,9 +10,9 @@ use std::time::Instant;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, MainThreadOnly};
+use objc2::{define_class, msg_send, ClassType, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
     NSEventMask, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel,
     NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -64,6 +64,8 @@ struct CharState {
     last_tick: Instant,
     /// Mouse offset from panel origin in NS coords when dragging; None otherwise.
     drag_offset: Option<(f64, f64)>,
+    /// Pending debug forced transition: (target_state, remaining_countdown_secs).
+    debug_trigger: Option<(State, f64)>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -79,6 +81,10 @@ struct AppState {
     _timer: Retained<NSTimer>,
     /// Keep event monitors alive for the lifetime of the app.
     _event_monitors: Vec<Retained<AnyObject>>,
+    /// Character index whose debug menu is currently being shown.
+    debug_menu_char: usize,
+    /// Target states stored between menu construction and item selection.
+    debug_menu_targets: Vec<State>,
 }
 
 thread_local! {
@@ -279,6 +285,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         char_pos: (start_cx, start_cy),
         last_tick: Instant::now(),
         drag_offset: None,
+        debug_trigger: None,
     }
 }
 
@@ -356,6 +363,61 @@ define_class!(
                 if app.chars.len() > 1 {
                     unsafe { app.chars.last().unwrap().panel.orderOut(None) };
                     app.chars.pop();
+                }
+            });
+        }
+
+        /// Called by "Remove This Character…" debug menu item.
+        /// Shows an NSAlert for confirmation before removing the specific character.
+        #[unsafe(method(debugRemoveSelect:))]
+        fn debug_remove_select(&self, _sender: &NSMenuItem) {
+            let char_idx = APP.with(|cell| {
+                cell.borrow().as_ref().map(|a| a.debug_menu_char)
+            });
+            let Some(idx) = char_idx else { return };
+
+            let mt = unsafe { MainThreadMarker::new_unchecked() };
+            let confirmed = unsafe {
+                let alert = NSAlert::init(NSAlert::alloc(mt));
+                let (): () = msg_send![&*alert, setMessageText:
+                    &*NSString::from_str("Remove this character?")];
+                let (): () = msg_send![&*alert, setInformativeText:
+                    &*NSString::from_str("The character will be removed from the desktop.")];
+                let (): () = msg_send![&*alert,
+                    addButtonWithTitle: &*NSString::from_str("Remove")];
+                let (): () = msg_send![&*alert,
+                    addButtonWithTitle: &*NSString::from_str("Cancel")];
+                let response: isize = msg_send![&*alert, runModal];
+                response == 1000 // NSAlertFirstButtonReturn
+            };
+
+            if confirmed {
+                APP.with(|cell| {
+                    let mut b = cell.borrow_mut();
+                    let Some(app) = b.as_mut() else { return };
+                    if app.chars.len() > 1 && idx < app.chars.len() {
+                        unsafe { app.chars[idx].panel.orderOut(None) };
+                        app.chars.remove(idx);
+                    }
+                });
+            }
+        }
+
+        /// Called by debug context-menu items; `sender.tag()` indexes into
+        /// `AppState::debug_menu_targets` to find the target state.
+        #[unsafe(method(debugTriggerSelect:))]
+        fn debug_trigger_select(&self, sender: &NSMenuItem) {
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                let tag: isize = unsafe { msg_send![sender, tag] };
+                let idx = tag as usize;
+                let char_idx = app.debug_menu_char;
+                if let Some(target) = app.debug_menu_targets.get(idx) {
+                    if let Some(ch) = app.chars.get_mut(char_idx) {
+                        ch.debug_trigger =
+                            Some((target.clone(), crate::debug_menu::COUNTDOWN_SECS));
+                    }
                 }
             });
         }
@@ -528,6 +590,155 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     });
     if let Some(m) = unsafe {
         NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_up, &*blk_up)
+    } {
+        monitors.push(m);
+    }
+
+    // RightMouseDown (local monitor) — captures right-clicks on our panels when ⌥⌘ is held.
+    //
+    // Using a LOCAL monitor (not global) is essential: local monitors can return nil to
+    // consume the event, preventing it from reaching the underlying app (Finder/Desktop).
+    // The tick loop polls ⌥⌘ state and sets ignoresMouseEvents=false on panels under the
+    // cursor so that right-clicks are delivered to our app rather than passing through.
+    let mask_rdown = NSEventMask::RightMouseDown;
+    let blk_rdown = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let flags = unsafe { _ev.as_ref().modifierFlags() };
+        if !flags.contains(NSEventModifierFlags::Option)
+            || !flags.contains(NSEventModifierFlags::Command)
+        {
+            return _ev.as_ptr(); // not our gesture — pass through unchanged
+        }
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+
+        // Gather menu info and store targets — all within a single borrow.
+        struct MenuInfo {
+            header: String,
+            outing_str: String,
+            target_labels: Vec<String>,
+            can_remove: bool,
+        }
+        let result = APP.with(|cell| -> Option<(usize, MenuInfo)> {
+            let mut b = cell.borrow_mut();
+            let app = b.as_mut()?;
+
+            // Hit-test all character panels.
+            let idx = app.chars.iter().position(|ch| {
+                let frame = unsafe { ch.panel.frame() };
+                mouse_ns.x >= frame.origin.x
+                    && mouse_ns.x < frame.origin.x + frame.size.width
+                    && mouse_ns.y >= frame.origin.y
+                    && mouse_ns.y < frame.origin.y + frame.size.height
+            })?;
+
+            let ch = &app.chars[idx];
+            let cfg = ch.config.lock().unwrap().current.clone();
+
+            let surface_str = crate::debug_menu::surface_name(&ch.surface);
+            let state_str   = crate::debug_menu::state_name(&ch.anim_state);
+            let dur_str = crate::debug_menu::state_elapsed_duration(&ch.anim_state)
+                .map(|(e, d)| format!(" ({:.0}s / {:.0}s)", d - e, d))
+                .unwrap_or_default();
+            let header = format!("{} — {}{}", surface_str, state_str, dur_str);
+            let outing_str = ch.behavior.outing_info(&cfg)
+                .map(|(r, t)| format!("Next outing: {:.0}s / {:.0}s", r, t))
+                .unwrap_or_default();
+
+            let targets = crate::debug_menu::trigger_targets(
+                &ch.surface, &ch.anim_state, ch.facing, &cfg,
+            );
+            if targets.is_empty() {
+                return None;
+            }
+
+            let labels: Vec<String> = targets.iter().map(|t| t.label.clone()).collect();
+            // Store target states for dispatching via debugTriggerSelect:.
+            app.debug_menu_char    = idx;
+            app.debug_menu_targets = targets.into_iter().map(|t| t.state).collect();
+
+            Some((idx, MenuInfo { header, outing_str, target_labels: labels, can_remove: app.chars.len() > 1 }))
+        });
+
+        let Some((_idx, info)) = result else {
+            return _ev.as_ptr(); // no matching panel — pass through
+        };
+
+        // Get a raw pointer to MenuDelegate (safe: AppState keeps it alive).
+        let handler_ptr: *const MenuDelegate = APP.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map(|app| &*app._menu_handler as *const MenuDelegate)
+                .unwrap_or(std::ptr::null())
+        });
+        if handler_ptr.is_null() { return _ev.as_ptr(); }
+
+        let mt = unsafe { MainThreadMarker::new_unchecked() };
+        unsafe {
+            let menu = NSMenu::init(NSMenu::alloc(mt));
+            let (): () = msg_send![&*menu, setAutoenablesItems: false];
+
+            // Info header (disabled — display only).
+            let info_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mt),
+                &NSString::from_str(&info.header),
+                None,
+                &NSString::from_str(""),
+            );
+            let (): () = msg_send![&*info_item, setEnabled: false];
+            menu.addItem(&info_item);
+
+            if !info.outing_str.is_empty() {
+                let outing_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mt),
+                    &NSString::from_str(&info.outing_str),
+                    None,
+                    &NSString::from_str(""),
+                );
+                let (): () = msg_send![&*outing_item, setEnabled: false];
+                menu.addItem(&outing_item);
+            }
+
+            menu.addItem(&NSMenuItem::separatorItem(mt));
+
+            let handler = &*handler_ptr;
+            for (i, label) in info.target_labels.iter().enumerate() {
+                let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mt),
+                    &NSString::from_str(label),
+                    Some(objc2::sel!(debugTriggerSelect:)),
+                    &NSString::from_str(""),
+                );
+                let (): () = msg_send![&*item, setTag: i as isize];
+                let (): () = msg_send![&*item, setTarget: handler];
+                menu.addItem(&item);
+            }
+
+            // Separator + destructive Remove item (only when more than one character).
+            if info.can_remove {
+                menu.addItem(&NSMenuItem::separatorItem(mt));
+                let rm = NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mt),
+                    &NSString::from_str("Remove This Character\u{2026}"),
+                    Some(objc2::sel!(debugRemoveSelect:)),
+                    &NSString::from_str(""),
+                );
+                let (): () = msg_send![&*rm, setTarget: handler];
+                menu.addItem(&rm);
+            }
+
+            // Show at NS screen coordinates (nil inView → screen coords).
+            let (): () = msg_send![
+                &*menu,
+                popUpMenuPositioningItem: std::ptr::null::<NSMenuItem>(),
+                atLocation: mouse_ns,
+                inView: std::ptr::null::<objc2_app_kit::NSView>()
+            ];
+        }
+
+        // Return nil to consume the event — Finder never sees this right-click.
+        std::ptr::null_mut()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_rdown, &*blk_rdown)
     } {
         monitors.push(m);
     }
@@ -1088,6 +1299,16 @@ fn tick_char(
         }
     }
 
+    // Debug trigger: forced state override after countdown.
+    let fired = ch.debug_trigger.as_mut()
+        .map(|(_, r)| { *r -= dt; *r <= 0.0 })
+        .unwrap_or(false);
+    if fired {
+        if let Some((target, _)) = ch.debug_trigger.take() {
+            ch.anim_state = target;
+        }
+    }
+
     // Keep facing in sync with Walking direction.
     if let State::Walking { dir, .. } = &ch.anim_state {
         ch.facing = *dir;
@@ -1128,6 +1349,34 @@ fn tick_char(
     update_hover_alpha(&ch.panel, cfg, false);
 }
 
+// ---- Debug countdown status item ----
+
+/// Update the status-item icon to reflect an active debug countdown.
+/// Shows numbered SF Symbols (3.circle.fill / 2 / 1) while counting down,
+/// then restores the default lizard icon when done.
+fn update_status_countdown(
+    item: &objc2_app_kit::NSStatusItem,
+    remaining: Option<f64>,
+    mt: MainThreadMarker,
+) {
+    let sym = match remaining.map(|r| r.ceil() as u32) {
+        Some(1)          => "1.circle.fill",
+        Some(2)          => "2.circle.fill",
+        Some(n) if n > 2 => "3.circle.fill",
+        _                => "lizard.fill",
+    };
+    unsafe {
+        let Some(btn) = item.button(mt) else { return };
+        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str(sym),
+            None,
+        ) {
+            img.setTemplate(true);
+            btn.setImage(Some(&img));
+        }
+    }
+}
+
 fn tick() {
     APP.with(|cell| {
         let mut b = cell.borrow_mut();
@@ -1144,6 +1393,31 @@ fn tick() {
             ch.config.lock().unwrap().reload_if_changed();
             let cfg = ch.config.lock().unwrap().current.clone();
             tick_char(ch, &cfg, &si, &wins, mt);
+        }
+
+        // Update status item icon to show countdown when a debug trigger is pending.
+        let min_remaining: Option<f64> = app.chars.iter()
+            .filter_map(|c| c.debug_trigger.as_ref().map(|(_, r)| *r))
+            .reduce(f64::min);
+        update_status_countdown(&app._status_item, min_remaining, mt);
+
+        // ⌥⌘ hover tracking: when Option+Command is held and the cursor is
+        // directly over a character panel, temporarily stop ignoring mouse events
+        // so that the local RightMouseDown monitor can intercept the right-click
+        // before it reaches the underlying app (Finder / Desktop).
+        // All other panels (and this panel outside ⌥⌘) stay transparent to clicks.
+        let flags: NSEventModifierFlags = unsafe { msg_send![NSEvent::class(), modifierFlags] };
+        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
+            && flags.contains(NSEventModifierFlags::Command);
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        for ch in &app.chars {
+            let frame = unsafe { ch.panel.frame() };
+            let over = opt_cmd
+                && mouse_ns.x >= frame.origin.x
+                && mouse_ns.x < frame.origin.x + frame.size.width
+                && mouse_ns.y >= frame.origin.y
+                && mouse_ns.y < frame.origin.y + frame.size.height;
+            unsafe { ch.panel.setIgnoresMouseEvents(!over) };
         }
     });
 }
@@ -1198,6 +1472,8 @@ pub fn run() {
             _status_item: status_item,
             _timer: timer,
             _event_monitors: event_monitors,
+            debug_menu_char: 0,
+            debug_menu_targets: Vec::new(),
         });
     });
 

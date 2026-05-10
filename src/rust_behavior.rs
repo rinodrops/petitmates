@@ -147,6 +147,20 @@ impl RustBehavior {
 }
 
 impl BehaviorScript for RustBehavior {
+    fn outing_info(&self, cfg: &crate::config::Config) -> Option<(f64, f64)> {
+        let interval = cfg.corner.outing_interval;
+        if interval[0] <= 0.0 && interval[1] <= 0.0 {
+            return None;
+        }
+        let total = *self.next_outing_secs.lock().unwrap();
+        if total == f64::MAX {
+            return None; // not yet initialised
+        }
+        let elapsed = self.last_outing.lock().unwrap().elapsed().as_secs_f64();
+        let remaining = (total - elapsed).max(0.0);
+        Some((remaining, total))
+    }
+
     fn next_state(&self, ctx: &BehaviorContext) -> Transition {
         let cfg = ctx.config;
         let e = ctx.elapsed_secs;

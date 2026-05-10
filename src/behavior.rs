@@ -171,4 +171,11 @@ pub trait BehaviorScript: Send + Sync {
     fn next_state(&self, ctx: &BehaviorContext) -> Transition;
     fn on_surface_lost(&self, ctx: &BehaviorContext) -> State;
     fn on_landed(&self, ctx: &BehaviorContext) -> State;
+
+    /// Returns `(remaining_secs, total_secs)` until the next automatic
+    /// window-to-window outing, if applicable.  Default: `None`.
+    /// Phase 2 `LuaBehavior` can implement or leave as `None`.
+    fn outing_info(&self, _cfg: &Config) -> Option<(f64, f64)> {
+        None
+    }
 }

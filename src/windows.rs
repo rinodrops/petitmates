@@ -45,6 +45,14 @@ const IDM_ADD_BD: usize = 3;
 const IDM_REMOVE_CHAR: usize = 4;
 const IDM_ADD_PT: usize = 5;
 const TIMER_TICK: usize = 1;
+/// Base command ID for debug trigger menu items (reserves 100–199).
+const IDM_DEBUG_BASE: usize = 100;
+/// Command ID for the debug "Remove This Character" menu item.
+const IDM_DEBUG_REMOVE: usize = 200;
+/// Custom window message: deferred character removal (wp = char index).
+/// Posted to a SURVIVING character's hwnd so the destruction happens outside
+/// any TrackPopupMenu call stack, avoiding re-entrancy issues.
+const WM_APP_REMOVE_CHAR: u32 = WM_APP + 2;
 
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -95,6 +103,8 @@ struct CharState {
     drag_offset: Option<(f64, f64)>,
     /// Last rendered sprite top-left in screen coords.
     last_screen_pos: (i32, i32),
+    /// Pending debug forced transition: (target_state, remaining_countdown_secs).
+    debug_trigger: Option<(State, f64)>,
 }
 
 struct AppState {
@@ -103,6 +113,10 @@ struct AppState {
     pt_assets: Rc<SpriteAssets>,
     bd_config: SharedConfig,
     pt_config: SharedConfig,
+    /// Character index whose debug menu is currently being shown.
+    debug_menu_char: usize,
+    /// Target states stored between menu construction and WM_COMMAND dispatch.
+    debug_menu_targets: Vec<State>,
 }
 
 thread_local! {
@@ -416,6 +430,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         visible:         false,
         drag_offset:     None,
         last_screen_pos: (-4096, -4096),
+        debug_trigger:   None,
     }
 }
 
@@ -702,6 +717,16 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         }
     }
 
+    // Debug trigger: forced state override after countdown.
+    let fired = ch.debug_trigger.as_mut()
+        .map(|(_, r)| { *r -= dt; *r <= 0.0 })
+        .unwrap_or(false);
+    if fired {
+        if let Some((target, _)) = ch.debug_trigger.take() {
+            ch.anim_state = target;
+        }
+    }
+
     // Keep facing in sync with Walking direction.
     if let State::Walking { dir, .. } = &ch.anim_state {
         ch.facing = *dir;
@@ -783,7 +808,36 @@ fn tick_all() {
             let cfg = app.chars[i].config.lock().unwrap().current.clone();
             tick_char(&mut app.chars[i], &cfg, &si, &wins);
         }
+
+        // Update tray tooltip with countdown info when a debug trigger is pending.
+        let min_remaining: Option<f64> = app.chars.iter()
+            .filter_map(|c| c.debug_trigger.as_ref().map(|(_, r)| *r))
+            .reduce(f64::min);
+        if let Some(host) = app.chars.first() {
+            update_tray_countdown(host.hwnd, min_remaining);
+        }
     });
+}
+
+// ---- Debug countdown tray tooltip ----
+
+fn update_tray_countdown(hwnd: HWND, remaining: Option<f64>) {
+    let tip = if let Some(secs) = remaining {
+        format!("Petit Mates — trigger in {:.0}s", secs.ceil().max(1.0))
+    } else {
+        "Petit Mates".to_owned()
+    };
+    unsafe {
+        let tip_wide = to_wide(&tip);
+        let mut nid: NOTIFYICONDATAW = mem::zeroed();
+        nid.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd   = hwnd;
+        nid.uID    = 1;
+        nid.uFlags = NIF_TIP;
+        let n = tip_wide.len().min(nid.szTip.len());
+        nid.szTip[..n].copy_from_slice(&tip_wide[..n]);
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 }
 
 // ---- Window procedure ----
@@ -815,6 +869,77 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     }
                 });
                 SetCapture(hwnd);
+                0
+            }
+            // Alt+Ctrl+right-click: show debug context menu for this character.
+            // Ctrl is already required by WM_NCHITTEST to deliver the click here.
+            WM_RBUTTONDOWN => {
+                let alt = GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000 != 0;
+                if !alt { return 0; }
+
+                struct MenuInfo {
+                    header: String,
+                    outing_str: String,
+                    target_labels: Vec<String>,
+                    can_remove: bool,
+                }
+
+                let result = APP.with(|cell| -> Option<MenuInfo> {
+                    let mut b = cell.borrow_mut();
+                    let app = b.as_mut()?;
+                    let idx = app.chars.iter().position(|c| c.hwnd == hwnd)?;
+                    let ch  = &app.chars[idx];
+                    let cfg = ch.config.lock().unwrap().current.clone();
+
+                    let surface_str = crate::debug_menu::surface_name(&ch.surface);
+                    let state_str   = crate::debug_menu::state_name(&ch.anim_state);
+                    let dur_str = crate::debug_menu::state_elapsed_duration(&ch.anim_state)
+                        .map(|(e, d)| format!(" ({:.0}s / {:.0}s)", d - e, d))
+                        .unwrap_or_default();
+                    let header = format!("{} — {}{}", surface_str, state_str, dur_str);
+                    let outing_str = ch.behavior.outing_info(&cfg)
+                        .map(|(r, t)| format!("Next outing: {:.0}s / {:.0}s", r, t))
+                        .unwrap_or_default();
+
+                    let targets = crate::debug_menu::trigger_targets(
+                        &ch.surface, &ch.anim_state, ch.facing, &cfg,
+                    );
+                    if targets.is_empty() { return None; }
+
+                    let labels: Vec<String> = targets.iter().map(|t| t.label.clone()).collect();
+                    app.debug_menu_char    = idx;
+                    app.debug_menu_targets = targets.into_iter().map(|t| t.state).collect();
+                    Some(MenuInfo { header, outing_str, target_labels: labels, can_remove: app.chars.len() > 1 })
+                });
+
+                let Some(info) = result else { return 0; };
+
+                let menu = CreatePopupMenu();
+                // Disabled info rows.
+                let header_w = to_wide(&info.header);
+                AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, header_w.as_ptr());
+                if !info.outing_str.is_empty() {
+                    let outing_w = to_wide(&info.outing_str);
+                    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, outing_w.as_ptr());
+                }
+                AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+                // Trigger items.
+                let wide_labels: Vec<Vec<u16>> =
+                    info.target_labels.iter().map(|s| to_wide(s)).collect();
+                for (i, w) in wide_labels.iter().enumerate() {
+                    AppendMenuW(menu, MF_STRING, IDM_DEBUG_BASE + i, w.as_ptr());
+                }
+                // Separator + destructive Remove item (only when more than one character).
+                if info.can_remove {
+                    AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+                    let rm_w = to_wide("Remove This Character\u{2026}");
+                    AppendMenuW(menu, MF_STRING, IDM_DEBUG_REMOVE, rm_w.as_ptr());
+                }
+                let mut pt = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                SetForegroundWindow(hwnd);
+                TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, ptr::null());
+                DestroyMenu(menu);
                 0
             }
             WM_MOUSEMOVE => {
@@ -929,6 +1054,27 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 });
                 0
             }
+            // Debug trigger menu item selected.
+            WM_COMMAND if {
+                let id = (wp & 0xFFFF) as usize;
+                id >= IDM_DEBUG_BASE && id < IDM_DEBUG_BASE + 100
+            } => {
+                let idx = (wp & 0xFFFF) as usize - IDM_DEBUG_BASE;
+                APP.with(|cell| {
+                    if let Some(app) = cell.borrow_mut().as_mut() {
+                        let char_idx = app.debug_menu_char;
+                        if let Some(target) = app.debug_menu_targets.get(idx) {
+                            if let Some(ch) = app.chars.get_mut(char_idx) {
+                                ch.debug_trigger = Some((
+                                    target.clone(),
+                                    crate::debug_menu::COUNTDOWN_SECS,
+                                ));
+                            }
+                        }
+                    }
+                });
+                0
+            }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_PT => {
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
@@ -942,14 +1088,89 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_REMOVE_CHAR => {
-                APP.with(|cell| {
-                    if let Some(app) = cell.borrow_mut().as_mut() {
-                        if app.chars.len() > 1 {
-                            let ch = app.chars.pop().unwrap();
-                            DestroyWindow(ch.hwnd);
+                // Extract hwnd BEFORE releasing the borrow — DestroyWindow triggers
+                // WM_DESTROY synchronously, which would conflict with an active borrow_mut.
+                let h = APP.with(|cell| {
+                    cell.borrow_mut().as_mut().and_then(|app| {
+                        if app.chars.len() > 1 { Some(app.chars.pop().unwrap().hwnd) } else { None }
+                    })
+                });
+                if let Some(h) = h { DestroyWindow(h); }
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_DEBUG_REMOVE => {
+                // Collect confirmation info and the survivor hwnd (the window that will
+                // still exist after the removal, and that receives WM_APP_REMOVE_CHAR).
+                let (char_idx, can, survivor) = APP.with(|cell| {
+                    cell.borrow().as_ref()
+                        .map(|a| {
+                            let can = a.chars.len() > 1;
+                            // Pick any surviving hwnd: if removing index 0, use index 1 and vice versa.
+                            let survivor = if a.debug_menu_char == 0 {
+                                a.chars.get(1).map(|c| c.hwnd).unwrap_or(ptr::null_mut())
+                            } else {
+                                a.chars.get(0).map(|c| c.hwnd).unwrap_or(ptr::null_mut())
+                            };
+                            (a.debug_menu_char, can, survivor)
+                        })
+                        .unwrap_or((0, false, ptr::null_mut()))
+                });
+                if can && !survivor.is_null() {
+                    let msg   = to_wide("Remove this character from the desktop?");
+                    let title = to_wide("Remove Character");
+                    let result = MessageBoxW(
+                        ptr::null_mut(), msg.as_ptr(), title.as_ptr(),
+                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
+                    );
+                    if result == IDYES as i32 {
+                        // Defer the actual destruction: post to the surviving window's
+                        // queue so it is processed AFTER TrackPopupMenu fully unwinds.
+                        PostMessageW(survivor, WM_APP_REMOVE_CHAR, char_idx, 0);
+                    }
+                }
+                0
+            }
+            WM_APP_REMOVE_CHAR => {
+                // Deferred removal posted by IDM_DEBUG_REMOVE.
+                // Runs outside any TrackPopupMenu call stack, so DestroyWindow is safe.
+                let char_idx = wp as usize;
+                struct MigrationInfo {
+                    old_hwnd:  HWND,
+                    /// Set when chars[0] was removed: (new_host_hwnd, hinstance as isize).
+                    new_host:  Option<(HWND, HINSTANCE)>,
+                }
+                // Mutate Vec and (for host removal) kill old timer + tray inside the borrow.
+                let info = APP.with(|cell| -> Option<MigrationInfo> {
+                    let mut b = cell.borrow_mut();
+                    let app = b.as_mut()?;
+                    if app.chars.len() <= 1 || char_idx >= app.chars.len() {
+                        return None;
+                    }
+                    if char_idx == 0 {
+                        // Removing the host: kill its timer + tray before we Vec::remove it.
+                        let old_hwnd = app.chars[0].hwnd;
+                        unsafe {
+                            KillTimer(old_hwnd, TIMER_TICK);
+                            remove_tray_icon(old_hwnd);
                         }
+                        app.chars.remove(0);
+                        let new_hwnd  = app.chars[0].hwnd;
+                        let hinstance = unsafe { GetModuleHandleW(ptr::null()) };
+                        Some(MigrationInfo { old_hwnd, new_host: Some((new_hwnd, hinstance)) })
+                    } else {
+                        let old_hwnd = app.chars.remove(char_idx).hwnd;
+                        Some(MigrationInfo { old_hwnd, new_host: None })
                     }
                 });
+                let Some(info) = info else { return 0; };
+                unsafe {
+                    // Re-add tray + timer on the new host BEFORE destroying the old window.
+                    if let Some((new_hwnd, hinstance)) = info.new_host {
+                        add_tray_icon(new_hwnd, hinstance);
+                        SetTimer(new_hwnd, TIMER_TICK, 100, None);
+                    }
+                    DestroyWindow(info.old_hwnd);
+                }
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
@@ -964,11 +1185,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             WM_DESTROY => {
                 // Only quit when the host (first character's) window is destroyed.
+                // unwrap_or(false): if APP is unavailable, do NOT quit — avoids
+                // spurious exits when a borrow conflict or empty state occurs.
                 let is_host = APP.with(|cell| {
                     cell.borrow().as_ref()
                         .and_then(|app| app.chars.first())
                         .map(|ch| ch.hwnd == hwnd)
-                        .unwrap_or(true)
+                        .unwrap_or(false)
                 });
                 if is_host { PostQuitMessage(0); }
                 0
@@ -979,7 +1202,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     cell.borrow().as_ref()
                         .and_then(|app| app.chars.first())
                         .map(|ch| ch.hwnd == hwnd)
-                        .unwrap_or(true)
+                        .unwrap_or(false)
                 });
                 if is_host { update_tray_icon(hwnd); }
                 DefWindowProcW(hwnd, msg, wp, lp)
@@ -1102,6 +1325,8 @@ pub fn run() {
                 pt_assets,
                 bd_config,
                 pt_config,
+                debug_menu_char:    0,
+                debug_menu_targets: Vec::new(),
             });
         });
 
