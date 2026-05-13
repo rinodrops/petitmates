@@ -162,6 +162,8 @@ pub fn open_in_editor() {
 
 #[cfg(target_os = "windows")]
 pub fn open_in_editor() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     if let Some(path) = user_config_path() {
         if !path.exists() {
             let _ = std::fs::write(&path, DEFAULT_TOML);
@@ -169,6 +171,7 @@ pub fn open_in_editor() {
         let path_str = path.to_string_lossy();
         let _ = std::process::Command::new("cmd")
             .args(["/C", "start", "", path_str.as_ref()])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
 }
