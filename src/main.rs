@@ -8,6 +8,7 @@ mod engine;
 mod manifest;
 mod rust_behavior;
 mod sprite_map;
+mod user_config;
 
 #[cfg(target_os = "macos")]
 mod assets;
