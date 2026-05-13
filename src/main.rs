@@ -2,6 +2,9 @@
 
 mod behavior;
 mod config;
+mod debug_menu;
+mod demo_behavior;
+mod engine;
 mod manifest;
 mod rust_behavior;
 mod sprite_map;
@@ -15,7 +18,19 @@ mod wm;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "windows")]
+mod windows_wm;
+
+#[cfg(target_os = "windows")]
+mod windows_assets;
+
+#[cfg(target_os = "windows")]
+mod windows;
+
 fn main() {
     #[cfg(target_os = "macos")]
     macos::run();
+
+    #[cfg(target_os = "windows")]
+    windows::run();
 }

@@ -15,6 +15,13 @@ RES_DIR   := $(CONTENTS)/Resources
 EXE       := $(MACOS_DIR)/$(EXE_NAME)
 
 APP_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.zip
+APP_DMG   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.dmg
+DMG_SETTINGS := dmg_settings.py
+WIN_DIR     := $(BUILD_DIR)/petitmates-windows
+WIN_EXE_NAME := Petit Mates
+WIN_EXE   := $(WIN_DIR)/$(WIN_EXE_NAME).exe
+WIN_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-windows-x86_64.zip
+WIN_TARGET_DIR := /tmp/pm-win
 
 # Make-target–safe versions: spaces escaped as '\ ' for use in
 # prerequisite lists and target definitions.
@@ -23,7 +30,8 @@ CONTENTS_T  := $(subst $(space),\ ,$(CONTENTS))
 MACOS_DIR_T := $(subst $(space),\ ,$(MACOS_DIR))
 RES_DIR_T   := $(subst $(space),\ ,$(RES_DIR))
 
-CHAR_SRC  := assets/bearded_dragon
+BD_SRC    := assets/bearded_dragon
+PT_SRC    := assets/pond_turtle
 ICON_SRC  := assets/appicon.png
 ICONSET   := $(BUILD_DIR)/AppIcon.iconset
 ICNS      := $(RES_DIR)/AppIcon.icns
@@ -33,7 +41,7 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-.PHONY: all app dev zip sign notarize clean
+.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean
 
 all: app
 
@@ -45,9 +53,13 @@ dev: | $(MACOS_DIR_T) $(RES_DIR_T)
 	cargo build --release
 	cp target/release/$(EXE_NAME) "$(EXE)"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
-	cp $(CHAR_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
+	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/config.toml     "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
 	$(MAKE) _plist _icns_if_present
 	@echo "Dev build: $(APP)"
 
@@ -62,9 +74,13 @@ app: | $(MACOS_DIR_T) $(RES_DIR_T)
 		target/aarch64-apple-darwin/release/$(EXE_NAME) \
 		target/x86_64-apple-darwin/release/$(EXE_NAME)
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
-	cp $(CHAR_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(CHAR_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
+	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
+	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
+	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/config.toml     "$(RES_DIR)/assets/pond_turtle/"
+	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
 	$(MAKE) _plist _icns_if_present
 	@echo "App bundle: $(APP)"
 
@@ -87,7 +103,7 @@ _plist: | $(CONTENTS_T)
 		-c "Add :NSHighResolutionCapable    bool   YES" \
 		-c "Add :LSUIElement                bool   YES" \
 		-c "Add :CFBundleIconFile           string AppIcon" \
-		-c "Add :NSHumanReadableCopyright   string Copyright 2026 eMotionGraphics Inc." \
+		-c "Add :NSHumanReadableCopyright   string Copyright 2026 Rino, eMotionGraphics Inc." \
 		"$(CONTENTS)/Info.plist"
 
 # -----------------------------------------------------------------------
@@ -119,12 +135,47 @@ _icns_build: | $(RES_DIR_T)
 	rm -rf "$(ICONSET)"
 
 # -----------------------------------------------------------------------
-# Distribution zip
+# Windows cross-compile (x86_64, from macOS)
+# Requires: mingw-w64 (brew install mingw-w64)
+# Uses a space-free CARGO_TARGET_DIR to work around dlltool limitation.
 # -----------------------------------------------------------------------
 
-zip: app
+win:
+	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
+	mkdir -p "$(WIN_DIR)"
+	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
+	@echo "Windows build: $(WIN_DIR)"
+
+win-zip: win
+	cd "$(BUILD_DIR)" && zip "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_EXE))"
+	@echo "Windows package: $(WIN_ZIP)"
+
+# -----------------------------------------------------------------------
+# Diagnostic tools (developer only, not included in distribution)
+# -----------------------------------------------------------------------
+
+inspect-mac:
+	cargo build --bin wm_inspect
+	@echo "Built: target/debug/wm_inspect"
+	@echo "Run:   ./target/debug/wm_inspect"
+
+inspect-win:
+	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --bin wm_inspect_win \
+		--features inspect-win --target x86_64-pc-windows-gnu
+	@echo "Built: $(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/debug/wm_inspect_win.exe"
+
+# -----------------------------------------------------------------------
+# Distribution (macOS)
+# -----------------------------------------------------------------------
+
+mac-zip: app
 	ditto -c -k --keepParent "$(APP)" "$(APP_ZIP)"
 	@echo "Package: $(APP_ZIP)"
+
+mac-dmg: app
+	@command -v dmgbuild >/dev/null 2>&1 || (echo "Error: dmgbuild not found. Run: pipx install dmgbuild" && exit 1)
+	dmgbuild -s "$(DMG_SETTINGS)" -D app="$(APP)" "$(APP_NAME)" "$(APP_DMG)"
+	@echo "Package: $(APP_DMG)"
 
 # -----------------------------------------------------------------------
 # Code signing
@@ -147,14 +198,15 @@ notarize: sign
 	@test -n "$(TEAM_ID)"   || (echo "Error: APPLE_DEVELOPER_TEAM_ID is not set"      && exit 1)
 	@test -n "$(APPLE_ID_)" || (echo "Error: APPLE_ID is not set"                     && exit 1)
 	@test -n "$(APP_PASS)"  || (echo "Error: APPLE_DEVELOPER_APP_PASSWORD is not set" && exit 1)
-	ditto -c -k --keepParent "$(APP)" "$(APP_ZIP)"
-	xcrun notarytool submit "$(APP_ZIP)" \
+	@command -v dmgbuild >/dev/null 2>&1 || (echo "Error: dmgbuild not found. Run: pipx install dmgbuild" && exit 1)
+	dmgbuild -s "$(DMG_SETTINGS)" -D app="$(APP)" "$(APP_NAME)" "$(APP_DMG)"
+	xcrun notarytool submit "$(APP_DMG)" \
 		--apple-id  "$(APPLE_ID_)" \
 		--password  "$(APP_PASS)" \
 		--team-id   "$(TEAM_ID)" \
 		--wait
-	xcrun stapler staple "$(APP)"
-	@echo "Notarized and stapled: $(APP)"
+	xcrun stapler staple "$(APP_DMG)"
+	@echo "Notarized and stapled: $(APP_DMG)"
 
 # -----------------------------------------------------------------------
 # Directory scaffolding
