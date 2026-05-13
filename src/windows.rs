@@ -1187,13 +1187,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     if char_idx == 0 {
                         // Removing the host: kill its timer + tray before we Vec::remove it.
                         let old_hwnd = app.chars[0].hwnd;
-                        unsafe {
-                            KillTimer(old_hwnd, TIMER_TICK);
-                            remove_tray_icon(old_hwnd);
-                        }
+                        KillTimer(old_hwnd, TIMER_TICK);
+                        remove_tray_icon(old_hwnd);
                         app.chars.remove(0);
                         let new_hwnd  = app.chars[0].hwnd;
-                        let hinstance = unsafe { GetModuleHandleW(ptr::null()) };
+                        let hinstance = GetModuleHandleW(ptr::null());
                         Some(MigrationInfo { old_hwnd, new_host: Some((new_hwnd, hinstance)) })
                     } else {
                         let old_hwnd = app.chars.remove(char_idx).hwnd;
@@ -1201,14 +1199,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     }
                 });
                 let Some(info) = info else { return 0; };
-                unsafe {
-                    // Re-add tray + timer on the new host BEFORE destroying the old window.
-                    if let Some((new_hwnd, hinstance)) = info.new_host {
-                        add_tray_icon(new_hwnd, hinstance);
-                        SetTimer(new_hwnd, TIMER_TICK, 100, None);
-                    }
-                    DestroyWindow(info.old_hwnd);
+                // Re-add tray + timer on the new host BEFORE destroying the old window.
+                if let Some((new_hwnd, hinstance)) = info.new_host {
+                    add_tray_icon(new_hwnd, hinstance);
+                    SetTimer(new_hwnd, TIMER_TICK, 100, None);
                 }
+                DestroyWindow(info.old_hwnd);
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
