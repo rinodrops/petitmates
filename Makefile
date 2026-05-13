@@ -15,6 +15,8 @@ RES_DIR   := $(CONTENTS)/Resources
 EXE       := $(MACOS_DIR)/$(EXE_NAME)
 
 APP_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.zip
+APP_DMG   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.dmg
+DMG_SETTINGS := dmg_settings.py
 WIN_DIR     := $(BUILD_DIR)/petitmates-windows
 WIN_EXE_NAME := Petit Mates
 WIN_EXE   := $(WIN_DIR)/$(WIN_EXE_NAME).exe
@@ -39,7 +41,7 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-.PHONY: all app dev win win-zip mac-zip sign notarize inspect-mac inspect-win clean
+.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean
 
 all: app
 
@@ -163,12 +165,17 @@ inspect-win:
 	@echo "Built: $(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/debug/wm_inspect_win.exe"
 
 # -----------------------------------------------------------------------
-# Distribution zip (macOS)
+# Distribution (macOS)
 # -----------------------------------------------------------------------
 
 mac-zip: app
 	ditto -c -k --keepParent "$(APP)" "$(APP_ZIP)"
 	@echo "Package: $(APP_ZIP)"
+
+mac-dmg: app
+	@command -v dmgbuild >/dev/null 2>&1 || (echo "Error: dmgbuild not found. Run: pipx install dmgbuild" && exit 1)
+	dmgbuild -s "$(DMG_SETTINGS)" -D app="$(APP)" "$(APP_NAME)" "$(APP_DMG)"
+	@echo "Package: $(APP_DMG)"
 
 # -----------------------------------------------------------------------
 # Code signing
@@ -191,14 +198,15 @@ notarize: sign
 	@test -n "$(TEAM_ID)"   || (echo "Error: APPLE_DEVELOPER_TEAM_ID is not set"      && exit 1)
 	@test -n "$(APPLE_ID_)" || (echo "Error: APPLE_ID is not set"                     && exit 1)
 	@test -n "$(APP_PASS)"  || (echo "Error: APPLE_DEVELOPER_APP_PASSWORD is not set" && exit 1)
-	ditto -c -k --keepParent "$(APP)" "$(APP_ZIP)"
-	xcrun notarytool submit "$(APP_ZIP)" \
+	@command -v dmgbuild >/dev/null 2>&1 || (echo "Error: dmgbuild not found. Run: pipx install dmgbuild" && exit 1)
+	dmgbuild -s "$(DMG_SETTINGS)" -D app="$(APP)" "$(APP_NAME)" "$(APP_DMG)"
+	xcrun notarytool submit "$(APP_DMG)" \
 		--apple-id  "$(APPLE_ID_)" \
 		--password  "$(APP_PASS)" \
 		--team-id   "$(TEAM_ID)" \
 		--wait
-	xcrun stapler staple "$(APP)"
-	@echo "Notarized and stapled: $(APP)"
+	xcrun stapler staple "$(APP_DMG)"
+	@echo "Notarized and stapled: $(APP_DMG)"
 
 # -----------------------------------------------------------------------
 # Directory scaffolding
