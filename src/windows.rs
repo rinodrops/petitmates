@@ -1266,9 +1266,9 @@ fn add_tray_icon(hwnd: HWND, hinstance: HINSTANCE) {
         nid.uFlags          = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAY;
         let icon_id: usize  = if is_dark_mode() { 3 } else { 2 };
-        let cx = GetSystemMetrics(SM_CXSMICON);
-        let cy = GetSystemMetrics(SM_CYSMICON);
-        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, cx, cy, LR_SHARED) as HICON;
+        let cx = GetSystemMetrics(SM_CXSMICON).max(32);
+        let cy = GetSystemMetrics(SM_CYSMICON).max(32);
+        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR) as HICON;
         nid.hIcon = if !hicon.is_null() { hicon }
                     else { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
         let n = tip.len().min(nid.szTip.len());
@@ -1281,9 +1281,9 @@ fn update_tray_icon(hwnd: HWND) {
     unsafe {
         let hinstance  = GetModuleHandleW(ptr::null());
         let icon_id: usize = if is_dark_mode() { 3 } else { 2 };
-        let cx = GetSystemMetrics(SM_CXSMICON);
-        let cy = GetSystemMetrics(SM_CYSMICON);
-        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, cx, cy, LR_SHARED) as HICON;
+        let cx = GetSystemMetrics(SM_CXSMICON).max(32);
+        let cy = GetSystemMetrics(SM_CYSMICON).max(32);
+        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR) as HICON;
         if hicon.is_null() { return; }
         let mut nid: NOTIFYICONDATAW = mem::zeroed();
         nid.cbSize  = mem::size_of::<NOTIFYICONDATAW>() as u32;
