@@ -44,6 +44,7 @@ const IDM_EXIT: usize = 2;
 const IDM_ADD_BD: usize = 3;
 const IDM_REMOVE_CHAR: usize = 4;
 const IDM_ADD_PT: usize = 5;
+const IDM_SETTINGS: usize = 6;
 const TIMER_TICK: usize = 1;
 /// Base command ID for debug trigger menu items (reserves 100–199).
 const IDM_DEBUG_BASE: usize = 100;
@@ -1062,12 +1063,15 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     let add_bd_str  = to_wide("Add Bearded Dragon");
                     let add_pt_str  = to_wide("Add Pond Turtle");
                     let remove_str  = to_wide("Remove Last");
-                    let about_str   = to_wide("About Petit Mates");
-                    let exit_str    = to_wide("Quit");
+                    let about_str    = to_wide("About Petit Mates");
+                    let settings_str = to_wide("Open Settings File");
+                    let exit_str     = to_wide("Quit");
                     AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
                     AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
+                    AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+                    AppendMenuW(menu, MF_STRING,    IDM_SETTINGS, settings_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
                     AppendMenuW(menu, MF_STRING,    IDM_ABOUT, about_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -1207,6 +1211,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 DestroyWindow(info.old_hwnd);
                 0
             }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_SETTINGS => {
+                crate::user_config::open_in_editor();
+                0
+            }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
                 let text  = to_wide("Petit Mates\r\nVersion 0.1.0\r\n\r\nA desktop accessory by Rino, eMotionGraphics Inc.");
                 let title = to_wide("About Petit Mates");
@@ -1331,8 +1339,10 @@ pub fn run() {
         // Load shared assets from embedded bytes.
         let bd_config = make_shared_win_for("bearded_dragon");
         let pt_config = make_shared_win_for("pond_turtle");
-        let bd_display_w = bd_config.lock().unwrap().current.display.display_width;
-        let pt_display_w = pt_config.lock().unwrap().current.display.display_width;
+        let user_cfg = crate::user_config::load();
+        let sprite_size = user_cfg.display.sprite_size as f64;
+        let bd_display_w = sprite_size;
+        let pt_display_w = sprite_size;
         let bd_mf = manifest::load_from_bytes(windows_assets::embedded::bearded_dragon::MANIFEST_TOML)
             .expect("embedded bearded_dragon manifest.toml is invalid");
         let pt_mf = manifest::load_from_bytes(windows_assets::embedded::pond_turtle::MANIFEST_TOML)
