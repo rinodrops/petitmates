@@ -103,7 +103,7 @@ _plist: | $(CONTENTS_T)
 		-c "Add :NSHighResolutionCapable    bool   YES" \
 		-c "Add :LSUIElement                bool   YES" \
 		-c "Add :CFBundleIconFile           string AppIcon" \
-		-c "Add :NSHumanReadableCopyright   string Copyright 2026 eMotionGraphics Inc." \
+		-c "Add :NSHumanReadableCopyright   string Copyright 2026 Rino, eMotionGraphics Inc." \
 		"$(CONTENTS)/Info.plist"
 
 # -----------------------------------------------------------------------
