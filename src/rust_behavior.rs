@@ -11,7 +11,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::behavior::{
-    BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition,
+    BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, Transition,
 };
 
 // ---- Helpers ----
@@ -187,7 +187,7 @@ impl BehaviorScript for RustBehavior {
                 // Spontaneous window attraction: jump toward a nearby window before
                 // defaulting to the usual corner-walk / peek cycle.
                 if let Surface::Desktop { .. } = ctx.surface {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, _)) = ctx.attract_target {
                         if self.rnd_bool(cfg.jump.climb_attract_prob) {
                             let dir = match side {
                                 Side::Right => Dir::Left,
@@ -231,6 +231,7 @@ impl BehaviorScript for RustBehavior {
                             elapsed: 0.0,
                             target_win_id: *win_id,
                             target_side: *side,
+                            landing_mode: LandingMode::ClimbFromBottom,
                         });
                     }
                 }
@@ -271,6 +272,7 @@ impl BehaviorScript for RustBehavior {
                                 elapsed: 0.0,
                                 target_win_id: *win_id,
                                 target_side: *side,
+                                landing_mode: LandingMode::ClimbFromBottom,
                             })
                         } else {
                             // No reachable window at screen boundary: idle briefly,
@@ -301,12 +303,13 @@ impl BehaviorScript for RustBehavior {
                 if e < *duration { return Transition::Stay; }
                 // Forced outing: jump to a nearby window if the cooldown has elapsed.
                 if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, landing_mode)) = ctx.attract_target {
                         self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0,
                             target_win_id: win_id,
                             target_side: side,
+                            landing_mode,
                         });
                     } else {
                         // No window in range; reset timer to retry after the next interval.
@@ -335,7 +338,7 @@ impl BehaviorScript for RustBehavior {
                 }
                 // Spontaneous window attraction (Desktop only).
                 if let Surface::Desktop { .. } = ctx.surface {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, _)) = ctx.attract_target {
                         if self.rnd_bool(cfg.jump.climb_attract_prob) {
                             let dir = match side {
                                 Side::Right => Dir::Left,
@@ -370,12 +373,13 @@ impl BehaviorScript for RustBehavior {
                 if e < *duration { return Transition::Stay; }
                 // Forced outing.
                 if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, landing_mode)) = ctx.attract_target {
                         self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0,
                             target_win_id: win_id,
                             target_side: side,
+                            landing_mode,
                         });
                     } else {
                         self.record_outing(cfg);
@@ -398,7 +402,7 @@ impl BehaviorScript for RustBehavior {
                 }
                 // Spontaneous window attraction (Desktop only).
                 if let Surface::Desktop { .. } = ctx.surface {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, _)) = ctx.attract_target {
                         if self.rnd_bool(cfg.jump.climb_attract_prob) {
                             let dir = match side {
                                 Side::Right => Dir::Left,
@@ -428,12 +432,13 @@ impl BehaviorScript for RustBehavior {
                 if e < *duration { return Transition::Stay; }
                 // Forced outing.
                 if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, landing_mode)) = ctx.attract_target {
                         self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0,
                             target_win_id: win_id,
                             target_side: side,
+                            landing_mode,
                         });
                     } else {
                         self.record_outing(cfg);
@@ -456,7 +461,7 @@ impl BehaviorScript for RustBehavior {
                 }
                 // Spontaneous window attraction (Desktop only).
                 if let Surface::Desktop { .. } = ctx.surface {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, _)) = ctx.attract_target {
                         if self.rnd_bool(cfg.jump.climb_attract_prob) {
                             let dir = match side {
                                 Side::Right => Dir::Left,
@@ -486,12 +491,13 @@ impl BehaviorScript for RustBehavior {
                 if e < *duration { return Transition::Stay; }
                 // Forced outing.
                 if !matches!(ctx.surface, Surface::Desktop { .. }) && self.outing_due(cfg) {
-                    if let Some((win_id, side)) = ctx.attract_target {
+                    if let Some((win_id, side, landing_mode)) = ctx.attract_target {
                         self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0,
                             target_win_id: win_id,
                             target_side: side,
+                            landing_mode,
                         });
                     } else {
                         self.record_outing(cfg);
@@ -613,13 +619,14 @@ impl BehaviorScript for RustBehavior {
                 if e < *duration { return Transition::Stay; }
                 // Check for a nearby window to jump to (B: window-to-window movement).
                 let forced = self.outing_due(cfg);
-                if let Some((win_id, side)) = ctx.attract_target {
+                if let Some((win_id, side, landing_mode)) = ctx.attract_target {
                     if forced || self.rnd_bool(cfg.corner.corner_jump_prob) {
                         self.record_outing(cfg);
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0,
                             target_win_id: win_id,
                             target_side: side,
+                            landing_mode,
                         });
                     }
                 } else if forced {

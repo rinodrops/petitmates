@@ -21,7 +21,7 @@
 
 use std::sync::Mutex;
 
-use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
+use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, Transition};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -146,7 +146,7 @@ impl BehaviorScript for DemoBehavior {
                 if e < *duration { return Transition::Stay; }
                 // On desktop, walk toward a nearby window if one exists.
                 if let Surface::Desktop { .. } = ctx.surface {
-                    if let Some((_, side)) = ctx.attract_target {
+                    if let Some((_, side, _)) = ctx.attract_target {
                         let dir = match side { Side::Right => Dir::Left, Side::Left => Dir::Right };
                         eprintln!("[demo] observe → walk {:?} (attract window)", dir);
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
@@ -173,6 +173,7 @@ impl BehaviorScript for DemoBehavior {
                         eprintln!("[demo] walk → jump_runup");
                         return Transition::To(State::JumpRunup {
                             elapsed: 0.0, target_win_id: *win_id, target_side: *side,
+                            landing_mode: LandingMode::ClimbFromBottom,
                         });
                     }
                 }
@@ -399,10 +400,11 @@ impl BehaviorScript for DemoBehavior {
                     }
                     // 2: jump to a nearby window (walk inward as fallback)
                     _ => {
-                        if let Some((win_id, side)) = ctx.attract_target {
+                        if let Some((win_id, side, landing_mode)) = ctx.attract_target {
                             eprintln!("[demo] corner_rest → jump_runup (window-to-window)");
                             Transition::To(State::JumpRunup {
                                 elapsed: 0.0, target_win_id: win_id, target_side: side,
+                                landing_mode,
                             })
                         } else {
                             // No nearby window — walk inward so the cycle can continue.
