@@ -27,7 +27,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
+use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, Transition};
 use crate::config::{make_shared_win_for, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
@@ -275,7 +275,7 @@ fn surface_context(
     corner_attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
-) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
+) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side, LandingMode)>) {
     let edge_margin = 2.0;
     match surface {
         Surface::WindowTop { win_id, x_local } => {
@@ -301,17 +301,23 @@ fn surface_context(
                     if w.id == *win_id { return None; }
                     let dist_r = w.x - corner_cx;
                     let dist_l = corner_cx - w.right();
-                    let vert_ok = (w.y - corner_cy).abs() < corner_attract_dist;
-                    if dist_r >= 0.0 && dist_r < corner_attract_dist && vert_ok {
-                        Some((w.id, Side::Left, dist_r))
-                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist && vert_ok {
-                        Some((w.id, Side::Right, dist_l))
+                    let landing_mode = if w.y > corner_cy {
+                        LandingMode::TopLanding
+                    } else if w.y + w.h > corner_cy {
+                        LandingMode::ClimbFromBottom
+                    } else {
+                        LandingMode::ClimbFromCurrent
+                    };
+                    if dist_r >= 0.0 && dist_r < corner_attract_dist {
+                        Some((w.id, Side::Left, dist_r, landing_mode))
+                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist {
+                        Some((w.id, Side::Right, dist_l, landing_mode))
                     } else {
                         None
                     }
                 })
                 .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(id, s, _)| (id, s));
+                .map(|(id, s, _, lm)| (id, s, lm));
             let progress = if *side == Side::Left { 0.0 } else { 1.0 };
             (progress, false, None, attract_target)
         }
@@ -350,7 +356,7 @@ fn surface_context(
                     }
                 })
                 .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(id, side, _)| (id, side));
+                .map(|(id, side, _)| (id, side, LandingMode::ClimbFromBottom));
             let at_edge = *x <= edge_margin + sprite_w / 2.0
                        || *x >= si.width - edge_margin - sprite_w / 2.0;
             (progress, at_edge, jump_target, attract_target)
@@ -624,7 +630,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
 
     match transition {
         Transition::Stay => {}
-        Transition::To(new_state) => {
+        Transition::To(mut new_state) => {
             if let Some(dir) = turn_to_dir {
                 ch.facing = dir;
             }
@@ -673,22 +679,54 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                 (State::WallEntry { .. }, Surface::Desktop { .. })
                 | (State::WallEntry { .. }, Surface::WindowTop { .. })
                 | (State::WallEntry { .. }, Surface::WindowUpperCorner { .. }) => {
-                    if let State::JumpRunup { target_win_id, target_side, .. } = &ch.anim_state {
+                    if let State::JumpRunup { target_win_id, target_side, landing_mode, .. } = &ch.anim_state {
                         if let Some(win) = windows_wm::find_win(*target_win_id, wins) {
                             let side   = *target_side;
                             let hang_h = assets.size("s-hang-wall-0", false).1;
-                            let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
                             let stand_w = assets.size("s-stand", false).0;
-                            ch.char_pos.0 = match side {
-                                Side::Right => win.right() - stand_w,
-                                Side::Left  => win.x,
-                            };
-                            ch.char_pos.1 = win.y + y_local;
-                            ch.facing = match side {
-                                Side::Left  => Dir::Right,
-                                Side::Right => Dir::Left,
-                            };
-                            Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                            match landing_mode {
+                                LandingMode::TopLanding => {
+                                    let x_local = match side {
+                                        Side::Left  => stand_w / 2.0 + 4.0,
+                                        Side::Right => win.w - stand_w / 2.0 - 4.0,
+                                    };
+                                    ch.char_pos.0 = win.x + x_local;
+                                    ch.char_pos.1 = win.y;
+                                    ch.facing = match side {
+                                        Side::Left  => Dir::Right,
+                                        Side::Right => Dir::Left,
+                                    };
+                                    new_state = State::Observing { elapsed: 0.0, duration: 3.0 };
+                                    Some(Surface::WindowTop { win_id: win.id, x_local })
+                                }
+                                LandingMode::ClimbFromCurrent => {
+                                    let cur_y = ch.char_pos.1;
+                                    let y_local = (cur_y - win.y).clamp(hang_h / 2.0, win.h - 4.0);
+                                    ch.char_pos.0 = match side {
+                                        Side::Right => win.right() - stand_w,
+                                        Side::Left  => win.x,
+                                    };
+                                    ch.char_pos.1 = win.y + y_local;
+                                    ch.facing = match side {
+                                        Side::Left  => Dir::Right,
+                                        Side::Right => Dir::Left,
+                                    };
+                                    Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                                }
+                                LandingMode::ClimbFromBottom => {
+                                    let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
+                                    ch.char_pos.0 = match side {
+                                        Side::Right => win.right() - stand_w,
+                                        Side::Left  => win.x,
+                                    };
+                                    ch.char_pos.1 = win.y + y_local;
+                                    ch.facing = match side {
+                                        Side::Left  => Dir::Right,
+                                        Side::Right => Dir::Left,
+                                    };
+                                    Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                                }
+                            }
                         } else { None }
                     } else { None }
                 }
@@ -1149,13 +1187,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     if char_idx == 0 {
                         // Removing the host: kill its timer + tray before we Vec::remove it.
                         let old_hwnd = app.chars[0].hwnd;
-                        unsafe {
-                            KillTimer(old_hwnd, TIMER_TICK);
-                            remove_tray_icon(old_hwnd);
-                        }
+                        KillTimer(old_hwnd, TIMER_TICK);
+                        remove_tray_icon(old_hwnd);
                         app.chars.remove(0);
                         let new_hwnd  = app.chars[0].hwnd;
-                        let hinstance = unsafe { GetModuleHandleW(ptr::null()) };
+                        let hinstance = GetModuleHandleW(ptr::null());
                         Some(MigrationInfo { old_hwnd, new_host: Some((new_hwnd, hinstance)) })
                     } else {
                         let old_hwnd = app.chars.remove(char_idx).hwnd;
@@ -1163,14 +1199,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     }
                 });
                 let Some(info) = info else { return 0; };
-                unsafe {
-                    // Re-add tray + timer on the new host BEFORE destroying the old window.
-                    if let Some((new_hwnd, hinstance)) = info.new_host {
-                        add_tray_icon(new_hwnd, hinstance);
-                        SetTimer(new_hwnd, TIMER_TICK, 100, None);
-                    }
-                    DestroyWindow(info.old_hwnd);
+                // Re-add tray + timer on the new host BEFORE destroying the old window.
+                if let Some((new_hwnd, hinstance)) = info.new_host {
+                    add_tray_icon(new_hwnd, hinstance);
+                    SetTimer(new_hwnd, TIMER_TICK, 100, None);
                 }
+                DestroyWindow(info.old_hwnd);
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
