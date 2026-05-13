@@ -22,7 +22,7 @@ use objc2_foundation::{
 };
 
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
-use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, Transition};
+use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, Transition};
 use crate::config::{make_shared, Config, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
@@ -863,7 +863,7 @@ fn surface_context(
     corner_attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
-) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
+) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side, LandingMode)>) {
     let edge_margin = 2.0;
     match surface {
         Surface::WindowTop { win_id, x_local } => {
@@ -889,17 +889,28 @@ fn surface_context(
                     if w.id == *win_id { return None; }
                     let dist_r = w.x - corner_cx;
                     let dist_l = corner_cx - w.right();
-                    let vert_ok = (w.y - corner_cy).abs() < corner_attract_dist;
-                    if dist_r >= 0.0 && dist_r < corner_attract_dist && vert_ok {
-                        Some((w.id, Side::Left, dist_r))
-                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist && vert_ok {
-                        Some((w.id, Side::Right, dist_l))
+                    // Determine how the character lands on the target wall based on
+                    // the vertical relationship between the current corner and the target window.
+                    let landing_mode = if w.y > corner_cy {
+                        // Target window starts below current corner → step down onto its top.
+                        LandingMode::TopLanding
+                    } else if w.y + w.h > corner_cy {
+                        // Target window straddles current corner height → start from bottom, climb up.
+                        LandingMode::ClimbFromBottom
+                    } else {
+                        // Target window is entirely above → snap to character's current Y (clamped).
+                        LandingMode::ClimbFromCurrent
+                    };
+                    if dist_r >= 0.0 && dist_r < corner_attract_dist {
+                        Some((w.id, Side::Left, dist_r, landing_mode))
+                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist {
+                        Some((w.id, Side::Right, dist_l, landing_mode))
                     } else {
                         None
                     }
                 })
                 .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(id, s, _)| (id, s));
+                .map(|(id, s, _, lm)| (id, s, lm));
             let progress = if *side == Side::Left { 0.0 } else { 1.0 };
             (progress, false, None, attract_target)
         }
@@ -938,7 +949,7 @@ fn surface_context(
                     }
                 })
                 .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(id, side, _)| (id, side));
+                .map(|(id, side, _)| (id, side, LandingMode::ClimbFromBottom));
             let at_edge = *x <= edge_margin + sprite_w / 2.0
                 || *x >= si.width - edge_margin - sprite_w / 2.0;
             (progress, at_edge, jump_target, attract_target)
@@ -1213,6 +1224,7 @@ fn tick_char(
     match transition {
         Transition::Stay => {}
         Transition::To(new_state) => {
+            let mut new_state = new_state;
             // Complete a turn: update facing before entering the new state.
             if let Some(dir) = turn_to_dir {
                 ch.facing = dir;
@@ -1280,26 +1292,63 @@ fn tick_char(
                 (State::WallEntry { .. }, Surface::Desktop { .. })
                 | (State::WallEntry { .. }, Surface::WindowTop { .. })
                 | (State::WallEntry { .. }, Surface::WindowUpperCorner { .. }) => {
-                    if let State::JumpRunup { target_win_id, target_side, .. } = &ch.anim_state {
+                    if let State::JumpRunup { target_win_id, target_side, landing_mode, .. } = &ch.anim_state {
                         if let Some(win) = wm::find_win(*target_win_id, wins) {
                             let side = *target_side;
                             let hang_h = ch.assets.image("s-hang-wall-0", false)
                                 .map(|img| unsafe { img.size() }.height)
                                 .unwrap_or(150.0);
-                            let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
                             let stand_w = ch.assets.image("s-stand", false)
                                 .map(|img| unsafe { img.size() }.width)
                                 .unwrap_or(150.0);
-                            ch.char_pos.0 = match side {
-                                Side::Right => win.right() - stand_w,
-                                Side::Left  => win.x,
-                            };
-                            ch.char_pos.1 = win.y + y_local;
-                            ch.facing = match side {
-                                Side::Left  => Dir::Right,
-                                Side::Right => Dir::Left,
-                            };
-                            Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                            match landing_mode {
+                                LandingMode::TopLanding => {
+                                    // Step directly onto the target window's top edge.
+                                    // Arrive near the edge the character jumped from.
+                                    let x_local = match side {
+                                        Side::Left  => stand_w / 2.0 + 4.0,
+                                        Side::Right => win.w - stand_w / 2.0 - 4.0,
+                                    };
+                                    ch.char_pos.0 = win.x + x_local;
+                                    ch.char_pos.1 = win.y;
+                                    ch.facing = match side {
+                                        Side::Left  => Dir::Right,
+                                        Side::Right => Dir::Left,
+                                    };
+                                    // Override: go directly to Observing instead of WallEntry.
+                                    new_state = State::Observing { elapsed: 0.0, duration: 3.0 };
+                                    Some(Surface::WindowTop { win_id: win.id, x_local })
+                                }
+                                LandingMode::ClimbFromCurrent => {
+                                    // Snap to the character's current Y projected onto the target wall.
+                                    let cur_y = ch.char_pos.1;
+                                    let y_local = (cur_y - win.y).clamp(hang_h / 2.0, win.h - 4.0);
+                                    ch.char_pos.0 = match side {
+                                        Side::Right => win.right() - stand_w,
+                                        Side::Left  => win.x,
+                                    };
+                                    ch.char_pos.1 = win.y + y_local;
+                                    ch.facing = match side {
+                                        Side::Left  => Dir::Right,
+                                        Side::Right => Dir::Left,
+                                    };
+                                    Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                                }
+                                LandingMode::ClimbFromBottom => {
+                                    // Snap near the bottom of the target wall.
+                                    let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
+                                    ch.char_pos.0 = match side {
+                                        Side::Right => win.right() - stand_w,
+                                        Side::Left  => win.x,
+                                    };
+                                    ch.char_pos.1 = win.y + y_local;
+                                    ch.facing = match side {
+                                        Side::Left  => Dir::Right,
+                                        Side::Right => Dir::Left,
+                                    };
+                                    Some(Surface::WindowWall { win_id: win.id, side, y_local })
+                                }
+                            }
                         } else { None }
                     } else { None }
                 }

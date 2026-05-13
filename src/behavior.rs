@@ -31,6 +31,17 @@ pub enum Side {
     Right,
 }
 
+/// How the character lands after a corner-to-wall jump.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LandingMode {
+    /// Snap to the character's current Y clamped to the target wall, then climb up.
+    ClimbFromCurrent,
+    /// Snap near the bottom of the target wall, then climb up.
+    ClimbFromBottom,
+    /// Step directly onto the target window's top edge (no wall climbing).
+    TopLanding,
+}
+
 // ---- Surface ----
 
 /// Where the character currently resides.
@@ -88,7 +99,7 @@ pub enum State {
     /// Peeking down over the edge.
     PeekDown { elapsed: f64, dir: Dir },
     /// Short run-up before jumping to a wall.
-    JumpRunup { elapsed: f64, target_win_id: u32, target_side: Side },
+    JumpRunup { elapsed: f64, target_win_id: u32, target_side: Side, landing_mode: LandingMode },
 
     // -- Wall --
     /// Climbing up the wall. `frame` cycles 0→1→2→1→…; advanced by the engine.
@@ -151,7 +162,7 @@ pub struct BehaviorContext<'a> {
     pub jump_target: Option<(u32, Side)>,
     /// Nearest window within `climb_attract_dist` in either direction
     /// (Desktop surface only). Used for spontaneous window-climbing attraction.
-    pub attract_target: Option<(u32, Side)>,
+    pub attract_target: Option<(u32, Side, LandingMode)>,
 }
 
 // ---- BehaviorScript trait ----
