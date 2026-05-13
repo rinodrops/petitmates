@@ -275,7 +275,7 @@ fn surface_context(
     corner_attract_dist: f64,
     wins: &[WinInfo],
     si: &ScreenInfo,
-) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side)>) {
+) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side, LandingMode)>) {
     let edge_margin = 2.0;
     match surface {
         Surface::WindowTop { win_id, x_local } => {
