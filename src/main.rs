@@ -3,6 +3,7 @@
 mod behavior;
 mod config;
 mod debug_menu;
+mod demo_behavior;
 mod engine;
 mod manifest;
 mod rust_behavior;

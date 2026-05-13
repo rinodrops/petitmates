@@ -273,10 +273,12 @@ impl BehaviorScript for RustBehavior {
                                 target_side: *side,
                             })
                         } else {
-                            Transition::To(State::TurningAround {
-                                elapsed: 0.0,
-                                to_dir: dir.opposite(),
-                            })
+                            // No reachable window at screen boundary: idle briefly,
+                            // then walk inward on the next evaluation.  This breaks
+                            // the infinite edge-bounce loop that occurs when
+                            // attract_target points to a window that is too far or
+                            // has since moved beyond the screen edge.
+                            Transition::To(self.make_stand_idle(ctx))
                         }
                     }
                     _ => Transition::Stay,
@@ -323,6 +325,12 @@ impl BehaviorScript for RustBehavior {
                                 side: dir_to_side(ctx.facing),
                             })
                         };
+                    }
+                    // Desktop screen edge: walk inward.  Skip the attract_target
+                    // check below to avoid re-triggering toward the same unreachable window.
+                    if let Surface::Desktop { .. } = ctx.surface {
+                        let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
+                        return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
                 }
                 // Spontaneous window attraction (Desktop only).
@@ -382,6 +390,11 @@ impl BehaviorScript for RustBehavior {
                             Transition::To(self.make_stand_idle(ctx))
                         };
                     }
+                    // Desktop screen edge: walk inward.
+                    if let Surface::Desktop { .. } = ctx.surface {
+                        let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
+                        return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
+                    }
                 }
                 // Spontaneous window attraction (Desktop only).
                 if let Surface::Desktop { .. } = ctx.surface {
@@ -434,6 +447,11 @@ impl BehaviorScript for RustBehavior {
                         } else {
                             Transition::To(self.make_sit_idle(ctx))
                         };
+                    }
+                    // Desktop screen edge: walk inward.
+                    if let Surface::Desktop { .. } = ctx.surface {
+                        let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
+                        return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
                 }
                 // Spontaneous window attraction (Desktop only).
