@@ -192,6 +192,17 @@ fn make_status_item(
 
         menu.addItem(&NSMenuItem::separatorItem(mt));
 
+        let settings = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str("Open Settings File"),
+            Some(objc2::sel!(openSettingsFile:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*settings, setTarget: handler] };
+        menu.addItem(&settings);
+
+        menu.addItem(&NSMenuItem::separatorItem(mt));
+
         let about = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
             &NSString::from_str("About Petit Mates"),
@@ -357,6 +368,12 @@ define_class!(
                 let config = app.pt_config.clone();
                 app.chars.push(spawn_char(assets, config, &si, mt, false));
             });
+        }
+
+        /// Open user.toml in the system default text editor.
+        #[unsafe(method(openSettingsFile:))]
+        fn open_settings_file(&self, _sender: &AnyObject) {
+            crate::user_config::open_in_editor();
         }
 
         /// Remove the most recently added character (minimum 1 remains).
@@ -1521,8 +1538,10 @@ pub fn run() {
     let pt_mf = manifest::load(&pt_cdir).expect("pond_turtle manifest.toml missing or invalid");
     let bd_config = make_shared(&bd_cdir);
     let pt_config = make_shared(&pt_cdir);
-    let bd_display_w = bd_config.lock().unwrap().current.display.display_width;
-    let pt_display_w = pt_config.lock().unwrap().current.display.display_width;
+    let user_cfg = crate::user_config::load();
+    let sprite_size = user_cfg.display.sprite_size as f64;
+    let bd_display_w = sprite_size;
+    let pt_display_w = sprite_size;
     let bd_assets = Rc::new(SpriteAssets::load(&bd_cdir, &bd_mf, bd_display_w).expect("failed to load bearded_dragon sprites"));
     let pt_assets = Rc::new(SpriteAssets::load(&pt_cdir, &pt_mf, pt_display_w).expect("failed to load pond_turtle sprites"));
 
