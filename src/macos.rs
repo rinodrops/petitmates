@@ -26,6 +26,7 @@ use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface
 use crate::config::{make_shared, Config, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
+use crate::demo_behavior::DemoBehavior;
 use crate::rust_behavior::RustBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
 use crate::wm::{self, ScreenInfo, WinInfo};
@@ -265,7 +266,7 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
 /// Create one character, place it in a startup-drop position, and return
 /// the fully initialised `CharState`.  Caller is responsible for pushing it
 /// into `AppState::chars`.
-fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker) -> CharState {
+fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool) -> CharState {
     let (start_cx, start_cy) = startup_drop(si, &assets);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
     let panel = make_panel(init_img, mt);
@@ -278,7 +279,11 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         panel,
         assets,
         config,
-        behavior: Box::new(RustBehavior::new()),
+        behavior: if demo {
+            Box::new(DemoBehavior::new()) as Box<dyn crate::behavior::BehaviorScript>
+        } else {
+            Box::new(RustBehavior::new())
+        },
         anim_state: State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 },
         facing: Dir::Left,
         surface: Surface::Airborne,
@@ -334,7 +339,7 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.bd_assets);
                 let config = app.bd_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt));
+                app.chars.push(spawn_char(assets, config, &si, mt, false));
             });
         }
 
@@ -350,7 +355,7 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.pt_assets);
                 let config = app.pt_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt));
+                app.chars.push(spawn_char(assets, config, &si, mt, false));
             });
         }
 
@@ -986,6 +991,30 @@ fn tick_char(
             };
             ch.behavior.on_surface_lost(&ctx)
         };
+
+        // Reposition char_pos so the falling sprite appears centered on the
+        // same screen point as the sprite that was just visible.
+        // char_pos (kept in sync each tick) is the CG top-left of the
+        // current sprite; compute its center, then derive the new top-left
+        // for the falling sprite so it shares that center.
+        {
+            let sr_cur = sprite_for_state(&ch.anim_state, ch.facing);
+            let sr_new = sprite_for_state(&fallback, ch.facing);
+            if let (Some(img_cur), Some(img_new)) = (
+                ch.assets.image(sr_cur.name, sr_cur.mirror),
+                ch.assets.image(sr_new.name, sr_new.mirror),
+            ) {
+                let cur_sz = unsafe { img_cur.size() };
+                let new_sz = unsafe { img_new.size() };
+                let center_cx = ch.char_pos.0 + cur_sz.width  / 2.0;
+                let center_cy = ch.char_pos.1 + cur_sz.height / 2.0;
+                ch.char_pos = (
+                    center_cx - new_sz.width  / 2.0,
+                    center_cy - new_sz.height / 2.0,
+                );
+            }
+        }
+
         ch.anim_state = fallback;
         ch.surface = Surface::Airborne;
     }
@@ -1333,6 +1362,13 @@ fn tick_char(
     let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
     unsafe { ch.panel.setFrameOrigin(origin) };
 
+    // Keep char_pos in sync with the rendered panel position so that when a
+    // window surface is lost the character starts falling from the correct
+    // location rather than from the stale position of its last airborne state.
+    if !matches!(ch.surface, Surface::Airborne) {
+        ch.char_pos = (origin.x, si.height - origin.y - sz.1);
+    }
+
     // Z-order: place the panel just above its host window so windows in front
     // of the host naturally occlude the character.
     unsafe {
@@ -1443,8 +1479,17 @@ pub fn run() {
 
     let si = wm::screen_info(mt)
         .unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
-    let bd_char = spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt);
-    let pt_char = spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt);
+
+    let demo_mode = std::env::args().any(|a| a == "--demo");
+    let initial_chars: Vec<CharState> = if demo_mode {
+        // Demo mode: one bearded dragon with deterministic scripted behavior.
+        vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true)]
+    } else {
+        vec![
+            spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false),
+            spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false),
+        ]
+    };
 
     let menu_handler = MenuDelegate::new(mt);
     let status_item = make_status_item(&menu_handler, mt);
@@ -1463,7 +1508,7 @@ pub fn run() {
 
     APP.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
-            chars: vec![bd_char, pt_char],
+            chars: initial_chars,
             bd_assets,
             pt_assets,
             bd_config,
