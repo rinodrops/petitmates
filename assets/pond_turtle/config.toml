@@ -1,0 +1,95 @@
+# Petit Mates — Pond Turtle behavior configuration
+# All values are hot-reloaded: edit and save while the app is running.
+
+# ---- Floor / Window-top ----
+[floor]
+walk_speed        = 40.0          # px/s (display coords)
+walk_frame_secs   = 0.18          # seconds per walk animation frame
+
+stand_duration    = [3.0,  8.0]   # [min, max] s standing idle
+sit_duration      = [5.0, 20.0]   # [min, max] s sitting idle
+lie_duration      = [30.0, 90.0]  # [min, max] s lying idle
+sleep_duration    = [60.0, 180.0] # [min, max] s sleeping
+
+headbob_period    = [30.0, 90.0]  # [min, max] s between mouth-open events
+headbob_open_duration = [0.3, 0.5] # [min, max] s mouth stays open per event
+
+peek_prob         = 0.20          # probability of peek-down at edge (0..1)
+peek_duration     = 0.5           # seconds to hold peek pose
+edge_idle_prob    = 0.90          # probability of idling at window-top edge instead of rounding corner (0..1)
+
+# Initial edge-idle state choice when arriving at a window-top edge.
+# Subsequent transitions while staying at the edge are controlled by the probabilities below.
+# sleep always wakes to lie, then the lie→sleep cycle repeats.
+edge_stand_to_sit_prob  = 0.70   # stand → sit  (turtles prefer sitting)
+edge_sit_to_lie_prob    = 0.65   # sit → lie
+edge_lie_to_sleep_prob  = 0.45   # lie → sleep  (turtles sleep more)
+
+# Transition probabilities (state machine)
+# After PeekDown: walk vs turn around
+peek_walk_prob        = 0.40  # 40% walk, 60% turn (cautious)
+# After TurningAround: walk vs StandIdle
+turn_walk_prob        = 0.50  # 50/50 (less energetic)
+# After StandIdle (cumulative): r < sit → sit, r < walk → walk, r < turn → turn, else peek
+stand_idle_sit_prob   = 0.55
+stand_idle_walk_prob  = 0.60
+stand_idle_turn_prob  = 0.85
+# After SitIdle (cumulative): r < lie → lie, r < stand → stand, else walk
+sit_idle_lie_prob     = 0.50
+sit_idle_stand_prob   = 0.75
+# After LieIdle (cumulative): r < sleep → sleep, r < sit → sit, else walk
+lie_idle_sleep_prob   = 0.50
+lie_idle_sit_prob     = 0.50
+# Initial idle on window-top edge arrival (cumulative): r < stand → stand, r < sit → sit, r < lie → lie, else sleep
+edge_arrive_stand_prob = 0.25  # turtles rarely stand
+edge_arrive_sit_prob   = 0.60
+edge_arrive_lie_prob   = 0.85
+
+edge_fall_prob        = 0.20          # among non-idle edge arrivals: probability of falling instead of rounding corner
+shocked_duration      = 0.6           # seconds to show f-shocked sprite after edge fall
+
+standup_duration  = 0.8           # seconds for stand-up animation after landing
+turn_duration     = 0.7           # seconds for turn-around animation
+
+observe_duration  = [3.0, 8.0]    # [min, max] s observation phase after landing
+
+head_side_duration  = [10.0, 25.0] # [min, max] s looking sideways before turning forward
+head_front_duration = [ 2.0,  6.0] # [min, max] s looking forward before turning back to side
+
+# ---- Wall (vertical climb) ----
+[wall]
+climb_speed       = 80.0          # px/s (display coords) — turtles climb slower
+climb_frame_secs  = 0.15          # seconds per climb animation frame
+pause_prob        = 0.20          # probability of pausing per 3 climb frames (0..1)
+pause_duration    = [2.0, 5.0]    # [min, max] s wall pause
+entry_hold        = 0.5           # seconds to hold hang-wall-0 on first attach
+
+# ---- Corner ----
+[corner]
+side_corner_secs  = 1.5           # seconds to display s-hang-corner
+front_corner_secs = 0.5           # seconds to display f-hang-corner
+rest_prob         = 0.80          # probability of resting at upper corner (0..1)
+rest_duration     = [3.0, 8.0]    # [min, max] s upper corner rest
+lower_rest_duration = [1.0, 3.0]  # [min, max] s lower corner rest
+rest_lying_prob   = 0.65          # turtles prefer lying at corners
+rest_descend_prob = 0.35          # turtles tend to stay at the corner longer
+corner_jump_prob  = 0.10          # turtles rarely jump to other windows
+corner_jump_dist  = 300.0         # detection radius (px) for corner-to-window jump
+outing_interval   = [600.0, 900.0] # [min, max] s before forced window-to-window outing (turtles are slow)
+
+# ---- Jump (desktop floor → wall) ----
+[jump]
+gravity           = 1.2           # factor; effective accel = gravity × 60 px/s²
+runup_duration    = 0.3           # seconds for jump run-up animation
+wall_jump_max_dist = 300.0        # max horizontal px to trigger jump while walking
+wall_jump_floor_margin = 300.0    # windows whose bottom is more than this many px
+                                  # above the Dock/taskbar are ignored for jumps
+climb_attract_dist = 600.0        # detection radius (px, either direction) for
+                                  # spontaneous window-climbing attraction
+climb_attract_prob = 0.35         # probability of being attracted when an idle
+                                  # state expires and a window is in range (0..1)
+
+# ---- Display ----
+[display]
+display_width     = 150.0         # character display width in logical pixels
+hover_alpha       = 0.25          # alpha value when mouse hovers over character

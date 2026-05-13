@@ -66,7 +66,10 @@ fn climb_frame_name(frame: u8) -> &'static str {
 pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
     match state {
         // ── Airborne ─────────────────────────────────────────────────
-        State::Falling { .. } => SpriteRef::side("s-jump", facing),
+        State::Falling { shocked, .. } => {
+            if *shocked > 0.0 { SpriteRef::front("f-shocked") }
+            else { SpriteRef::side("s-jump", facing) }
+        }
 
         // ── Floor / Window top ────────────────────────────────────────
         State::LandingStandUp { .. } => SpriteRef::side("s-stand-up", facing),
@@ -86,11 +89,14 @@ pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
         State::StandIdle { bob_phase: false, .. } => SpriteRef::side("s-stand", facing),
         State::StandIdle { bob_phase: true, .. } => SpriteRef::side("s-stand-close", facing),
 
-        State::SitIdle { .. } => SpriteRef::side("s-sit", facing),
+        State::SitIdle { head_front: false, .. } => SpriteRef::side("s-sit", facing),
+        State::SitIdle { head_front: true,  .. } => SpriteRef::front("f-sit"),
 
-        State::LieIdle { .. } => SpriteRef::side("s-lie", facing),
+        State::LieIdle { head_front: false, .. } => SpriteRef::side("s-lie", facing),
+        State::LieIdle { head_front: true,  .. } => SpriteRef::front("f-lie"),
 
-        State::Sleeping { .. } => SpriteRef::side("s-lie-sleep", facing),
+        State::Sleeping { head_front: false, .. } => SpriteRef::side("s-lie-sleep", facing),
+        State::Sleeping { head_front: true,  .. } => SpriteRef::front("f-lie-sleep"),
 
         State::PeekDown { dir, .. } => SpriteRef::side("s-peek-down", *dir),
 

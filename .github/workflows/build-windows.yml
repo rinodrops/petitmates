@@ -1,0 +1,79 @@
+name: Build Windows and create draft release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Install Rust stable + Windows target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-win-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-win-
+
+      - name: Build Windows exe
+        run: |
+          CARGO_TARGET_DIR=/tmp/pm-win \
+          cargo build --release --target x86_64-pc-windows-gnu
+          mkdir -p build/petitmates-windows
+          cp /tmp/pm-win/x86_64-pc-windows-gnu/release/petitmates.exe \
+             "build/petitmates-windows/Petit Mates.exe"
+
+      - name: Package Windows zip
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZIP="Petit-Mates-v${VERSION}-windows-x86_64.zip"
+          cd build/petitmates-windows
+          zip "../../${ZIP}" "Petit Mates.exe"
+          echo "WIN_ZIP=${ZIP}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: petitmates-windows
+          path: ${{ env.WIN_ZIP }}
+
+      - name: Create draft release and attach Windows zip
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: ${{ env.WIN_ZIP }}
+          body: |
+            ## Petit Mates ${{ github.ref_name }}
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | macOS (Universal) | *(upload DMG manually)* |
+            | Windows 11 x86-64 | See attached zip |
+
+            ### macOS Installation
+            1. Download the DMG and open it.
+            2. Drag **Petit Mates.app** to your Applications folder.
+            3. Launch — a menu bar icon appears.
+
+            ### Windows Installation
+            1. Download the zip and extract it.
+            2. Run **Petit Mates.exe** — a system tray icon appears.

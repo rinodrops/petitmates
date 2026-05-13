@@ -31,6 +31,17 @@ pub enum Side {
     Right,
 }
 
+/// How the character lands after a corner-to-wall jump.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LandingMode {
+    /// Snap to the character's current Y clamped to the target wall, then climb up.
+    ClimbFromCurrent,
+    /// Snap near the bottom of the target wall, then climb up.
+    ClimbFromBottom,
+    /// Step directly onto the target window's top edge (no wall climbing).
+    TopLanding,
+}
+
 // ---- Surface ----
 
 /// Where the character currently resides.
@@ -62,7 +73,9 @@ pub enum Surface {
 pub enum State {
     // -- Airborne --
     /// Falling or jumping. `vx`/`vy` in px/s (positive y = downward in CG coords).
-    Falling { vx: f64, vy: f64 },
+    /// `shocked > 0` means the character just fell off a ledge; shows `f-shocked`
+    /// sprite until it counts down to zero.
+    Falling { vx: f64, vy: f64, shocked: f64 },
 
     // -- Floor / WindowTop --
     /// Playing `s-stand-up` after landing.
@@ -73,18 +86,20 @@ pub enum State {
     Walking { dir: Dir, frame: u8, frame_elapsed: f64 },
     /// Turning around (side → front → mirrored side).
     TurningAround { elapsed: f64, to_dir: Dir },
-    /// Standing idle; head-bobs between `s-stand` and `s-stand-close`.
-    StandIdle { elapsed: f64, duration: f64, bob_elapsed: f64, bob_phase: bool },
-    /// Sitting idle.
-    SitIdle { elapsed: f64, duration: f64 },
+    /// Standing idle; occasionally opens mouth once (`s-stand-close`) then returns to `s-stand`.
+    /// `bob_next` is the seconds until the next phase change (long when closed, brief when open).
+    StandIdle { elapsed: f64, duration: f64, bob_elapsed: f64, bob_phase: bool, bob_next: f64 },
+    /// Sitting idle. `head_front` toggles between side view and front view;
+    /// `head_timer` counts down to the next head turn.
+    SitIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Lying idle.
-    LieIdle { elapsed: f64, duration: f64 },
+    LieIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Sleeping.
-    Sleeping { elapsed: f64, duration: f64 },
+    Sleeping { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Peeking down over the edge.
     PeekDown { elapsed: f64, dir: Dir },
     /// Short run-up before jumping to a wall.
-    JumpRunup { elapsed: f64, target_win_id: u32, target_side: Side },
+    JumpRunup { elapsed: f64, target_win_id: u32, target_side: Side, landing_mode: LandingMode },
 
     // -- Wall --
     /// Climbing up the wall. `frame` cycles 0→1→2→1→…; advanced by the engine.
@@ -105,7 +120,8 @@ pub enum State {
     CornerRest { elapsed: f64, duration: f64, lying: bool },
 
     // -- User interaction --
-    /// Character is being dragged by the user (⌘+drag).
+    /// Character is being dragged by the user (⌘+drag on macOS).
+    #[allow(dead_code)]
     Grabbed,
 }
 
@@ -131,6 +147,7 @@ pub struct BehaviorContext<'a> {
     /// Current runtime config (hot-reloaded TOML values).
     pub config: &'a Config,
     /// A pre-rolled random value in [0.0, 1.0) for this tick (for Lua compat).
+    #[allow(dead_code)]
     pub rng01: f64,
     /// Normalized position on the current surface: 0.0 = left/top end,
     /// 1.0 = right/bottom end. Corners are 0.0 or 1.0.
@@ -141,7 +158,11 @@ pub struct BehaviorContext<'a> {
     /// the direction it is heading (edge of window-top, top/bottom of wall, etc.).
     pub at_edge: bool,
     /// Nearest window and side eligible for a wall-jump (Desktop surface only).
+    /// Restricted to the current walking direction and `wall_jump_max_dist`.
     pub jump_target: Option<(u32, Side)>,
+    /// Nearest window within `climb_attract_dist` in either direction
+    /// (Desktop surface only). Used for spontaneous window-climbing attraction.
+    pub attract_target: Option<(u32, Side, LandingMode)>,
 }
 
 // ---- BehaviorScript trait ----
@@ -161,4 +182,11 @@ pub trait BehaviorScript: Send + Sync {
     fn next_state(&self, ctx: &BehaviorContext) -> Transition;
     fn on_surface_lost(&self, ctx: &BehaviorContext) -> State;
     fn on_landed(&self, ctx: &BehaviorContext) -> State;
+
+    /// Returns `(remaining_secs, total_secs)` until the next automatic
+    /// window-to-window outing, if applicable.  Default: `None`.
+    /// Phase 2 `LuaBehavior` can implement or leave as `None`.
+    fn outing_info(&self, _cfg: &Config) -> Option<(f64, f64)> {
+        None
+    }
 }
