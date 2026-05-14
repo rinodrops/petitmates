@@ -36,25 +36,216 @@ trigger = "random"
 weight  = 0.6
 
 [[speech]]
-text_ja = "朝だ"
-text_en = "Morning already."
-trigger = "time"
-hours   = [6, 7, 8]
-weight  = 1.0
-
-[[speech]]
-text_ja = "もうそんな時間か"
-text_en = "It's already that time, huh."
-trigger = "time"
-hours   = [20, 21, 22]
-weight  = 0.8
-
-[[speech]]
 text_ja = "夜ふかしはよくないよ"
 text_en = "Staying up this late isn't good for you."
 trigger = "time"
 hours   = [0, 1, 2, 3]
 weight  = 0.8
+
+[[speech]]
+text_ja = "体がだんだん動き出してきた感じ"
+text_en = "I can feel myself waking up."
+trigger = "time"
+hours   = [6, 7, 8, 9]
+weight  = 1.0
+
+[[speech]]
+text_ja = "お腹が空いてきた気がする"
+text_en = "I think I'm getting hungry."
+trigger = "time"
+hours   = [11, 12, 13]
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか眠くなってきた"
+text_en = "Feeling a bit drowsy."
+trigger = "time"
+hours   = [13, 14, 15]
+weight  = 0.9
+
+[[speech]]
+text_ja = "日が傾いてきた感じがする"
+text_en = "I think the sun is starting to lean."
+trigger = "time"
+hours   = [16, 17, 18]
+weight  = 1.0
+
+[[speech]]
+text_ja = "一日が終わっていく感じがする"
+text_en = "I can feel the day winding down."
+trigger = "time"
+hours   = [20, 21, 22]
+weight  = 1.0
+
+# --- hour_change ---
+
+[[speech]]
+text_ja = "日付が変わった感じがする"
+text_en = "Feels like the day has turned over."
+trigger = "state"
+state   = "hour_change"
+hours   = [0]
+
+[[speech]]
+text_ja = "夜中はまだ長い"
+text_en = "The night is still long."
+trigger = "state"
+state   = "hour_change"
+hours   = [1]
+
+[[speech]]
+text_ja = "深夜2時…静かだな"
+text_en = "2 in the morning... so quiet."
+trigger = "state"
+state   = "hour_change"
+hours   = [2]
+
+[[speech]]
+text_ja = "夜がいちばん深い頃かな"
+text_en = "The dead of night, I think."
+trigger = "state"
+state   = "hour_change"
+hours   = [3]
+
+[[speech]]
+text_ja = "もうすぐ夜明けかな"
+text_en = "Almost dawn."
+trigger = "state"
+state   = "hour_change"
+hours   = [4]
+
+[[speech]]
+text_ja = "夜明け前の空だな"
+text_en = "The sky just before dawn."
+trigger = "state"
+state   = "hour_change"
+hours   = [5]
+
+[[speech]]
+text_ja = "朝が始まった"
+text_en = "Morning has begun."
+trigger = "state"
+state   = "hour_change"
+hours   = [6]
+
+[[speech]]
+text_ja = "そろそろ起きないと"
+text_en = "Time to get up soon."
+trigger = "state"
+state   = "hour_change"
+hours   = [7]
+
+[[speech]]
+text_ja = "8時になった"
+text_en = "It's 8 o'clock."
+trigger = "state"
+state   = "hour_change"
+hours   = [8]
+
+[[speech]]
+text_ja = "9時か"
+text_en = "9 o'clock."
+trigger = "state"
+state   = "hour_change"
+hours   = [9]
+
+[[speech]]
+text_ja = "10時になった"
+text_en = "10 o'clock."
+trigger = "state"
+state   = "hour_change"
+hours   = [10]
+
+[[speech]]
+text_ja = "もうすぐ昼だな"
+text_en = "Almost noon."
+trigger = "state"
+state   = "hour_change"
+hours   = [11]
+
+[[speech]]
+text_ja = "ちょうど真昼か"
+text_en = "Right at noon."
+trigger = "state"
+state   = "hour_change"
+hours   = [12]
+
+[[speech]]
+text_ja = "昼を過ぎた"
+text_en = "Past noon now."
+trigger = "state"
+state   = "hour_change"
+hours   = [13]
+
+[[speech]]
+text_ja = "午後2時か"
+text_en = "2 in the afternoon."
+trigger = "state"
+state   = "hour_change"
+hours   = [14]
+
+[[speech]]
+text_ja = "おやつの時間だ"
+text_en = "Time for a snack."
+trigger = "state"
+state   = "hour_change"
+hours   = [15]
+
+[[speech]]
+text_ja = "夕方に近くなってきた"
+text_en = "Getting close to evening."
+trigger = "state"
+state   = "hour_change"
+hours   = [16]
+
+[[speech]]
+text_ja = "夕方5時だな"
+text_en = "5 in the evening."
+trigger = "state"
+state   = "hour_change"
+hours   = [17]
+
+[[speech]]
+text_ja = "夜が近い"
+text_en = "Night is near."
+trigger = "state"
+state   = "hour_change"
+hours   = [18]
+
+[[speech]]
+text_ja = "夜7時か"
+text_en = "7 in the evening."
+trigger = "state"
+state   = "hour_change"
+hours   = [19]
+
+[[speech]]
+text_ja = "夜になった"
+text_en = "Night has come."
+trigger = "state"
+state   = "hour_change"
+hours   = [20]
+
+[[speech]]
+text_ja = "夜9時か"
+text_en = "9 at night."
+trigger = "state"
+state   = "hour_change"
+hours   = [21]
+
+[[speech]]
+text_ja = "夜もだいぶ深くなった"
+text_en = "The night is getting deep."
+trigger = "state"
+state   = "hour_change"
+hours   = [22]
+
+[[speech]]
+text_ja = "もうすぐ日付が変わるな"
+text_en = "Almost midnight."
+trigger = "state"
+state   = "hour_change"
+hours   = [23]
 
 # --- weather ---
 
