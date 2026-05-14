@@ -13,14 +13,14 @@ use crate::manifest::AnimationDef;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpriteRef {
     /// Key into the sprite map (filename without `.png`).
-    pub name: &'static str,
+    pub name: String,
     /// If `true`, draw the sprite horizontally mirrored.
     pub mirror: bool,
 }
 
 impl SpriteRef {
-    fn new(name: &'static str, mirror: bool) -> Self {
-        Self { name, mirror }
+    fn new(name: impl Into<String>, mirror: bool) -> Self {
+        Self { name: name.into(), mirror }
     }
 
     /// Side-view, left-facing authored sprite.
@@ -141,6 +141,17 @@ pub fn sprite_for_state(
         State::CornerRest { lying: true, .. } => SpriteRef::front("f-lie"),
 
 
+        // ── One-shot ──────────────────────────────────────────────────
+        State::OneShot { animation, frame, done, .. } => {
+            let anim = animations.get(animation.as_str()).cloned().unwrap_or_default();
+            let idx = if *done {
+                anim.frames.saturating_sub(1)
+            } else {
+                anim.sprite_index(*frame)
+            };
+            SpriteRef::new(format!("s-{animation}-{idx}"), facing == Dir::Right)
+        }
+
         // ── Grabbed ──────────────────────────────────────────────────
         State::Grabbed => SpriteRef::side("s-hang-corner", facing),
     }
@@ -257,7 +268,7 @@ mod tests {
 
     #[test]
     fn anim_def_ping_pong() {
-        let anim = AnimationDef { frames: 3, mode: crate::manifest::AnimMode::PingPong };
+        let anim = AnimationDef { frames: 3, mode: crate::manifest::AnimMode::PingPong, frame_secs: 0.12 };
         // cycle: 0→1→2→1, length 4
         assert_eq!(anim.cycle_len(), 4);
         assert_eq!(anim.sprite_index(0), 0);
@@ -268,7 +279,7 @@ mod tests {
 
     #[test]
     fn anim_def_loop() {
-        let anim = AnimationDef { frames: 4, mode: crate::manifest::AnimMode::Loop };
+        let anim = AnimationDef { frames: 4, mode: crate::manifest::AnimMode::Loop, frame_secs: 0.12 };
         assert_eq!(anim.cycle_len(), 4);
         assert_eq!(anim.sprite_index(0), 0);
         assert_eq!(anim.sprite_index(3), 3);

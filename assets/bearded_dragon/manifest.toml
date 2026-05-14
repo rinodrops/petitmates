@@ -8,6 +8,13 @@ mode   = "ping-pong"
 frames = 3
 mode   = "ping-pong"
 
+# Example OneShot animation (mode = "once" plays the frames in order, then holds last frame).
+# Uncomment and add s-standup-0.png etc. to use as a landing stand-up animation.
+# [animations.standup]
+# frames     = 2
+# mode       = "once"
+# frame_secs = 0.15
+
 [sprites."f-hang-corner"]
 attachment = "point"
 x = 169
