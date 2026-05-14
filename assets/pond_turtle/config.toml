@@ -7,7 +7,7 @@ walk_speed        = 40.0          # px/s (display coords)
 walk_frame_secs   = 0.18          # seconds per walk animation frame
 
 stand_duration    = [3.0,  8.0]   # [min, max] s standing idle
-sit_duration      = [5.0, 20.0]   # [min, max] s sitting idle
+sit_duration      = [5.0, 30.0]   # [min, max] s sitting idle
 lie_duration      = [30.0, 90.0]  # [min, max] s lying idle
 sleep_duration    = [60.0, 180.0] # [min, max] s sleeping
 
@@ -86,7 +86,7 @@ wall_jump_floor_margin = 300.0    # windows whose bottom is more than this many 
                                   # above the Dock/taskbar are ignored for jumps
 climb_attract_dist = 600.0        # detection radius (px, either direction) for
                                   # spontaneous window-climbing attraction
-climb_attract_prob = 0.35         # probability of being attracted when an idle
+climb_attract_prob = 0.18         # probability of being attracted when an idle
                                   # state expires and a window is in range (0..1)
 
 # ---- Display ----

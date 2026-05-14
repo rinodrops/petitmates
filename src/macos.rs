@@ -10,15 +10,15 @@ use std::time::Instant;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, ClassType, MainThreadOnly};
+use objc2::{define_class, msg_send, AnyThread, ClassType, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
-    NSEventMask, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel,
-    NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBezierPath,
+    NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop,
-    NSRunLoopMode, NSString, NSTimer,
+    MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSRunLoop, NSRunLoopMode, NSSize, NSString, NSTimer,
 };
 
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
@@ -67,6 +67,11 @@ struct CharState {
     drag_offset: Option<(f64, f64)>,
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
+    speech_engine: crate::speech::SpeechEngine,
+    /// Active speech bubble state; None when no bubble is shown.
+    bubble_state: Option<crate::speech::BubbleState>,
+    /// The transparent NSPanel that renders the speech bubble; None when hidden.
+    bubble_panel: Option<Retained<NSPanel>>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -86,6 +91,16 @@ struct AppState {
     debug_menu_char: usize,
     /// Target states stored between menu construction and item selection.
     debug_menu_targets: Vec<State>,
+    /// Global speech lock countdown (seconds). Prevents overlapping speech.
+    speech_lock_remaining: f64,
+    speech_cfg: crate::user_config::SpeechConfig,
+    speech_tick: Instant,
+    /// Font size for speech bubbles (from user.toml).
+    font_size: f64,
+    /// Resolved display language: "ja" or "en".
+    lang: String,
+    /// Shared weather cache updated by the background weather thread.
+    weather: crate::weather::WeatherHandle,
 }
 
 thread_local! {
@@ -93,6 +108,26 @@ thread_local! {
 }
 
 // ---- Panel helpers ----
+
+/// Detect the OS preferred language, returning `"ja"` or `"en"`.
+///
+/// Checks `NSLocale.preferredLanguages` in order; returns `"ja"` when
+/// the first language whose tag starts with `"ja"` appears before any
+/// English tag.  Falls back to `"en"`.
+fn detect_system_language() -> String {
+    use objc2_foundation::NSLocale;
+    let langs = unsafe { NSLocale::preferredLanguages() };
+    for i in 0..langs.len() {
+        let tag: String = unsafe { langs.objectAtIndex(i).to_string() };
+        if tag.starts_with("ja") {
+            return "ja".to_owned();
+        }
+        if tag.starts_with("en") {
+            return "en".to_owned();
+        }
+    }
+    "en".to_owned()
+}
 
 fn make_panel(image: &NSImage, mt: MainThreadMarker) -> Retained<NSPanel> {
     let sz = unsafe { image.size() };
@@ -138,12 +173,234 @@ fn swap_sprite(
     }
 }
 
+// ---- Speech bubble rendering ----
+
+const BUBBLE_PADDING: f64 = 12.0;
+const BUBBLE_CORNER:  f64 = 8.0;
+const BUBBLE_TAIL_H:  f64 = 10.0;
+const BUBBLE_TAIL_W:  f64 = 14.0;
+const BUBBLE_MAX_W:   f64 = 240.0;
+const BUBBLE_MIN_W:   f64 = 60.0;
+const BUBBLE_MARGIN:  f64 = 8.0;
+
+/// Render speech text into an `NSImage` shaped as a rounded-rect speech bubble.
+///
+/// `tail_at_bottom` — the tail points downward when the bubble sits *above* the
+/// character and upward when it sits *below*.
+fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retained<NSImage> {
+    unsafe {
+        use objc2::runtime::AnyClass;
+
+        let ns_text = NSString::from_str(text);
+        let font    = NSFont::systemFontOfSize(font_size);
+        // NSMutableParagraphStyle: word-wrap mode
+        let para_cls = AnyClass::get(c"NSMutableParagraphStyle").unwrap();
+        let para: *mut AnyObject = msg_send![para_cls, new];
+        let _: () = msg_send![para, setLineBreakMode: 0u64]; // NSLineBreakByWordWrapping = 0
+        let text_color = NSColor::colorWithWhite_alpha(0.15, 1.0);
+
+        // Build NSDictionary of text attributes via msg_send.
+        let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
+        let attrs: *mut AnyObject = msg_send![dict_cls, new];
+        let _: () = msg_send![attrs, setObject: &*font       forKey: &*NSString::from_str("NSFont")];
+        let _: () = msg_send![attrs, setObject: para         forKey: &*NSString::from_str("NSParagraphStyle")];
+        let _: () = msg_send![attrs, setObject: &*text_color forKey: &*NSString::from_str("NSForegroundColor")];
+
+        // Build NSMutableAttributedString.
+        let mas_cls = AnyClass::get(c"NSMutableAttributedString").unwrap();
+        let ms: *mut AnyObject = msg_send![mas_cls, alloc];
+        let ms: *mut AnyObject = msg_send![ms, initWithString: &*ns_text];
+        // NSRange expects UTF-16 code unit count, not UTF-8 byte count.
+        let full_range = objc2_foundation::NSRange::new(0, ns_text.len_utf16());
+        let _: () = msg_send![ms, setAttributes: attrs range: full_range];
+
+        // Measure text.
+        let constraint = NSSize::new(BUBBLE_MAX_W - BUBBLE_PADDING * 2.0, 1000.0);
+        let bounds: NSRect = msg_send![
+            ms,
+            boundingRectWithSize: constraint
+            options: 1u64
+            context: std::ptr::null_mut::<AnyObject>()
+        ];
+        let text_w = bounds.size.width.ceil().max(1.0);
+        let text_h = bounds.size.height.ceil().max(1.0);
+
+        let bubble_w = (text_w + BUBBLE_PADDING * 2.0).max(BUBBLE_MIN_W);
+        let bubble_h = text_h + BUBBLE_PADDING * 2.0;
+        let total_h  = bubble_h + BUBBLE_TAIL_H;
+
+        // Y origin of the body in the image (NS coords = Y-up from bottom).
+        let body_y = if tail_at_bottom { BUBBLE_TAIL_H } else { 0.0 };
+
+        let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(bubble_w, total_h));
+        img.lockFocus();
+
+        // Build a single combined outer-contour path (rounded rect + tail) so
+        // that fill and stroke are applied uniformly to the whole shape.  This
+        // eliminates the visible seam line at the rect/tail junction and gives
+        // the tail sides the same border as the rest of the bubble.
+        //
+        // Both branches trace the outer contour counter-clockwise (CCW) in NS
+        // Y-up coordinates, which keeps the shape interior on the left.
+        let cx = bubble_w / 2.0;
+        let r  = BUBBLE_CORNER;
+        let outer = NSBezierPath::bezierPath();
+
+        if tail_at_bottom {
+            // Start at right tail base, go CCW around the whole shape.
+            outer.moveToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
+            outer.lineToPoint(NSPoint::new(bubble_w - r, BUBBLE_TAIL_H));
+            // Bottom-right arc: 270° → 0°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, BUBBLE_TAIL_H + r)
+                radius: r  startAngle: 270.0_f64  endAngle: 0.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(bubble_w, BUBBLE_TAIL_H + bubble_h - r));
+            // Top-right arc: 0° → 90°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, BUBBLE_TAIL_H + bubble_h - r)
+                radius: r  startAngle: 0.0_f64  endAngle: 90.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(r, BUBBLE_TAIL_H + bubble_h));
+            // Top-left arc: 90° → 180°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, BUBBLE_TAIL_H + bubble_h - r)
+                radius: r  startAngle: 90.0_f64  endAngle: 180.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(0.0, BUBBLE_TAIL_H + r));
+            // Bottom-left arc: 180° → 270°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, BUBBLE_TAIL_H + r)
+                radius: r  startAngle: 180.0_f64  endAngle: 270.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
+            outer.lineToPoint(NSPoint::new(cx, 0.0));
+            // closePath draws back to the start (right tail base).
+        } else {
+            // tail_at_top: start at right tail base, go CCW.
+            outer.moveToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, bubble_h));
+            outer.lineToPoint(NSPoint::new(cx, bubble_h + BUBBLE_TAIL_H));
+            outer.lineToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, bubble_h));
+            outer.lineToPoint(NSPoint::new(r, bubble_h));
+            // Top-left arc: 90° → 180°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, bubble_h - r)
+                radius: r  startAngle: 90.0_f64  endAngle: 180.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(0.0, r));
+            // Bottom-left arc: 180° → 270°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, r)
+                radius: r  startAngle: 180.0_f64  endAngle: 270.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(bubble_w - r, 0.0));
+            // Bottom-right arc: 270° → 0°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, r)
+                radius: r  startAngle: 270.0_f64  endAngle: 0.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(bubble_w, bubble_h - r));
+            // Top-right arc: 0° → 90°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, bubble_h - r)
+                radius: r  startAngle: 0.0_f64  endAngle: 90.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, bubble_h));
+        }
+        outer.closePath();
+
+        // Fill then stroke the single combined path — no seam at the junction.
+        let bg = NSColor::colorWithWhite_alpha(1.0, 0.93);
+        bg.setFill();
+        outer.fill();
+        NSColor::colorWithWhite_alpha(0.70, 0.7).setStroke();
+        outer.setLineWidth(0.5);
+        outer.stroke();
+
+        // Text.
+        let text_rect = NSRect::new(
+            NSPoint::new(
+                (bubble_w - text_w) / 2.0,
+                body_y + (bubble_h - text_h) / 2.0,
+            ),
+            NSSize::new(text_w, text_h),
+        );
+        let _: () = msg_send![
+            ms,
+            drawWithRect: text_rect
+            options: 1u64
+            context: std::ptr::null_mut::<AnyObject>()
+        ];
+        img.unlockFocus();
+        img
+    }
+}
+
+/// Create or update the speech-bubble `NSPanel` for a character.
+///
+/// `char_ns_frame` — the character panel's frame in NS (Cocoa) screen coords.
+fn show_bubble(
+    existing: Option<&Retained<NSPanel>>,
+    text: &str,
+    font_size: f64,
+    char_ns_frame: NSRect,
+    si: &ScreenInfo,
+    mt: MainThreadMarker,
+) -> Retained<NSPanel> {
+    // Choose placement: above the character if space allows, else below.
+    let est_h = 60.0 + BUBBLE_TAIL_H;
+    let tail_at_bottom =
+        char_ns_frame.origin.y + char_ns_frame.size.height + est_h + BUBBLE_MARGIN < si.height;
+
+    let img    = make_bubble_image(text, tail_at_bottom, font_size);
+    let img_sz = unsafe { img.size() };
+
+    let cx       = char_ns_frame.origin.x + char_ns_frame.size.width / 2.0;
+    let bubble_x = (cx - img_sz.width / 2.0).max(0.0).min(si.width - img_sz.width);
+    let bubble_y = if tail_at_bottom {
+        char_ns_frame.origin.y + char_ns_frame.size.height + BUBBLE_MARGIN
+    } else {
+        char_ns_frame.origin.y - img_sz.height - BUBBLE_MARGIN
+    };
+
+    let origin = NSPoint::new(bubble_x, bubble_y);
+
+    if let Some(p) = existing {
+        unsafe {
+            p.setContentSize(img_sz);
+            p.setContentView(Some(&*make_image_view(&img, mt)));
+            p.setFrameOrigin(origin);
+        }
+        p.clone()
+    } else {
+        unsafe {
+            let p = NSPanel::initWithContentRect_styleMask_backing_defer(
+                NSPanel::alloc(mt),
+                NSRect::new(origin, img_sz),
+                NSWindowStyleMask::from_bits_retain(128),
+                NSBackingStoreType::Buffered,
+                false,
+            );
+            p.setBackgroundColor(Some(&NSColor::clearColor()));
+            p.setOpaque(false);
+            p.setHasShadow(false);
+            // Level 0 = NSNormalWindowLevel, same as the character panel.
+            // The tick loop repositions the bubble just above the character
+            // panel each frame via orderWindow:Above:relativeTo:.
+            p.setLevel(0);
+            p.setCollectionBehavior(
+                NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary,
+            );
+            p.setIgnoresMouseEvents(true);
+            p.setAlphaValue(1.0);
+            p.setContentView(Some(&*make_image_view(&img, mt)));
+            p.orderFront(None);
+            p
+        }
+    }
+}
+
 // ---- Status item ----
 
 fn make_status_item(
     handler: &MenuDelegate,
     mt: MainThreadMarker,
+    lang: &str,
 ) -> Retained<objc2_app_kit::NSStatusItem> {
+    let ja = lang == "ja";
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(-2.0); // NSSquareStatusItemLength
@@ -163,7 +420,7 @@ fn make_status_item(
         // Character management items.
         let add_bd = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Add Bearded Dragon"),
+            &NSString::from_str(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" }),
             Some(objc2::sel!(addBeardedDragon:)),
             &NSString::from_str(""),
         );
@@ -172,7 +429,7 @@ fn make_status_item(
 
         let add_pt = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Add Pond Turtle"),
+            &NSString::from_str(if ja { "クサガメを追加" } else { "Add Pond Turtle" }),
             Some(objc2::sel!(addPondTurtle:)),
             &NSString::from_str(""),
         );
@@ -181,7 +438,7 @@ fn make_status_item(
 
         let remove_item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Remove Last"),
+            &NSString::from_str(if ja { "最後のキャラクターを削除" } else { "Remove Last" }),
             Some(objc2::sel!(removeCharacter:)),
             &NSString::from_str(""),
         );
@@ -192,9 +449,20 @@ fn make_status_item(
 
         menu.addItem(&NSMenuItem::separatorItem(mt));
 
+        let settings = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "設定ファイルを開く" } else { "Open Settings File" }),
+            Some(objc2::sel!(openSettingsFile:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*settings, setTarget: handler] };
+        menu.addItem(&settings);
+
+        menu.addItem(&NSMenuItem::separatorItem(mt));
+
         let about = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("About Petit Mates"),
+            &NSString::from_str(if ja { "Petit Mates について" } else { "About Petit Mates" }),
             Some(objc2::sel!(orderFrontStandardAboutPanel:)),
             &NSString::from_str(""),
         );
@@ -203,7 +471,7 @@ fn make_status_item(
 
         let quit = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Quit"),
+            &NSString::from_str(if ja { "終了" } else { "Quit" }),
             Some(objc2::sel!(terminate:)),
             &NSString::from_str("q"),
         );
@@ -266,7 +534,7 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
 /// Create one character, place it in a startup-drop position, and return
 /// the fully initialised `CharState`.  Caller is responsible for pushing it
 /// into `AppState::chars`.
-fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool) -> CharState {
+fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
     let (start_cx, start_cy) = startup_drop(si, &assets);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
     let panel = make_panel(init_img, mt);
@@ -291,6 +559,9 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_tick: Instant::now(),
         drag_offset: None,
         debug_trigger: None,
+        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        bubble_state: None,
+        bubble_panel: None,
     }
 }
 
@@ -339,7 +610,7 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.bd_assets);
                 let config = app.bd_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false));
+                app.chars.push(spawn_char(assets, config, &si, mt, false, "bearded_dragon"));
             });
         }
 
@@ -355,8 +626,14 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.pt_assets);
                 let config = app.pt_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false));
+                app.chars.push(spawn_char(assets, config, &si, mt, false, "pond_turtle"));
             });
+        }
+
+        /// Open user.toml in the system default text editor.
+        #[unsafe(method(openSettingsFile:))]
+        fn open_settings_file(&self, _sender: &AnyObject) {
+            crate::user_config::open_in_editor();
         }
 
         /// Remove the most recently added character (minimum 1 remains).
@@ -384,14 +661,15 @@ define_class!(
             let mt = unsafe { MainThreadMarker::new_unchecked() };
             let confirmed = unsafe {
                 let alert = NSAlert::init(NSAlert::alloc(mt));
+                let ja = APP.with(|cell| cell.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
                 let (): () = msg_send![&*alert, setMessageText:
-                    &*NSString::from_str("Remove this character?")];
+                    &*NSString::from_str(if ja { "このキャラクターを削除しますか？" } else { "Remove this character?" })];
                 let (): () = msg_send![&*alert, setInformativeText:
-                    &*NSString::from_str("The character will be removed from the desktop.")];
+                    &*NSString::from_str(if ja { "デスクトップから削除されます。" } else { "The character will be removed from the desktop." })];
                 let (): () = msg_send![&*alert,
-                    addButtonWithTitle: &*NSString::from_str("Remove")];
+                    addButtonWithTitle: &*NSString::from_str(if ja { "削除" } else { "Remove" })];
                 let (): () = msg_send![&*alert,
-                    addButtonWithTitle: &*NSString::from_str("Cancel")];
+                    addButtonWithTitle: &*NSString::from_str(if ja { "キャンセル" } else { "Cancel" })];
                 let response: isize = msg_send![&*alert, runModal];
                 response == 1000 // NSAlertFirstButtonReturn
             };
@@ -645,7 +923,11 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                 .unwrap_or_default();
             let header = format!("{} — {}{}", surface_str, state_str, dur_str);
             let outing_str = ch.behavior.outing_info(&cfg)
-                .map(|(r, t)| format!("Next outing: {:.0}s / {:.0}s", r, t))
+                .map(|(r, t)| if app.lang == "ja" {
+                    format!("次の外出: {:.0}秒 / {:.0}秒", r, t)
+                } else {
+                    format!("Next outing: {:.0}s / {:.0}s", r, t)
+                })
                 .unwrap_or_default();
 
             let targets = crate::debug_menu::trigger_targets(
@@ -722,7 +1004,10 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                 menu.addItem(&NSMenuItem::separatorItem(mt));
                 let rm = NSMenuItem::initWithTitle_action_keyEquivalent(
                     NSMenuItem::alloc(mt),
-                    &NSString::from_str("Remove This Character\u{2026}"),
+                    &NSString::from_str({
+                        let ja = APP.with(|c| c.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
+                        if ja { "このキャラクターを削除…" } else { "Remove This Character\u{2026}" }
+                    }),
                     Some(objc2::sel!(debugRemoveSelect:)),
                     &NSString::from_str(""),
                 );
@@ -1480,11 +1765,91 @@ fn tick() {
             tick_char(ch, &cfg, &si, &wins, mt);
         }
 
+        // Speech trigger evaluation.
+        if app.speech_cfg.enabled {
+            let now = Instant::now();
+            let speech_dt = now.duration_since(app.speech_tick).as_secs_f64().min(0.5);
+            app.speech_tick = now;
+            app.speech_lock_remaining = (app.speech_lock_remaining - speech_dt).max(0.0);
+            let lock     = app.speech_lock_remaining;
+            let lock_sec = app.speech_cfg.speech_lock_sec;
+            let font_sz  = app.font_size;
+
+            // Advance existing bubbles.
+            for ch in &mut app.chars {
+                if let Some(bs) = &mut ch.bubble_state {
+                    bs.remaining_sec -= speech_dt;
+                    if bs.remaining_sec <= 0.0 {
+                        // Expire.
+                        if let Some(p) = ch.bubble_panel.take() {
+                            unsafe { p.orderOut(None) };
+                        }
+                        ch.bubble_state = None;
+                    } else {
+                        // Update alpha for fade-out.
+                        if let Some(p) = &ch.bubble_panel {
+                            unsafe { p.setAlphaValue(bs.alpha()) };
+                        }
+                    }
+                }
+            }
+
+            // Check for new speech lines.
+            let weather_info = app.weather.get();
+            for i in 0..app.chars.len() {
+                let state = app.chars[i].anim_state.clone();
+                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock, weather_info.as_ref()) {
+                    app.speech_lock_remaining = lock_sec;
+
+                    // Show bubble.
+                    if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
+                        let char_frame = unsafe { app.chars[i].panel.frame() };
+                        let existing   = app.chars[i].bubble_panel.as_ref();
+                        let panel = show_bubble(existing, &bs.text, font_sz, char_frame, &si, mt);
+                        app.chars[i].bubble_panel = Some(panel);
+                        app.chars[i].bubble_state = Some(bs);
+                    }
+                    break;
+                }
+            }
+        }
+
         // Update status item icon to show countdown when a debug trigger is pending.
         let min_remaining: Option<f64> = app.chars.iter()
             .filter_map(|c| c.debug_trigger.as_ref().map(|(_, r)| *r))
             .reduce(f64::min);
         update_status_countdown(&app._status_item, min_remaining, mt);
+
+        // Reposition active bubble panels to track their character.
+        let font_sz = app.font_size;
+        for ch in &app.chars {
+            if ch.bubble_state.is_none() { continue; }
+            if let Some(bp) = &ch.bubble_panel {
+                let char_frame = unsafe { ch.panel.frame() };
+                let est_h = 60.0 + BUBBLE_TAIL_H;
+                let tail_at_bottom = char_frame.origin.y + char_frame.size.height
+                    + est_h + BUBBLE_MARGIN < si.height;
+                let cx = char_frame.origin.x + char_frame.size.width / 2.0;
+                let bp_frame = unsafe { bp.frame() };
+                let bubble_x = (cx - bp_frame.size.width / 2.0).max(0.0)
+                    .min(si.width - bp_frame.size.width);
+                let bubble_y = if tail_at_bottom {
+                    char_frame.origin.y + char_frame.size.height + BUBBLE_MARGIN
+                } else {
+                    char_frame.origin.y - bp_frame.size.height - BUBBLE_MARGIN
+                };
+                unsafe {
+                    bp.setFrameOrigin(NSPoint::new(bubble_x, bubble_y));
+                    // Keep bubble above character panel.
+                    let char_num: isize = msg_send![&*ch.panel, windowNumber];
+                    bp.orderWindow_relativeTo(
+                        objc2_app_kit::NSWindowOrderingMode::Above,
+                        char_num,
+                    );
+                }
+                let _ = font_sz; // suppress unused warning
+            }
+        }
 
         // ⌥⌘ hover tracking: when Option+Command is held and the cursor is
         // directly over a character panel, temporarily stop ignoring mouse events
@@ -1521,8 +1886,10 @@ pub fn run() {
     let pt_mf = manifest::load(&pt_cdir).expect("pond_turtle manifest.toml missing or invalid");
     let bd_config = make_shared(&bd_cdir);
     let pt_config = make_shared(&pt_cdir);
-    let bd_display_w = bd_config.lock().unwrap().current.display.display_width;
-    let pt_display_w = pt_config.lock().unwrap().current.display.display_width;
+    let user_cfg = crate::user_config::load();
+    let sprite_size = user_cfg.display.sprite_size as f64;
+    let bd_display_w = sprite_size;
+    let pt_display_w = sprite_size;
     let bd_assets = Rc::new(SpriteAssets::load(&bd_cdir, &bd_mf, bd_display_w).expect("failed to load bearded_dragon sprites"));
     let pt_assets = Rc::new(SpriteAssets::load(&pt_cdir, &pt_mf, pt_display_w).expect("failed to load pond_turtle sprites"));
 
@@ -1532,16 +1899,20 @@ pub fn run() {
     let demo_mode = std::env::args().any(|a| a == "--demo");
     let initial_chars: Vec<CharState> = if demo_mode {
         // Demo mode: one bearded dragon with deterministic scripted behavior.
-        vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true)]
+        vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true, "bearded_dragon")]
     } else {
         vec![
-            spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false),
-            spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false),
+            spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false, "bearded_dragon"),
+            spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false, "pond_turtle"),
         ]
     };
 
+    let weather_handle = crate::weather::spawn(&user_cfg.weather);
+
     let menu_handler = MenuDelegate::new(mt);
-    let status_item = make_status_item(&menu_handler, mt);
+    let lang = user_cfg.display.language.clone()
+        .unwrap_or_else(detect_system_language);
+    let status_item = make_status_item(&menu_handler, mt, &lang);
 
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();
@@ -1568,6 +1939,12 @@ pub fn run() {
             _event_monitors: event_monitors,
             debug_menu_char: 0,
             debug_menu_targets: Vec::new(),
+            speech_lock_remaining: 0.0,
+            speech_cfg: user_cfg.speech,
+            speech_tick: Instant::now(),
+            font_size: user_cfg.display.font_size as f64,
+            lang: lang,
+            weather: weather_handle,
         });
     });
 
