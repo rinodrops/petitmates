@@ -61,6 +61,20 @@
 
 座ったり，横になったり，眠ったり，首を傾けたり，口を開けたり——そして気が向いたら自分で別のウィンドウへ移動します。
 
+## 発話
+
+キャラクターたちはときどき吹き出しで何かをつぶやきます。要求や指示ではなく，ただの独り言です。
+
+![発話](docs/screenshots/speech.ja.gif)
+
+| トリガー | 発火タイミング                                                 |
+| -------- | -------------------------------------------------------------- |
+| ランダム | 1〜2 分ごとに重み付き抽選で選ばれたひとこと                    |
+| 時間帯   | 朝・昼・深夜など特定の時間帯だけ選ばれるセリフ                 |
+| 天気     | 晴れ・曇り・雨・雪への反応（`user.toml` で都市名の設定が必要） |
+| 正時     | 時刻が切り替わった瞬間（0 時など）に一言                       |
+| イベント | 起動時・着地時などのタイミングで一言                           |
+
 ## 動作環境
 
 | プラットフォーム | 要件                                                        |
@@ -92,11 +106,11 @@
 <table>
 <tr>
 <td align="center">
-  <img src="docs/screenshots/menubar-macos.png" alt="macOS メニューバー" width="260"><br>
+  <img src="docs/screenshots/menubar-macos.ja.png" alt="macOS メニューバー" width="260"><br>
   <em>macOS メニューバー</em>
 </td>
 <td align="center">
-  <img src="docs/screenshots/tray-windows.png" alt="Windows タスクトレイ" width="260"><br>
+  <img src="docs/screenshots/tray-windows.ja.png" alt="Windows タスクトレイ" width="260"><br>
   <em>Windows タスクトレイ（右クリック）</em>
 </td>
 </tr>
