@@ -280,69 +280,49 @@ unsafe fn render_bubble_bgra(
     );
     let old_bmp = SelectObject(hdc_mem, hbmp);
 
-    // ---- Draw bubble as single combined path (fill + border stroke) ----
-    // AngleArc(center_x, center_y, radius, start_deg, sweep_deg) is more
-    // predictable than ArcTo at small integer-pixel radii: no radial-point
-    // rounding errors, no need to call SetArcDirection.
-    //
-    // GDI angle convention (Y-down): 0°=right, 90°=down, 180°=left, 270°=up.
-    // Positive sweep = CW on screen; negative sweep = CCW on screen.
-    //
-    //   tail_at_bottom: outer contour goes CCW on screen → sweep = -90°
-    //   tail_at_top:    outer contour goes CW  on screen → sweep = +90°
-    let r   = WIN_BUBBLE_CORNER / 2;
-    let bw  = bubble_w;
-    let tw  = WIN_BUBBLE_TAIL_W;
-    let cx  = bw / 2;
+    // ---- Draw bubble using combined GDI region (no arc rounding artifacts) ----
+    // GDI arcs are always aliased: at small radii even AngleArc looks jagged.
+    // Instead use CreateRoundRectRgn (body) + CreatePolygonRgn (tail) combined
+    // with CombineRgn(RGN_OR).  FillRgn + FrameRgn then trace only the outer
+    // boundary, so there is no seam line at the tail junction.
+    let cx = bubble_w / 2;
 
-    let border_pen  = CreatePen(PS_SOLID as i32, 1, 0x00B3B3B3_u32);
-    let fill_brush  = CreateSolidBrush(0x00FFFFFF_u32);
-    let old_pen     = SelectObject(hdc_mem, border_pen);
-    let old_brush   = SelectObject(hdc_mem, fill_brush);
-
-    BeginPath(hdc_mem);
-    if tail_at_bottom {
-        // Body: y 0..bubble_h  Tail points down: y bubble_h..total_h
-        MoveToEx(hdc_mem, cx + tw / 2, bubble_h, ptr::null_mut());
-        // → bottom-right corner  (center bw-r, bubble_h-r)  90°→0°  sweep -90
-        LineTo(hdc_mem, bw - r, bubble_h);
-        AngleArc(hdc_mem, bw - r, bubble_h - r, r as u32, 90.0_f32, -90.0_f32);
-        // → top-right corner  (center bw-r, r)  0°→270°  sweep -90
-        LineTo(hdc_mem, bw, r);
-        AngleArc(hdc_mem, bw - r, r, r as u32, 0.0_f32, -90.0_f32);
-        // → top-left corner  (center r, r)  270°→180°  sweep -90
-        LineTo(hdc_mem, r, 0);
-        AngleArc(hdc_mem, r, r, r as u32, 270.0_f32, -90.0_f32);
-        // → bottom-left corner  (center r, bubble_h-r)  180°→90°  sweep -90
-        LineTo(hdc_mem, 0, bubble_h - r);
-        AngleArc(hdc_mem, r, bubble_h - r, r as u32, 180.0_f32, -90.0_f32);
-        // → tail base left → tip
-        LineTo(hdc_mem, cx - tw / 2, bubble_h);
-        LineTo(hdc_mem, cx, total_h);
-        CloseFigure(hdc_mem);
+    // Body region (rounded rect).
+    let body_rgn = if tail_at_bottom {
+        CreateRoundRectRgn(0, 0, bubble_w, bubble_h,
+                           WIN_BUBBLE_CORNER, WIN_BUBBLE_CORNER)
     } else {
-        // Body: y tail_h..total_h  Tail points up: y 0..tail_h
-        let ty = WIN_BUBBLE_TAIL_H;
-        MoveToEx(hdc_mem, cx + tw / 2, ty, ptr::null_mut());
-        // → top-right corner  (center bw-r, ty+r)  270°→0°  sweep +90
-        LineTo(hdc_mem, bw - r, ty);
-        AngleArc(hdc_mem, bw - r, ty + r, r as u32, 270.0_f32, 90.0_f32);
-        // → bottom-right corner  (center bw-r, total_h-r)  0°→90°  sweep +90
-        LineTo(hdc_mem, bw, total_h - r);
-        AngleArc(hdc_mem, bw - r, total_h - r, r as u32, 0.0_f32, 90.0_f32);
-        // → bottom-left corner  (center r, total_h-r)  90°→180°  sweep +90
-        LineTo(hdc_mem, r, total_h);
-        AngleArc(hdc_mem, r, total_h - r, r as u32, 90.0_f32, 90.0_f32);
-        // → top-left corner  (center r, ty+r)  180°→270°  sweep +90
-        LineTo(hdc_mem, 0, ty + r);
-        AngleArc(hdc_mem, r, ty + r, r as u32, 180.0_f32, 90.0_f32);
-        // → tail base left → tip
-        LineTo(hdc_mem, cx - tw / 2, ty);
-        LineTo(hdc_mem, cx, 0);
-        CloseFigure(hdc_mem);
-    }
-    EndPath(hdc_mem);
-    StrokeAndFillPath(hdc_mem);
+        CreateRoundRectRgn(0, WIN_BUBBLE_TAIL_H, bubble_w, total_h,
+                           WIN_BUBBLE_CORNER, WIN_BUBBLE_CORNER)
+    };
+
+    // Tail triangle — base overlaps body by 2 px so CombineRgn(RGN_OR) merges
+    // without a pixel gap.
+    let tail_pts: [POINT; 3] = if tail_at_bottom {
+        [
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: bubble_h - 2 },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: bubble_h - 2 },
+            POINT { x: cx,                          y: total_h      },
+        ]
+    } else {
+        [
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H + 2 },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H + 2 },
+            POINT { x: cx,                          y: 0                     },
+        ]
+    };
+    let tail_rgn = CreatePolygonRgn(tail_pts.as_ptr(), 3, 2 /* WINDING */);
+
+    let combined_rgn = CreateRectRgn(0, 0, 1, 1);
+    CombineRgn(combined_rgn, body_rgn, tail_rgn, 3 /* RGN_OR */);
+
+    let fill_brush   = CreateSolidBrush(0x00FFFFFF_u32);
+    let border_brush = CreateSolidBrush(0x00B3B3B3_u32);
+    FillRgn(hdc_mem, combined_rgn, fill_brush);
+    FrameRgn(hdc_mem, combined_rgn, border_brush, 1, 1);
+    DeleteObject(combined_rgn);
+    DeleteObject(body_rgn);
+    DeleteObject(tail_rgn);
 
     // ---- Draw text ----
     let dark_text_color = 0x00333333u32;
@@ -374,13 +354,11 @@ unsafe fn render_bubble_bgra(
     }
 
     // ---- Cleanup ----
-    SelectObject(hdc_mem, old_brush);
-    SelectObject(hdc_mem, old_pen);
     SelectObject(hdc_mem, old_font);
     SelectObject(hdc_mem, old_bmp);
     DeleteObject(hbmp);
-    DeleteObject(fill_brush as *mut _);
-    DeleteObject(border_pen as *mut _);
+    DeleteObject(fill_brush);
+    DeleteObject(border_brush);
     DeleteObject(hfont as *mut _);
     DeleteDC(hdc_mem);
     ReleaseDC(ptr::null_mut(), hdc_screen);
