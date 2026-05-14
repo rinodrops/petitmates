@@ -226,11 +226,11 @@ unsafe fn render_bubble_bgra(
         0, 0, 0,
         FW_NORMAL as i32,
         FALSE as u32, FALSE as u32, FALSE as u32,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE,
+        DEFAULT_CHARSET as u32,
+        OUT_DEFAULT_PRECIS as u32,
+        CLIP_DEFAULT_PRECIS as u32,
+        CLEARTYPE_QUALITY as u32,
+        (DEFAULT_PITCH | FF_DONTCARE) as u32,
         to_wide("Segoe UI").as_ptr(),
     );
     let old_font = SelectObject(hdc_mem, hfont);
@@ -377,6 +377,7 @@ unsafe fn create_bubble_hwnd(hinstance: HINSTANCE, char_hwnd: HWND) -> HWND {
 /// Render and position the bubble HWND above or below the character sprite.
 unsafe fn update_bubble_hwnd(
     bubble_hwnd: HWND,
+    char_hwnd: HWND,
     text: &str,
     font_size: i32,
     char_x: i32, char_y: i32,
@@ -1153,7 +1154,7 @@ fn tick_all() {
                         let text = bs.text.clone();
                         unsafe {
                             update_bubble_hwnd(
-                                ch.bubble_hwnd, &text, font_sz,
+                                ch.bubble_hwnd, ch.hwnd, &text, font_sz,
                                 cx, cy, sprite_w, sprite_h, sw, sh, alpha,
                             );
                         }
@@ -1182,7 +1183,7 @@ fn tick_all() {
                         let text = bs.text.clone();
                         unsafe {
                             update_bubble_hwnd(
-                                app.chars[i].bubble_hwnd, &text, font_sz,
+                                app.chars[i].bubble_hwnd, app.chars[i].hwnd, &text, font_sz,
                                 cx, cy, sprite_w, sprite_h, sw, sh, 255,
                             );
                         }
@@ -1435,7 +1436,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.bd_assets);
                         let config = app.bd_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        let ch     = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
                         app.chars.push(ch);
                     }
                 });
@@ -1468,7 +1469,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.pt_assets);
                         let config = app.pt_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
                         app.chars.push(ch);
                     }
                 });
