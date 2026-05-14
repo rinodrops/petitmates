@@ -374,8 +374,10 @@ fn show_bubble(
             p.setBackgroundColor(Some(&NSColor::clearColor()));
             p.setOpaque(false);
             p.setHasShadow(false);
-            // Level 1 = floating above normal windows.
-            p.setLevel(1);
+            // Level 0 = NSNormalWindowLevel, same as the character panel.
+            // The tick loop repositions the bubble just above the character
+            // panel each frame via orderWindow:Above:relativeTo:.
+            p.setLevel(0);
             p.setCollectionBehavior(
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
