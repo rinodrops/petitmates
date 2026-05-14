@@ -7,7 +7,10 @@ mod demo_behavior;
 mod engine;
 mod manifest;
 mod rust_behavior;
+mod speech;
 mod sprite_map;
+mod user_config;
+mod weather;
 
 #[cfg(target_os = "macos")]
 mod assets;

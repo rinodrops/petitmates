@@ -1,0 +1,479 @@
+# Builtin speech lines shared by all characters.
+# Layer 1 of 4 in the merge order.
+
+[speech_display]
+duration_sec = 6.0
+fade_out_sec = 1.0
+
+[[speech]]
+text_ja = "なんかのんびりした気分"
+text_en = "Feeling pretty lazy today..."
+trigger = "random"
+weight  = 1.0
+
+# --- weekday (random) ---
+
+[[speech]]
+text_ja = "なんか今日は気合いが必要な感じがする"
+text_en = "Feels like today calls for some extra energy."
+trigger = "random"
+weekdays = ["Mon"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "一週間が始まった感じ"
+text_en = "Feels like the week is just starting."
+trigger = "random"
+weekdays = ["Mon"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "週末が近い感じがする"
+text_en = "I can feel the weekend getting close."
+trigger = "random"
+weekdays = ["Fri"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "今日はなんかいい予感がする"
+text_en = "I have a good feeling about today."
+trigger = "random"
+weekdays = ["Fri"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日はのんびりできそうな気がする"
+text_en = "I feel like today is for taking it easy."
+trigger = "random"
+weekdays = ["Sat", "Sun"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんかゆったりした空気がする"
+text_en = "The air feels relaxed today."
+trigger = "random"
+weekdays = ["Sat", "Sun"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "ちょっと眠い"
+text_en = "A bit sleepy..."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日も一日がんばろ"
+text_en = "Another day, here we go."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "なにか面白いこと、ないかな"
+text_en = "I wonder if anything interesting will happen."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "外はどんな天気かな"
+text_en = "I wonder what the weather's like outside."
+trigger = "random"
+weight  = 0.6
+
+[[speech]]
+text_ja = "ぼーっとするのも悪くない"
+text_en = "Spacing out isn't so bad."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "急がなくていい時間って、いいな"
+text_en = "It's nice not having anywhere to be."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "特に何もないけど、それでいいな"
+text_en = "Nothing in particular going on, and that's just fine."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんとなく今日はいい日な気がする"
+text_en = "I have a feeling today's a good day."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "時間がゆっくり流れてる気がする"
+text_en = "Time feels like it's moving slowly."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "何もしないって、案外難しいんだよね"
+text_en = "Doing nothing is harder than it sounds."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "体を伸ばしたいな"
+text_en = "I want to stretch."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "あくびが出そう"
+text_en = "I feel a yawn coming."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "今日もなんとかなりそう"
+text_en = "Today will probably be fine."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "ここにいると安心する"
+text_en = "Being here feels safe."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "静かだな"
+text_en = "It's quiet."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "何かが少し変わった気がする"
+text_en = "Something feels a little different."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "何か考えてたけど、忘れた"
+text_en = "I was thinking about something, but I forgot."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "呼ばれた気がした"
+text_en = "I thought I heard my name."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ずっとこうしていたいな"
+text_en = "I could stay like this forever."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんか夢の続きを考えてた"
+text_en = "I was thinking about a dream I had."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "なんか全部、ちょうどいい気がする"
+text_en = "Everything feels just right somehow."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "どこか遠くに行ってみたい気もするけど、ここでいいかな"
+text_en = "Part of me wants to go somewhere far away, but here is good."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "夜ふかしはよくないよ"
+text_en = "Staying up this late isn't good for you."
+trigger = "time"
+hours   = [0, 1, 2, 3]
+weight  = 0.8
+
+[[speech]]
+text_ja = "体がだんだん動き出してきた感じ"
+text_en = "I can feel myself waking up."
+trigger = "time"
+hours   = [6, 7, 8, 9]
+weight  = 1.0
+
+[[speech]]
+text_ja = "お腹が空いてきた気がする"
+text_en = "I think I'm getting hungry."
+trigger = "time"
+hours   = [11, 12, 13]
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか眠くなってきた"
+text_en = "Feeling a bit drowsy."
+trigger = "time"
+hours   = [13, 14, 15]
+weight  = 0.9
+
+[[speech]]
+text_ja = "日が傾いてきた感じがする"
+text_en = "I think the sun is starting to lean."
+trigger = "time"
+hours   = [16, 17, 18]
+weight  = 1.0
+
+[[speech]]
+text_ja = "一日が終わっていく感じがする"
+text_en = "I can feel the day winding down."
+trigger = "time"
+hours   = [20, 21, 22]
+weight  = 1.0
+
+# --- hour_change ---
+
+[[speech]]
+text_ja = "日付が変わった感じがする"
+text_en = "Feels like the day has turned over."
+trigger = "state"
+state   = "hour_change"
+hours   = [0]
+
+[[speech]]
+text_ja = "夜中はまだ長い"
+text_en = "The night is still long."
+trigger = "state"
+state   = "hour_change"
+hours   = [1]
+
+[[speech]]
+text_ja = "深夜2時…静かだな"
+text_en = "2 in the morning... so quiet."
+trigger = "state"
+state   = "hour_change"
+hours   = [2]
+
+[[speech]]
+text_ja = "夜がいちばん深い頃かな"
+text_en = "The dead of night, I think."
+trigger = "state"
+state   = "hour_change"
+hours   = [3]
+
+[[speech]]
+text_ja = "もうすぐ夜明けかな"
+text_en = "Almost dawn."
+trigger = "state"
+state   = "hour_change"
+hours   = [4]
+
+[[speech]]
+text_ja = "夜明け前の空だな"
+text_en = "The sky just before dawn."
+trigger = "state"
+state   = "hour_change"
+hours   = [5]
+
+[[speech]]
+text_ja = "朝が始まった"
+text_en = "Morning has begun."
+trigger = "state"
+state   = "hour_change"
+hours   = [6]
+
+[[speech]]
+text_ja = "そろそろ起きないと"
+text_en = "Time to get up soon."
+trigger = "state"
+state   = "hour_change"
+hours   = [7]
+
+[[speech]]
+text_ja = "8時になった"
+text_en = "It's 8 o'clock."
+trigger = "state"
+state   = "hour_change"
+hours   = [8]
+
+[[speech]]
+text_ja = "9時か"
+text_en = "9 o'clock."
+trigger = "state"
+state   = "hour_change"
+hours   = [9]
+
+[[speech]]
+text_ja = "10時になった"
+text_en = "10 o'clock."
+trigger = "state"
+state   = "hour_change"
+hours   = [10]
+
+[[speech]]
+text_ja = "もうすぐ昼だな"
+text_en = "Almost noon."
+trigger = "state"
+state   = "hour_change"
+hours   = [11]
+
+[[speech]]
+text_ja = "ちょうど真昼か"
+text_en = "Right at noon."
+trigger = "state"
+state   = "hour_change"
+hours   = [12]
+
+[[speech]]
+text_ja = "昼を過ぎた"
+text_en = "Past noon now."
+trigger = "state"
+state   = "hour_change"
+hours   = [13]
+
+[[speech]]
+text_ja = "午後2時か"
+text_en = "2 in the afternoon."
+trigger = "state"
+state   = "hour_change"
+hours   = [14]
+
+[[speech]]
+text_ja = "おやつの時間だ"
+text_en = "Time for a snack."
+trigger = "state"
+state   = "hour_change"
+hours   = [15]
+
+[[speech]]
+text_ja = "夕方に近くなってきた"
+text_en = "Getting close to evening."
+trigger = "state"
+state   = "hour_change"
+hours   = [16]
+
+[[speech]]
+text_ja = "夕方5時だな"
+text_en = "5 in the evening."
+trigger = "state"
+state   = "hour_change"
+hours   = [17]
+
+[[speech]]
+text_ja = "夜が近い"
+text_en = "Night is near."
+trigger = "state"
+state   = "hour_change"
+hours   = [18]
+
+[[speech]]
+text_ja = "夜7時か"
+text_en = "7 in the evening."
+trigger = "state"
+state   = "hour_change"
+hours   = [19]
+
+[[speech]]
+text_ja = "夜になった"
+text_en = "Night has come."
+trigger = "state"
+state   = "hour_change"
+hours   = [20]
+
+[[speech]]
+text_ja = "夜9時か"
+text_en = "9 at night."
+trigger = "state"
+state   = "hour_change"
+hours   = [21]
+
+[[speech]]
+text_ja = "夜もだいぶ深くなった"
+text_en = "The night is getting deep."
+trigger = "state"
+state   = "hour_change"
+hours   = [22]
+
+[[speech]]
+text_ja = "もうすぐ日付が変わるな"
+text_en = "Almost midnight."
+trigger = "state"
+state   = "hour_change"
+hours   = [23]
+
+# --- weather ---
+
+[[speech]]
+text_ja = "光がまぶしい感じがする"
+text_en = "The light feels so bright."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか空が明るい"
+text_en = "The sky seems unusually bright today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "影が濃い感じがする"
+text_en = "The shadows look sharp today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんか薄暗い気がする"
+text_en = "It feels dimmer than usual."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "空が重たい感じ"
+text_en = "The sky looks heavy."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "空気が湿っぽい感じがする"
+text_en = "The air feels damp."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "土が濡れてそうだな"
+text_en = "The ground must be wet out there."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "水たまりができてそう"
+text_en = "There are probably puddles everywhere."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.8
+
+[[speech]]
+text_ja = "外が白い気がする"
+text_en = "It looks white out there."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "音が静かな感じがする"
+text_en = "Everything sounds so quiet."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "空気がつんとする感じ"
+text_en = "The air feels sharp and cold."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 0.8

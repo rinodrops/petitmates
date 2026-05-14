@@ -44,6 +44,7 @@ const IDM_EXIT: usize = 2;
 const IDM_ADD_BD: usize = 3;
 const IDM_REMOVE_CHAR: usize = 4;
 const IDM_ADD_PT: usize = 5;
+const IDM_SETTINGS: usize = 6;
 const TIMER_TICK: usize = 1;
 /// Base command ID for debug trigger menu items (reserves 100–199).
 const IDM_DEBUG_BASE: usize = 100;
@@ -105,6 +106,11 @@ struct CharState {
     last_screen_pos: (i32, i32),
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
+    speech_engine: crate::speech::SpeechEngine,
+    /// Active speech bubble state; None when no bubble is shown.
+    bubble_state: Option<crate::speech::BubbleState>,
+    /// HWND for the speech bubble layered window; null when not created yet.
+    bubble_hwnd: HWND,
 }
 
 struct AppState {
@@ -117,6 +123,16 @@ struct AppState {
     debug_menu_char: usize,
     /// Target states stored between menu construction and WM_COMMAND dispatch.
     debug_menu_targets: Vec<State>,
+    /// Global speech lock countdown (seconds). Prevents overlapping speech.
+    speech_lock_remaining: f64,
+    speech_cfg: crate::user_config::SpeechConfig,
+    speech_tick: Instant,
+    /// Font size for speech bubbles (from user.toml).
+    font_size: i32,
+    /// Resolved display language: "ja" or "en".
+    lang: String,
+    /// Shared weather cache updated by the background weather thread.
+    weather: crate::weather::WeatherHandle,
 }
 
 thread_local! {
@@ -179,6 +195,232 @@ unsafe fn set_layered_content(
         DeleteDC(hdc_mem);
         ReleaseDC(ptr::null_mut(), hdc_screen);
     }
+}
+
+// ---- Speech bubble rendering (Windows GDI) ----
+
+const WIN_BUBBLE_PADDING: i32 = 12;
+const WIN_BUBBLE_CORNER:  i32 = 10; // rounded rect ellipse diameter
+const WIN_BUBBLE_TAIL_H:  i32 = 10;
+const WIN_BUBBLE_TAIL_W:  i32 = 14;
+const WIN_BUBBLE_MARGIN:  i32 = 8;
+const WIN_BUBBLE_MAX_W:   i32 = 240;
+const WIN_BUBBLE_MIN_W:   i32 = 60;
+
+/// Render a speech bubble into a BGRA pixel buffer using GDI.
+///
+/// Returns `(Vec<u8>, width, height)`.  Pixels outside the bubble shape are
+/// transparent (`alpha = 0`); pixels inside are fully opaque (`alpha = 255`).
+///
+/// `tail_at_bottom` — tail points down (bubble above character).
+unsafe fn render_bubble_bgra(
+    text: &str,
+    tail_at_bottom: bool,
+    font_size: i32,
+) -> (Vec<u8>, i32, i32) {
+    let hdc_screen = GetDC(ptr::null_mut());
+    let hdc_mem    = CreateCompatibleDC(hdc_screen);
+
+    // ---- Create font ----
+    // Negative height = font size in points (logical height).
+    let hfont = CreateFontW(
+        -font_size,    // height (negative = pt size)
+        0, 0, 0,
+        FW_NORMAL as i32,
+        FALSE as u32, FALSE as u32, FALSE as u32,
+        DEFAULT_CHARSET as u32,
+        OUT_DEFAULT_PRECIS as u32,
+        CLIP_DEFAULT_PRECIS as u32,
+        CLEARTYPE_QUALITY as u32,
+        (DEFAULT_PITCH | FF_DONTCARE) as u32,
+        to_wide("Segoe UI").as_ptr(),
+    );
+    let old_font = SelectObject(hdc_mem, hfont);
+
+    // ---- Measure text ----
+    let text_wide   = to_wide(text);
+    let max_text_w  = WIN_BUBBLE_MAX_W - WIN_BUBBLE_PADDING * 2;
+    let mut measure = RECT { left: 0, top: 0, right: max_text_w, bottom: 2000 };
+    DrawTextW(
+        hdc_mem, text_wide.as_ptr(), -1,
+        &mut measure,
+        DT_WORDBREAK | DT_CALCRECT,
+    );
+    let text_w = measure.right  - measure.left;
+    let text_h = measure.bottom - measure.top;
+
+    // ---- Layout ----
+    let bubble_w = (text_w + WIN_BUBBLE_PADDING * 2).max(WIN_BUBBLE_MIN_W);
+    let bubble_h = text_h + WIN_BUBBLE_PADDING * 2;
+    let total_h  = bubble_h + WIN_BUBBLE_TAIL_H;
+    let img_w    = bubble_w;
+    let img_h    = total_h;
+
+    // body_top_y in GDI coords (Y-down from top of image)
+    let body_top_y = if tail_at_bottom { 0 } else { WIN_BUBBLE_TAIL_H };
+
+    // ---- Create DIB section ----
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize:          mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth:         img_w,
+            biHeight:        -img_h, // top-down
+            biPlanes:        1,
+            biBitCount:      32,
+            biCompression:   BI_RGB,
+            biSizeImage:     0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed:       0,
+            biClrImportant:  0,
+        },
+        bmiColors: [RGBQUAD { rgbBlue: 0, rgbGreen: 0, rgbRed: 0, rgbReserved: 0 }],
+    };
+    let mut bits: *mut c_void = ptr::null_mut();
+    let hbmp = CreateDIBSection(
+        hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0,
+    );
+    let old_bmp = SelectObject(hdc_mem, hbmp);
+
+    // ---- Draw bubble using combined GDI region (no arc rounding artifacts) ----
+    // GDI arcs are always aliased: at small radii even AngleArc looks jagged.
+    // Instead use CreateRoundRectRgn (body) + CreatePolygonRgn (tail) combined
+    // with CombineRgn(RGN_OR).  FillRgn + FrameRgn then trace only the outer
+    // boundary, so there is no seam line at the tail junction.
+    let cx = bubble_w / 2;
+
+    // Body region (rounded rect).
+    let body_rgn = if tail_at_bottom {
+        CreateRoundRectRgn(0, 0, bubble_w, bubble_h,
+                           WIN_BUBBLE_CORNER, WIN_BUBBLE_CORNER)
+    } else {
+        CreateRoundRectRgn(0, WIN_BUBBLE_TAIL_H, bubble_w, total_h,
+                           WIN_BUBBLE_CORNER, WIN_BUBBLE_CORNER)
+    };
+
+    // Tail triangle — base overlaps body by 2 px so CombineRgn(RGN_OR) merges
+    // without a pixel gap.
+    let tail_pts: [POINT; 3] = if tail_at_bottom {
+        [
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: bubble_h - 2 },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: bubble_h - 2 },
+            POINT { x: cx,                          y: total_h      },
+        ]
+    } else {
+        [
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H + 2 },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H + 2 },
+            POINT { x: cx,                          y: 0                     },
+        ]
+    };
+    let tail_rgn = CreatePolygonRgn(tail_pts.as_ptr(), 3, 2 /* WINDING */);
+
+    let combined_rgn = CreateRectRgn(0, 0, 1, 1);
+    CombineRgn(combined_rgn, body_rgn, tail_rgn, 3 /* RGN_OR */);
+
+    let fill_brush   = CreateSolidBrush(0x00FFFFFF_u32);
+    let border_brush = CreateSolidBrush(0x00B3B3B3_u32);
+    FillRgn(hdc_mem, combined_rgn, fill_brush);
+    FrameRgn(hdc_mem, combined_rgn, border_brush, 1, 1);
+    DeleteObject(combined_rgn);
+    DeleteObject(body_rgn);
+    DeleteObject(tail_rgn);
+
+    // ---- Draw text ----
+    let dark_text_color = 0x00333333u32;
+    SetTextColor(hdc_mem, dark_text_color);
+    SetBkMode(hdc_mem, TRANSPARENT as i32);
+    SelectObject(hdc_mem, hfont); // ensure font is set
+
+    let text_x = (bubble_w - text_w) / 2;
+    let text_y = body_top_y + (bubble_h - text_h) / 2;
+    let mut text_rect = RECT {
+        left:   text_x,
+        top:    text_y,
+        right:  text_x + text_w + 1,
+        bottom: text_y + text_h + 1,
+    };
+    DrawTextW(hdc_mem, text_wide.as_ptr(), -1, &mut text_rect, DT_WORDBREAK);
+
+    // ---- Read pixels and fix alpha ----
+    GdiFlush();
+    let pixel_count = (img_w * img_h) as usize;
+    let mut bgra = vec![0u8; pixel_count * 4];
+    ptr::copy_nonoverlapping(bits as *const u8, bgra.as_mut_ptr(), bgra.len());
+
+    // GDI doesn't write alpha (A=0). Set A=255 for all drawn (non-black) pixels.
+    for chunk in bgra.chunks_mut(4) {
+        if chunk[0] != 0 || chunk[1] != 0 || chunk[2] != 0 {
+            chunk[3] = 255;
+        }
+    }
+
+    // ---- Cleanup ----
+    SelectObject(hdc_mem, old_font);
+    SelectObject(hdc_mem, old_bmp);
+    DeleteObject(hbmp);
+    DeleteObject(fill_brush);
+    DeleteObject(border_brush);
+    DeleteObject(hfont as *mut _);
+    DeleteDC(hdc_mem);
+    ReleaseDC(ptr::null_mut(), hdc_screen);
+
+    (bgra, img_w, img_h)
+}
+
+/// Create the speech-bubble HWND (called once per character).
+unsafe fn create_bubble_hwnd(hinstance: HINSTANCE, char_hwnd: HWND) -> HWND {
+    let class_name = to_wide("PetitMatesOverlay");
+    let hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+        class_name.as_ptr(),
+        ptr::null(),
+        WS_POPUP,
+        0, 0, 1, 1,
+        char_hwnd, // owner = character window → inherits Z-order relationship
+        ptr::null_mut(), hinstance, ptr::null(),
+    );
+    hwnd
+}
+
+/// Render and position the bubble HWND above or below the character sprite.
+unsafe fn update_bubble_hwnd(
+    bubble_hwnd: HWND,
+    char_hwnd: HWND,
+    text: &str,
+    font_size: i32,
+    char_x: i32, char_y: i32,
+    char_w: i32, char_h: i32,
+    screen_w: i32, screen_h: i32,
+    alpha_u8: u8,
+) {
+    // Choose placement.
+    let est_h = 60 + WIN_BUBBLE_TAIL_H;
+    let tail_at_bottom =
+        char_y - est_h - WIN_BUBBLE_MARGIN > 0; // space *above* char (Y-down coords)
+
+    let (bgra, bw, bh) = render_bubble_bgra(text, tail_at_bottom, font_size);
+
+    let bx = {
+        let cx = char_x + char_w / 2;
+        (cx - bw / 2).max(0).min(screen_w - bw)
+    };
+    let by = if tail_at_bottom {
+        (char_y - bh - WIN_BUBBLE_MARGIN).max(0)
+    } else {
+        (char_y + char_h + WIN_BUBBLE_MARGIN).min(screen_h - bh)
+    };
+
+    set_layered_content(bubble_hwnd, &bgra, bw, bh, bx, by, alpha_u8);
+
+    // Ensure window is visible.
+    ShowWindow(bubble_hwnd, SW_SHOWNOACTIVATE);
+    // Keep just above the character HWND.
+    SetWindowPos(
+        bubble_hwnd, char_hwnd,
+        bx, by, bw, bh,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
 }
 
 // ---- Surface → screen position ----
@@ -406,7 +648,7 @@ fn surface_host_hwnd(surface: &crate::behavior::Surface) -> Option<HWND> {
 
 /// Create a new layered `HWND` and return its initial `CharState`.
 /// The window class must already be registered.
-unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig) -> CharState {
+unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig, char_name: &str) -> CharState {
     let hinstance  = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide("PetitMatesOverlay");
     let hwnd = unsafe {
@@ -437,6 +679,9 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         drag_offset:     None,
         last_screen_pos: (-4096, -4096),
         debug_trigger:   None,
+        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        bubble_state: None,
+        bubble_hwnd: ptr::null_mut(),
     }
 }
 
@@ -830,6 +1075,45 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     ch.last_screen_pos = (px, py);
 }
 
+// ---- Language detection ----
+
+/// Detect the OS preferred UI language, returning `"ja"` or `"en"`.
+///
+/// Uses `GetUserPreferredUILanguages` and returns `"ja"` if the first
+/// language whose BCP-47 tag starts with `"ja"` appears before any English
+/// tag.  Falls back to `"en"`.
+fn detect_system_language() -> String {
+    use windows_sys::Win32::Globalization::GetUserPreferredUILanguages;
+    use windows_sys::Win32::Foundation::FALSE;
+    const MUI_LANGUAGE_NAME: u32 = 0x08;
+    unsafe {
+        let mut num_langs: u32 = 0;
+        let mut buf_size: u32  = 0;
+        // First call: get required buffer size.
+        GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME, &mut num_langs, std::ptr::null_mut(), &mut buf_size,
+        );
+        if buf_size == 0 {
+            return "en".to_owned();
+        }
+        let mut buf: Vec<u16> = vec![0u16; buf_size as usize];
+        let ok = GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME, &mut num_langs, buf.as_mut_ptr(), &mut buf_size,
+        );
+        if ok == FALSE || buf_size == 0 {
+            return "en".to_owned();
+        }
+        // Buffer is a double-null-terminated list of null-separated strings.
+        for segment in buf.split(|&c| c == 0) {
+            if segment.is_empty() { continue; }
+            let tag = String::from_utf16_lossy(segment);
+            if tag.starts_with("ja") { return "ja".to_owned(); }
+            if tag.starts_with("en") { return "en".to_owned(); }
+        }
+    }
+    "en".to_owned()
+}
+
 // ---- Tick all characters (10 Hz timer callback) ----
 
 fn tick_all() {
@@ -845,6 +1129,79 @@ fn tick_all() {
             app.chars[i].config.lock().unwrap().reload_if_changed();
             let cfg = app.chars[i].config.lock().unwrap().current.clone();
             tick_char(&mut app.chars[i], &cfg, &si, &wins);
+        }
+
+        // Speech trigger evaluation.
+        if app.speech_cfg.enabled {
+            let now = Instant::now();
+            let speech_dt = now.duration_since(app.speech_tick).as_secs_f64().min(0.5);
+            app.speech_tick = now;
+            app.speech_lock_remaining = (app.speech_lock_remaining - speech_dt).max(0.0);
+            let lock     = app.speech_lock_remaining;
+            let lock_sec = app.speech_cfg.speech_lock_sec;
+            let font_sz  = app.font_size;
+            let hinstance = unsafe { GetModuleHandleW(ptr::null()) };
+
+            // Advance existing bubbles.
+            for ch in &mut app.chars {
+                if let Some(bs) = &mut ch.bubble_state {
+                    bs.remaining_sec -= speech_dt;
+                    if bs.remaining_sec <= 0.0 {
+                        if !ch.bubble_hwnd.is_null() {
+                            unsafe { ShowWindow(ch.bubble_hwnd, SW_HIDE) };
+                        }
+                        ch.bubble_state = None;
+                    } else if !ch.bubble_hwnd.is_null() {
+                        // Reposition to track character.
+                        let alpha = (bs.alpha() * 255.0) as u8;
+                        let (cx, cy) = ch.last_screen_pos;
+                        let (sw, sh) = (si.width as i32, si.height as i32);
+                        let sprite_w = ch.assets.sprite("s-stand", false)
+                            .map(|s| s.w).unwrap_or(150);
+                        let sprite_h = ch.assets.sprite("s-stand", false)
+                            .map(|s| s.h).unwrap_or(150);
+                        let text = bs.text.clone();
+                        unsafe {
+                            update_bubble_hwnd(
+                                ch.bubble_hwnd, ch.hwnd, &text, font_sz,
+                                cx, cy, sprite_w, sprite_h, sw, sh, alpha,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Check for new speech lines.
+            for i in 0..app.chars.len() {
+                let state = app.chars[i].anim_state.clone();
+                let weather_info = app.weather.get();
+                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock, weather_info.as_ref()) {
+                    app.speech_lock_remaining = lock_sec;
+                    if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
+                        // Create bubble HWND lazily.
+                        if app.chars[i].bubble_hwnd.is_null() {
+                            let char_hwnd = app.chars[i].hwnd;
+                            app.chars[i].bubble_hwnd =
+                                unsafe { create_bubble_hwnd(hinstance, char_hwnd) };
+                        }
+                        let (cx, cy) = app.chars[i].last_screen_pos;
+                        let (sw, sh) = (si.width as i32, si.height as i32);
+                        let sprite_w = app.chars[i].assets.sprite("s-stand", false)
+                            .map(|s| s.w).unwrap_or(150);
+                        let sprite_h = app.chars[i].assets.sprite("s-stand", false)
+                            .map(|s| s.h).unwrap_or(150);
+                        let text = bs.text.clone();
+                        unsafe {
+                            update_bubble_hwnd(
+                                app.chars[i].bubble_hwnd, app.chars[i].hwnd, &text, font_sz,
+                                cx, cy, sprite_w, sprite_h, sw, sh, 255,
+                            );
+                        }
+                        app.chars[i].bubble_state = Some(bs);
+                    }
+                    break;
+                }
+            }
         }
 
         // Update tray tooltip with countdown info when a debug trigger is pending.
@@ -936,7 +1293,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         .unwrap_or_default();
                     let header = format!("{} — {}{}", surface_str, state_str, dur_str);
                     let outing_str = ch.behavior.outing_info(&cfg)
-                        .map(|(r, t)| format!("Next outing: {:.0}s / {:.0}s", r, t))
+                        .map(|(r, t)| if app.lang == "ja" {
+                            format!("次の外出: {:.0}秒 / {:.0}秒", r, t)
+                        } else {
+                            format!("Next outing: {:.0}s / {:.0}s", r, t)
+                        })
                         .unwrap_or_default();
 
                     let targets = crate::debug_menu::trigger_targets(
@@ -970,7 +1331,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 // Separator + destructive Remove item (only when more than one character).
                 if info.can_remove {
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-                    let rm_w = to_wide("Remove This Character\u{2026}");
+                    let ja = APP.with(|cell| cell.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
+                    let rm_w = to_wide(if ja { "このキャラクターを削除…" } else { "Remove This Character\u{2026}" });
                     AppendMenuW(menu, MF_STRING, IDM_DEBUG_REMOVE, rm_w.as_ptr());
                 }
                 let mut pt = POINT { x: 0, y: 0 };
@@ -1055,19 +1417,24 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             WM_TRAY => {
                 if (lp as u32) & 0xFFFF == WM_RBUTTONUP {
-                    let char_count = APP.with(|cell| {
-                        cell.borrow().as_ref().map(|app| app.chars.len()).unwrap_or(1)
+                    let (char_count, ja) = APP.with(|cell| {
+                        cell.borrow().as_ref()
+                            .map(|app| (app.chars.len(), app.lang == "ja"))
+                            .unwrap_or((1, false))
                     });
                     let menu       = CreatePopupMenu();
-                    let add_bd_str  = to_wide("Add Bearded Dragon");
-                    let add_pt_str  = to_wide("Add Pond Turtle");
-                    let remove_str  = to_wide("Remove Last");
-                    let about_str   = to_wide("About Petit Mates");
-                    let exit_str    = to_wide("Quit");
+                    let add_bd_str  = to_wide(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" });
+                    let add_pt_str  = to_wide(if ja { "クサガメを追加" } else { "Add Pond Turtle" });
+                    let remove_str  = to_wide(if ja { "最後のキャラクターを削除" } else { "Remove Last" });
+                    let about_str    = to_wide(if ja { "Petit Mates について" } else { "About Petit Mates" });
+                    let settings_str = to_wide(if ja { "設定ファイルを開く" } else { "Open Settings File" });
+                    let exit_str     = to_wide(if ja { "終了" } else { "Quit" });
                     AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
                     AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
+                    AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+                    AppendMenuW(menu, MF_STRING,    IDM_SETTINGS, settings_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
                     AppendMenuW(menu, MF_STRING,    IDM_ABOUT, about_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -1086,7 +1453,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.bd_assets);
                         let config = app.bd_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        let ch     = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
                         app.chars.push(ch);
                     }
                 });
@@ -1119,7 +1486,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.pt_assets);
                         let config = app.pt_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
                         app.chars.push(ch);
                     }
                 });
@@ -1154,8 +1521,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         .unwrap_or((0, false, ptr::null_mut()))
                 });
                 if can && !survivor.is_null() {
-                    let msg   = to_wide("Remove this character from the desktop?");
-                    let title = to_wide("Remove Character");
+                    let ja = APP.with(|cell| cell.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
+                    let msg   = to_wide(if ja { "このキャラクターをデスクトップから削除しますか？" } else { "Remove this character from the desktop?" });
+                    let title = to_wide(if ja { "キャラクターの削除" } else { "Remove Character" });
                     let result = MessageBoxW(
                         ptr::null_mut(), msg.as_ptr(), title.as_ptr(),
                         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
@@ -1205,6 +1573,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     SetTimer(new_hwnd, TIMER_TICK, 100, None);
                 }
                 DestroyWindow(info.old_hwnd);
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_SETTINGS => {
+                crate::user_config::open_in_editor();
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
@@ -1258,7 +1630,9 @@ fn add_tray_icon(hwnd: HWND, hinstance: HINSTANCE) {
         nid.uFlags          = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAY;
         let icon_id: usize  = if is_dark_mode() { 3 } else { 2 };
-        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, 16, 16, LR_SHARED) as HICON;
+        let cx = GetSystemMetrics(SM_CXSMICON).max(32);
+        let cy = GetSystemMetrics(SM_CYSMICON).max(32);
+        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR) as HICON;
         nid.hIcon = if !hicon.is_null() { hicon }
                     else { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
         let n = tip.len().min(nid.szTip.len());
@@ -1271,7 +1645,9 @@ fn update_tray_icon(hwnd: HWND) {
     unsafe {
         let hinstance  = GetModuleHandleW(ptr::null());
         let icon_id: usize = if is_dark_mode() { 3 } else { 2 };
-        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, 16, 16, LR_SHARED) as HICON;
+        let cx = GetSystemMetrics(SM_CXSMICON).max(32);
+        let cy = GetSystemMetrics(SM_CYSMICON).max(32);
+        let hicon = LoadImageW(hinstance, icon_id as *const u16, IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR) as HICON;
         if hicon.is_null() { return; }
         let mut nid: NOTIFYICONDATAW = mem::zeroed();
         nid.cbSize  = mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -1331,8 +1707,10 @@ pub fn run() {
         // Load shared assets from embedded bytes.
         let bd_config = make_shared_win_for("bearded_dragon");
         let pt_config = make_shared_win_for("pond_turtle");
-        let bd_display_w = bd_config.lock().unwrap().current.display.display_width;
-        let pt_display_w = pt_config.lock().unwrap().current.display.display_width;
+        let user_cfg = crate::user_config::load();
+        let sprite_size = user_cfg.display.sprite_size as f64;
+        let bd_display_w = sprite_size;
+        let pt_display_w = sprite_size;
         let bd_mf = manifest::load_from_bytes(windows_assets::embedded::bearded_dragon::MANIFEST_TOML)
             .expect("embedded bearded_dragon manifest.toml is invalid");
         let pt_mf = manifest::load_from_bytes(windows_assets::embedded::pond_turtle::MANIFEST_TOML)
@@ -1348,8 +1726,9 @@ pub fn run() {
 
         // Create both character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
-        let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone());
-        let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone());
+        let weather_handle = crate::weather::spawn(&user_cfg.weather);
+        let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone(), "bearded_dragon");
+        let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone(), "pond_turtle");
         let host_hwnd  = bd_char.hwnd;
 
         APP.with(|cell| {
@@ -1361,6 +1740,13 @@ pub fn run() {
                 pt_config,
                 debug_menu_char:    0,
                 debug_menu_targets: Vec::new(),
+                speech_lock_remaining: 0.0,
+                speech_cfg: user_cfg.speech,
+                speech_tick: Instant::now(),
+                font_size: user_cfg.display.font_size as i32,
+                lang: user_cfg.display.language.clone()
+                    .unwrap_or_else(detect_system_language),
+                weather: weather_handle,
             });
         });
 

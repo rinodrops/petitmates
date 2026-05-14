@@ -1,0 +1,844 @@
+# Builtin speech lines for the Bearded Dragon character.
+# Layer 2 of 4 in the merge order.
+
+[[speech]]
+text_ja = "あったかいところで寝たいな"
+text_en = "I want to sleep somewhere warm."
+trigger = "random"
+weight  = 1.2
+
+# --- seasons (random) ---
+
+[[speech]]
+text_ja = "なんか日差しが優しくなってきた気がする"
+text_en = "The sunlight feels gentler somehow."
+trigger = "random"
+seasons = ["spring"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "外があたたかくなってきた感じ"
+text_en = "It feels like it's getting warmer outside."
+trigger = "random"
+seasons = ["spring"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "この季節が一番好きかな"
+text_en = "I think this might be my favorite season."
+trigger = "random"
+seasons = ["summer"]
+weight  = 1.3
+
+[[speech]]
+text_ja = "外に出たらきっと気持ちいい"
+text_en = "It'd feel great to be outside right now."
+trigger = "random"
+seasons = ["summer"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "日差しが強い季節だな"
+text_en = "The sun is strong this time of year."
+trigger = "random"
+seasons = ["summer"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんか日が短くなってきた気がする"
+text_en = "The days seem to be getting shorter."
+trigger = "random"
+seasons = ["autumn"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "空気が少し冷えてきた感じがする"
+text_en = "The air feels a little cooler."
+trigger = "random"
+seasons = ["autumn"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "外は寒そうだけど、ここはあたたかくていい"
+text_en = "It looks cold outside, but it's warm in here."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "寒い季節は体が重くなる気がする"
+text_en = "Cold weather makes me feel heavy."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "冬はここにいるのが一番かな"
+text_en = "Winter is best spent right here, I think."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "ひなたぼっこがしたい"
+text_en = "I could really go for some basking."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "コオロギ食べたいな"
+text_en = "I could really go for some crickets right now."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "小松菜もいいな"
+text_en = "Some leafy greens sound good too."
+trigger = "random"
+weight  = 0.6
+
+# --- food ---
+
+[[speech]]
+text_ja = "コオロギ、大きいやつがいいな"
+text_en = "I want a big cricket."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "コオロギって何匹まで数えられるかな"
+text_en = "I wonder how many crickets I could count."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "小松菜とコオロギ、どっちにしようかな"
+text_en = "Greens or crickets — which should it be?"
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "果物、食べたいな"
+text_en = "I could really go for some fruit."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "いちご、好きだな"
+text_en = "I like strawberries."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "おなかが空いてきた気がする"
+text_en = "I think I'm getting hungry."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日は何を食べようかな"
+text_en = "What should I eat today?"
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "みずみずしいものが食べたい"
+text_en = "I want something juicy."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "食べたら眠くなるんだよな"
+text_en = "I always get sleepy after eating."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ごはんのあと、ひなたぼっこしたい"
+text_en = "I want to bask after my meal."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "コオロギって、どこから来るんだろう"
+text_en = "Where do crickets come from?"
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "野菜もたまにはいいな"
+text_en = "Greens are good sometimes too."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "フルーツって、なんであんなに甘いんだろう"
+text_en = "Why is fruit so sweet, I wonder."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "ごはん、まだかな"
+text_en = "I wonder when food is coming."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "コオロギって、友達になれないのかな"
+text_en = "I wonder if I could be friends with a cricket."
+trigger = "random"
+weight  = 0.7
+
+# --- warmth and basking ---
+
+[[speech]]
+text_ja = "ここ、日当たりいいな"
+text_en = "The light hits nicely here."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "体の芯まであたたまりたい"
+text_en = "I want to warm up to my very core."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "ライトの下が一番落ち着く"
+text_en = "Under the light is where I feel most at home."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "温かいとこにいると幸せな気がする"
+text_en = "Being somewhere warm just makes me happy."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "体があたたまると目が覚める感じがする"
+text_en = "Warming up makes me feel wide awake."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "もっと光があたるといいのに"
+text_en = "I wish there was more light on me."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "温かい岩の上で寝たいな"
+text_en = "I want to sleep on a warm rock."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "太陽って、作れないのかな"
+text_en = "I wonder if you could somehow make a sun."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "ひなたぼっこって、なんでこんなに気持ちいいんだろう"
+text_en = "Why does basking feel this good?"
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "光が当たってる場所って、なんか特別な感じがする"
+text_en = "There's something special about a patch of sunlight."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "今日もいい光だな"
+text_en = "The light is nice today too."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "もうちょっとだけ、ここにいよう"
+text_en = "I'll stay here just a little longer."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "朝一番のひなたぼっこが好きだな"
+text_en = "Morning basking is my favorite."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "体が冷えてきた気がする…あたたかいとこ行きたい"
+text_en = "I think I'm cooling down... I want somewhere warm."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "光ってほんとに大事だな"
+text_en = "Light really is everything."
+trigger = "random"
+weight  = 0.8
+
+# --- drowsiness and relaxation ---
+
+[[speech]]
+text_ja = "なんかうとうとしてる"
+text_en = "I'm kind of dozing off."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "まぶたが重い"
+text_en = "My eyelids feel heavy."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "目を細めてみた"
+text_en = "I half-closed my eyes for a bit."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "夢でコオロギが出てきたかも"
+text_en = "I think I dreamed about crickets."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "今日はのんびりしよう"
+text_en = "I'll take it easy today."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "何もしないのも悪くない"
+text_en = "Doing nothing is actually not bad."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "あくびが止まらない感じ"
+text_en = "I can't stop yawning."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "うとうとしかけたかも"
+text_en = "I think I almost dozed off just now."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ゆっくり寝たいな"
+text_en = "I want a long, slow sleep."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日は特に何もしない日にしよう"
+text_en = "Today can be a day for doing nothing in particular."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "のんびりって、こういうことかな"
+text_en = "Is this what taking it easy feels like?"
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "急がなくていいよね"
+text_en = "There's no rush, right?"
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "もう少しだけごろごろしよう"
+text_en = "I'll laze around just a little longer."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "眠くなったら寝ていいよね"
+text_en = "It's okay to sleep when I get sleepy, right?"
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "目閉じてたら、いつの間にか寝てたかも"
+text_en = "I might have fallen asleep without noticing."
+trigger = "random"
+weight  = 0.8
+
+# --- body and self ---
+
+[[speech]]
+text_ja = "なんか体がぽかぽかしてきた"
+text_en = "I feel warm all over."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "じっとしてるのが一番楽かな"
+text_en = "Being still might be the most comfortable."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "しっぽって、どこまで続いてるんだろう"
+text_en = "I wonder how far my tail goes."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "ひげって、なんであるんだろう"
+text_en = "I wonder why I have a beard."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "うろこって、なんかおしゃれじゃないかな"
+text_en = "I think scales are actually pretty cool."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんか体がほぐれてきた感じ"
+text_en = "I feel like my body is loosening up."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "今日はなんか動きたい感じがする"
+text_en = "I feel like moving around today."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "動いたあとって、気持ちいいんだよな"
+text_en = "It feels good after moving around."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "自分のひげって、どんな感じか分からないんだよな"
+text_en = "I can never tell what my own beard looks like."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "重力って、感じるよね"
+text_en = "You can really feel gravity."
+trigger = "random"
+weight  = 0.6
+
+# --- lighthearted ---
+
+[[speech]]
+text_ja = "砂漠って行ったことないんだよな"
+text_en = "I've actually never been to a desert."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "オーストラリアって、暑いのかな"
+text_en = "Australia must be pretty warm, right?"
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "ここに来てから、何日経ったかな"
+text_en = "How many days has it been since I got here?"
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんか今日は特別な気がする…なんでだろう"
+text_en = "Today feels special somehow... I'm not sure why."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "いい夢が見たい"
+text_en = "I want to have a good dream."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんか考えすぎかもしれない"
+text_en = "Maybe I'm overthinking it."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "でも、まあいいか"
+text_en = "But then again, it's fine."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ただいてるだけで、幸せかもしれない"
+text_en = "Just being here might be enough to be happy."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "コオロギって何を考えてるんだろう"
+text_en = "I wonder what crickets think about."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "今日もいてくれてありがとう、とか思ったりする"
+text_en = "Sometimes I think, thanks for being here."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "ねーねー"
+text_en = "Hey."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "呼んだ？"
+text_en = "Did you call me?"
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "太陽とひなたぼっこって、最高の組み合わせだと思う"
+text_en = "The sun and basking are the perfect combination."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "コオロギの音がしたら、すぐ分かる自信がある"
+text_en = "I'm pretty sure I could spot a cricket's sound right away."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんか今日は顔がしゃきっとしてる気がする"
+text_en = "My face feels unusually alert today."
+trigger = "random"
+weight  = 0.7
+
+# --- simple observations ---
+
+[[speech]]
+text_ja = "ここが一番落ち着く"
+text_en = "Here is the most comfortable place."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんとなく機嫌がいい"
+text_en = "I'm in a good mood for no particular reason."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ゆっくり生きるのがいい"
+text_en = "A slow life is the best life."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "空気がおいしい感じがする"
+text_en = "The air tastes good."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "なんかここが好きだな"
+text_en = "I really like it here."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "生きてるって感じがする"
+text_en = "I feel alive."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "このままでいいな"
+text_en = "I'm happy staying like this."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんかいい日だな"
+text_en = "Today's a good day."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんかいいことありそうな気がする"
+text_en = "I feel like something good might happen."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なにもない一日も、悪くないな"
+text_en = "A day with nothing happening isn't bad either."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ここにいるだけで、なんかよかった気がしてくる"
+text_en = "Just being here makes me feel like things are okay."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "今日もちゃんと生きてる"
+text_en = "Still here today too."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "何かが始まりそうな気がする"
+text_en = "Something feels like it's about to start."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんかいい匂いがする気がする"
+text_en = "I think I smell something nice."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "風の音がした気がする"
+text_en = "I thought I heard the wind."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "ここはどこだろう"
+text_en = "Where am I?"
+trigger = "state"
+state   = "startup"
+
+[[speech]]
+text_ja = "よっと"
+text_en = "Here we go."
+trigger = "state"
+state   = "landing"
+duration_sec = 3.0
+
+# --- hour_change ---
+
+[[speech]]
+text_ja = "朝ごはんの時間かな"
+text_en = "Breakfast time, maybe."
+trigger = "state"
+state   = "hour_change"
+hours   = [7]
+
+[[speech]]
+text_ja = "お昼だ。コオロギ食べたい"
+text_en = "Noon. I want some crickets."
+trigger = "state"
+state   = "hour_change"
+hours   = [12]
+
+[[speech]]
+text_ja = "夕ごはんの時間かな"
+text_en = "Dinner time, maybe."
+trigger = "state"
+state   = "hour_change"
+hours   = [18]
+
+[[speech]]
+text_ja = "こんな夜中に目が覚めてしまった感じ…"
+text_en = "Feels like I woke up in the middle of the night..."
+trigger = "state"
+state   = "hour_change"
+hours   = [2]
+
+# --- weather ---
+
+[[speech]]
+text_ja = "ひなたぼっこ日和な気がする"
+text_en = "Feels like a perfect day for basking."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "今日こそ外で昼寝したい"
+text_en = "I really want to nap outside today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "体があったまりそう"
+text_en = "I can feel myself warming up."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日の日差し、最高だな"
+text_en = "This sun is absolutely perfect."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 30.0
+weight  = 1.4
+
+[[speech]]
+text_ja = "体中があたたまる感じがする"
+text_en = "I can feel the warmth spreading through my whole body."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 30.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "丸一日、日向ぼっこしていたい"
+text_en = "I could bask in this sun all day."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 30.0
+weight  = 1.1
+
+[[speech]]
+text_ja = "晴れてるのに外は冷えてるのかな"
+text_en = "Sunny, but cold out there, I guess."
+trigger = "weather"
+weather = ["sunny"]
+temp_max = 14.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "日差しはあっても外は寒いみたい"
+text_en = "The sun's out, but it's still cold outside."
+trigger = "weather"
+weather = ["sunny"]
+temp_max = 14.0
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんかシャキっとしない"
+text_en = "I feel kind of sluggish."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "体が重い気がする…"
+text_en = "My body feels heavy for some reason..."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "日差しがもう少しほしいな"
+text_en = "I could really use more sun."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "曇って外が冷えてそう…ここはあたたかいけど"
+text_en = "Cold and cloudy out there... warm in here, though."
+trigger = "weather"
+weather = ["cloudy"]
+temp_max = 14.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "外じゃ体が動かなかっただろうな"
+text_en = "I'd barely be able to move if I were out there."
+trigger = "weather"
+weather = ["cloudy"]
+temp_max = 14.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "湿っぽくて嫌だな"
+text_en = "All this humidity... I really don't like it."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "外に出たくない感じ"
+text_en = "I don't feel like going out at all."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "早く晴れないかな"
+text_en = "I hope it clears up soon."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "体が冷えてきた気がする"
+text_en = "I think I'm starting to get cold."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "冷たい雨みたい…ここにいてよかった"
+text_en = "Looks like cold rain out there... glad I'm in here."
+trigger = "weather"
+weather = ["rainy"]
+temp_max = 15.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "外で雨に当たってたら体が冷えてたな"
+text_en = "I'd have been freezing if I'd been out in that rain."
+trigger = "weather"
+weather = ["rainy"]
+temp_max = 15.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "外は雪かな…ここはあたたかくていいな"
+text_en = "Snow out there, maybe... it's warm in here, though."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "外じゃ体が固まってたかも。ここはのんびりできる"
+text_en = "I might have frozen up out there. I can relax in here."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "外の寒さ、ここじゃ関係ないな"
+text_en = "The cold out there doesn't reach me in here."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "外はとんでもなく寒いみたい。ここにいてよかった"
+text_en = "Must be freezing out there. Really glad I'm in here."
+trigger = "weather"
+weather = ["snowy"]
+temp_max = 5.0
+weight  = 1.3
+
+[[speech]]
+text_ja = "外じゃとっくに動けなくなってたな。ここは大丈夫"
+text_en = "I'd have stopped moving long ago out there. I'm fine in here."
+trigger = "weather"
+weather = ["snowy"]
+temp_max = 5.0
+weight  = 1.2
