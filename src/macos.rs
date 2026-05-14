@@ -67,6 +67,7 @@ struct CharState {
     drag_offset: Option<(f64, f64)>,
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
+    speech_engine: crate::speech::SpeechEngine,
 }
 
 // ---- App-wide state (singletons) ----
@@ -86,6 +87,10 @@ struct AppState {
     debug_menu_char: usize,
     /// Target states stored between menu construction and item selection.
     debug_menu_targets: Vec<State>,
+    /// Global speech lock countdown (seconds). Prevents overlapping speech.
+    speech_lock_remaining: f64,
+    speech_cfg: crate::user_config::SpeechConfig,
+    speech_tick: Instant,
 }
 
 thread_local! {
@@ -277,7 +282,7 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
 /// Create one character, place it in a startup-drop position, and return
 /// the fully initialised `CharState`.  Caller is responsible for pushing it
 /// into `AppState::chars`.
-fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool) -> CharState {
+fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
     let (start_cx, start_cy) = startup_drop(si, &assets);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
     let panel = make_panel(init_img, mt);
@@ -302,6 +307,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_tick: Instant::now(),
         drag_offset: None,
         debug_trigger: None,
+        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
     }
 }
 
@@ -350,7 +356,7 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.bd_assets);
                 let config = app.bd_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false));
+                app.chars.push(spawn_char(assets, config, &si, mt, false, "bearded_dragon"));
             });
         }
 
@@ -366,7 +372,7 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.pt_assets);
                 let config = app.pt_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false));
+                app.chars.push(spawn_char(assets, config, &si, mt, false, "pond_turtle"));
             });
         }
 
@@ -1497,6 +1503,27 @@ fn tick() {
             tick_char(ch, &cfg, &si, &wins, mt);
         }
 
+        // Speech trigger evaluation.
+        if app.speech_cfg.enabled {
+            let now = Instant::now();
+            let speech_dt = now.duration_since(app.speech_tick).as_secs_f64().min(0.5);
+            app.speech_tick = now;
+            app.speech_lock_remaining = (app.speech_lock_remaining - speech_dt).max(0.0);
+            let lock = app.speech_lock_remaining;
+            let lock_sec = app.speech_cfg.speech_lock_sec;
+            for i in 0..app.chars.len() {
+                let state = app.chars[i].anim_state.clone();
+                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
+                    let text = line.text_en.as_deref()
+                        .or(line.text_ja.as_deref())
+                        .unwrap_or("...");
+                    eprintln!("[speech] {}", text);
+                    app.speech_lock_remaining = lock_sec;
+                    break;
+                }
+            }
+        }
+
         // Update status item icon to show countdown when a debug trigger is pending.
         let min_remaining: Option<f64> = app.chars.iter()
             .filter_map(|c| c.debug_trigger.as_ref().map(|(_, r)| *r))
@@ -1551,11 +1578,11 @@ pub fn run() {
     let demo_mode = std::env::args().any(|a| a == "--demo");
     let initial_chars: Vec<CharState> = if demo_mode {
         // Demo mode: one bearded dragon with deterministic scripted behavior.
-        vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true)]
+        vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true, "bearded_dragon")]
     } else {
         vec![
-            spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false),
-            spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false),
+            spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false, "bearded_dragon"),
+            spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false, "pond_turtle"),
         ]
     };
 
@@ -1587,6 +1614,9 @@ pub fn run() {
             _event_monitors: event_monitors,
             debug_menu_char: 0,
             debug_menu_targets: Vec::new(),
+            speech_lock_remaining: 0.0,
+            speech_cfg: user_cfg.speech,
+            speech_tick: Instant::now(),
         });
     });
 
