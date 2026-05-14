@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/rinodrops/petitmates/releases/latest">
-    <img src="https://img.shields.io/github/v/release/rinodrops/petitmates?color=orange&label=ダウンロード" alt="最新リリース">
+    <img src="https://img.shields.io/github/v/release/rinodrops/petitmates?color=orange&label=Download" alt="Latest Release">
   </a>
   <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
   <img src="https://img.shields.io/badge/Windows-11-blue" alt="Windows 11">
