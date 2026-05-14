@@ -219,8 +219,8 @@ fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retain
             options: 1u64
             context: std::ptr::null_mut::<AnyObject>()
         ];
-        let text_w = bounds.size.width.ceil();
-        let text_h = bounds.size.height.ceil();
+        let text_w = bounds.size.width.ceil().max(1.0);
+        let text_h = bounds.size.height.ceil().max(1.0);
 
         let bubble_w = (text_w + BUBBLE_PADDING * 2.0).max(BUBBLE_MIN_W);
         let bubble_h = text_h + BUBBLE_PADDING * 2.0;
@@ -280,7 +280,6 @@ fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retain
             options: 1u64
             context: std::ptr::null_mut::<AnyObject>()
         ];
-
         img.unlockFocus();
         img
     }
@@ -1786,10 +1785,10 @@ fn tick() {
                 unsafe {
                     bp.setFrameOrigin(NSPoint::new(bubble_x, bubble_y));
                     // Keep bubble above character panel.
-                    let char_num: u32 = msg_send![&*ch.panel, windowNumber];
+                    let char_num: isize = msg_send![&*ch.panel, windowNumber];
                     bp.orderWindow_relativeTo(
                         objc2_app_kit::NSWindowOrderingMode::Above,
-                        char_num as isize,
+                        char_num,
                     );
                 }
                 let _ = font_sz; // suppress unused warning
