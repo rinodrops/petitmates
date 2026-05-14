@@ -4,7 +4,7 @@ space     := $(empty) $(empty)
 APP_NAME  := Petit Mates
 EXE_NAME  := petitmates
 BUNDLE_ID := jp.emotiongraphics.petitmates
-VERSION   := 0.1.0
+VERSION   := 0.2.0
 MIN_MACOS := 13.0
 
 BUILD_DIR := build
