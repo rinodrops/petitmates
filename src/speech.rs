@@ -184,9 +184,13 @@ pub struct BubbleState {
 }
 
 impl BubbleState {
-    pub fn new(line: &SpeechLine) -> Option<Self> {
-        let text = line.text_en.clone()
-            .or_else(|| line.text_ja.clone())?;
+    /// `lang`: `"ja"` to prefer Japanese, any other value to prefer English.
+    pub fn new(line: &SpeechLine, lang: &str) -> Option<Self> {
+        let text = if lang == "ja" {
+            line.text_ja.clone().or_else(|| line.text_en.clone())?
+        } else {
+            line.text_en.clone().or_else(|| line.text_ja.clone())?
+        };
         Some(BubbleState {
             text,
             duration_sec: line.duration_sec,
