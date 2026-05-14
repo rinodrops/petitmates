@@ -396,7 +396,9 @@ fn show_bubble(
 fn make_status_item(
     handler: &MenuDelegate,
     mt: MainThreadMarker,
+    lang: &str,
 ) -> Retained<objc2_app_kit::NSStatusItem> {
+    let ja = lang == "ja";
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(-2.0); // NSSquareStatusItemLength
@@ -416,7 +418,7 @@ fn make_status_item(
         // Character management items.
         let add_bd = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Add Bearded Dragon"),
+            &NSString::from_str(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" }),
             Some(objc2::sel!(addBeardedDragon:)),
             &NSString::from_str(""),
         );
@@ -425,7 +427,7 @@ fn make_status_item(
 
         let add_pt = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Add Pond Turtle"),
+            &NSString::from_str(if ja { "クサガメを追加" } else { "Add Pond Turtle" }),
             Some(objc2::sel!(addPondTurtle:)),
             &NSString::from_str(""),
         );
@@ -434,7 +436,7 @@ fn make_status_item(
 
         let remove_item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Remove Last"),
+            &NSString::from_str(if ja { "最後のキャラクターを削除" } else { "Remove Last" }),
             Some(objc2::sel!(removeCharacter:)),
             &NSString::from_str(""),
         );
@@ -447,7 +449,7 @@ fn make_status_item(
 
         let settings = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Open Settings File"),
+            &NSString::from_str(if ja { "設定ファイルを開く" } else { "Open Settings File" }),
             Some(objc2::sel!(openSettingsFile:)),
             &NSString::from_str(""),
         );
@@ -458,7 +460,7 @@ fn make_status_item(
 
         let about = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("About Petit Mates"),
+            &NSString::from_str(if ja { "Petit Mates について" } else { "About Petit Mates" }),
             Some(objc2::sel!(orderFrontStandardAboutPanel:)),
             &NSString::from_str(""),
         );
@@ -467,7 +469,7 @@ fn make_status_item(
 
         let quit = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str("Quit"),
+            &NSString::from_str(if ja { "終了" } else { "Quit" }),
             Some(objc2::sel!(terminate:)),
             &NSString::from_str("q"),
         );
@@ -657,14 +659,15 @@ define_class!(
             let mt = unsafe { MainThreadMarker::new_unchecked() };
             let confirmed = unsafe {
                 let alert = NSAlert::init(NSAlert::alloc(mt));
+                let ja = APP.with(|cell| cell.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
                 let (): () = msg_send![&*alert, setMessageText:
-                    &*NSString::from_str("Remove this character?")];
+                    &*NSString::from_str(if ja { "このキャラクターを削除しますか？" } else { "Remove this character?" })];
                 let (): () = msg_send![&*alert, setInformativeText:
-                    &*NSString::from_str("The character will be removed from the desktop.")];
+                    &*NSString::from_str(if ja { "デスクトップから削除されます。" } else { "The character will be removed from the desktop." })];
                 let (): () = msg_send![&*alert,
-                    addButtonWithTitle: &*NSString::from_str("Remove")];
+                    addButtonWithTitle: &*NSString::from_str(if ja { "削除" } else { "Remove" })];
                 let (): () = msg_send![&*alert,
-                    addButtonWithTitle: &*NSString::from_str("Cancel")];
+                    addButtonWithTitle: &*NSString::from_str(if ja { "キャンセル" } else { "Cancel" })];
                 let response: isize = msg_send![&*alert, runModal];
                 response == 1000 // NSAlertFirstButtonReturn
             };
@@ -918,7 +921,11 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                 .unwrap_or_default();
             let header = format!("{} — {}{}", surface_str, state_str, dur_str);
             let outing_str = ch.behavior.outing_info(&cfg)
-                .map(|(r, t)| format!("Next outing: {:.0}s / {:.0}s", r, t))
+                .map(|(r, t)| if app.lang == "ja" {
+                    format!("次の外出: {:.0}秒 / {:.0}秒", r, t)
+                } else {
+                    format!("Next outing: {:.0}s / {:.0}s", r, t)
+                })
                 .unwrap_or_default();
 
             let targets = crate::debug_menu::trigger_targets(
@@ -995,7 +1002,10 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                 menu.addItem(&NSMenuItem::separatorItem(mt));
                 let rm = NSMenuItem::initWithTitle_action_keyEquivalent(
                     NSMenuItem::alloc(mt),
-                    &NSString::from_str("Remove This Character\u{2026}"),
+                    &NSString::from_str({
+                        let ja = APP.with(|c| c.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
+                        if ja { "このキャラクターを削除…" } else { "Remove This Character\u{2026}" }
+                    }),
                     Some(objc2::sel!(debugRemoveSelect:)),
                     &NSString::from_str(""),
                 );
@@ -1895,7 +1905,9 @@ pub fn run() {
     };
 
     let menu_handler = MenuDelegate::new(mt);
-    let status_item = make_status_item(&menu_handler, mt);
+    let lang = user_cfg.display.language.clone()
+        .unwrap_or_else(detect_system_language);
+    let status_item = make_status_item(&menu_handler, mt, &lang);
 
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();
@@ -1926,8 +1938,7 @@ pub fn run() {
             speech_cfg: user_cfg.speech,
             speech_tick: Instant::now(),
             font_size: user_cfg.display.font_size as f64,
-            lang: user_cfg.display.language.clone()
-                .unwrap_or_else(detect_system_language),
+            lang: lang,
         });
     });
 

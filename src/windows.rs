@@ -1290,7 +1290,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         .unwrap_or_default();
                     let header = format!("{} — {}{}", surface_str, state_str, dur_str);
                     let outing_str = ch.behavior.outing_info(&cfg)
-                        .map(|(r, t)| format!("Next outing: {:.0}s / {:.0}s", r, t))
+                        .map(|(r, t)| if app.lang == "ja" {
+                            format!("次の外出: {:.0}秒 / {:.0}秒", r, t)
+                        } else {
+                            format!("Next outing: {:.0}s / {:.0}s", r, t)
+                        })
                         .unwrap_or_default();
 
                     let targets = crate::debug_menu::trigger_targets(
@@ -1324,7 +1328,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 // Separator + destructive Remove item (only when more than one character).
                 if info.can_remove {
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-                    let rm_w = to_wide("Remove This Character\u{2026}");
+                    let ja = APP.with(|cell| cell.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
+                    let rm_w = to_wide(if ja { "このキャラクターを削除…" } else { "Remove This Character\u{2026}" });
                     AppendMenuW(menu, MF_STRING, IDM_DEBUG_REMOVE, rm_w.as_ptr());
                 }
                 let mut pt = POINT { x: 0, y: 0 };
@@ -1409,16 +1414,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             WM_TRAY => {
                 if (lp as u32) & 0xFFFF == WM_RBUTTONUP {
-                    let char_count = APP.with(|cell| {
-                        cell.borrow().as_ref().map(|app| app.chars.len()).unwrap_or(1)
+                    let (char_count, ja) = APP.with(|cell| {
+                        cell.borrow().as_ref()
+                            .map(|app| (app.chars.len(), app.lang == "ja"))
+                            .unwrap_or((1, false))
                     });
                     let menu       = CreatePopupMenu();
-                    let add_bd_str  = to_wide("Add Bearded Dragon");
-                    let add_pt_str  = to_wide("Add Pond Turtle");
-                    let remove_str  = to_wide("Remove Last");
-                    let about_str    = to_wide("About Petit Mates");
-                    let settings_str = to_wide("Open Settings File");
-                    let exit_str     = to_wide("Quit");
+                    let add_bd_str  = to_wide(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" });
+                    let add_pt_str  = to_wide(if ja { "クサガメを追加" } else { "Add Pond Turtle" });
+                    let remove_str  = to_wide(if ja { "最後のキャラクターを削除" } else { "Remove Last" });
+                    let about_str    = to_wide(if ja { "Petit Mates について" } else { "About Petit Mates" });
+                    let settings_str = to_wide(if ja { "設定ファイルを開く" } else { "Open Settings File" });
+                    let exit_str     = to_wide(if ja { "終了" } else { "Quit" });
                     AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
                     AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
@@ -1511,8 +1518,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         .unwrap_or((0, false, ptr::null_mut()))
                 });
                 if can && !survivor.is_null() {
-                    let msg   = to_wide("Remove this character from the desktop?");
-                    let title = to_wide("Remove Character");
+                    let ja = APP.with(|cell| cell.borrow().as_ref().map(|a| a.lang == "ja").unwrap_or(false));
+                    let msg   = to_wide(if ja { "このキャラクターをデスクトップから削除しますか？" } else { "Remove this character from the desktop?" });
+                    let title = to_wide(if ja { "キャラクターの削除" } else { "Remove Character" });
                     let result = MessageBoxW(
                         ptr::null_mut(), msg.as_ptr(), title.as_ptr(),
                         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
