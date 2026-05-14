@@ -1,0 +1,39 @@
+# Builtin speech lines for the Bearded Dragon character.
+# Layer 2 of 4 in the merge order.
+
+[[speech]]
+text_ja = "あったかいところで寝たいな"
+text_en = "I want to sleep somewhere warm."
+trigger = "random"
+weight  = 1.2
+
+[[speech]]
+text_ja = "ひなたぼっこがしたい"
+text_en = "I could really go for some basking."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "コオロギ食べたいな"
+text_en = "I could really go for some crickets right now."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "小松菜もいいな"
+text_en = "Some leafy greens sound good too."
+trigger = "random"
+weight  = 0.6
+
+[[speech]]
+text_ja = "ここはどこだろう"
+text_en = "Where am I?"
+trigger = "state"
+state   = "startup"
+
+[[speech]]
+text_ja = "よっと"
+text_en = "Here we go."
+trigger = "state"
+state   = "landing"
+duration_sec = 3.0
