@@ -820,7 +820,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let ch = &mut app.chars[drag_idx];
 
             // Sprite dimensions for foot position.
-            let sr = sprite_for_state(&ch.anim_state, ch.facing);
+            let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
             let (fw, fh) = ch.assets.image(sr.name, sr.mirror)
                 .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
                 .unwrap_or((150.0, 150.0));
@@ -1294,8 +1294,8 @@ fn tick_char(
         // current sprite; compute its center, then derive the new top-left
         // for the falling sprite so it shares that center.
         {
-            let sr_cur = sprite_for_state(&ch.anim_state, ch.facing);
-            let sr_new = sprite_for_state(&fallback, ch.facing);
+            let sr_cur = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+            let sr_new = sprite_for_state(&fallback, ch.facing, &ch.assets.animations);
             if let (Some(img_cur), Some(img_new)) = (
                 ch.assets.image(sr_cur.name, sr_cur.mirror),
                 ch.assets.image(sr_new.name, sr_new.mirror),
@@ -1316,7 +1316,7 @@ fn tick_char(
     }
 
     // Advance per-state animation timers / frame counters.
-    let elapsed = advance_anim(&mut ch.anim_state, dt, cfg);
+    let elapsed = advance_anim(&mut ch.anim_state, dt, cfg, &ch.assets.animations);
 
     // Save CG y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -1473,7 +1473,7 @@ fn tick_char(
             let progress = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
             sprite_for_turn(progress, ch.facing)
         }
-        other => sprite_for_state(other, ch.facing),
+        other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
     let sprite_sz = ch.assets.image(sr_for_ctx.name, sr_for_ctx.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
@@ -1683,7 +1683,7 @@ fn tick_char(
             let progress = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
             sprite_for_turn(progress, ch.facing)
         }
-        other => sprite_for_state(other, ch.facing),
+        other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
     swap_sprite(&ch.panel, &ch.assets, sr.name, sr.mirror, mt);
 

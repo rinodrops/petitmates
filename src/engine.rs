@@ -3,12 +3,20 @@
 //! Functions here depend only on `behavior` and `config` types and contain
 //! no platform-specific code, so they can be compiled for every target.
 
+use std::collections::HashMap;
+
 use crate::behavior::State;
 use crate::config::Config;
+use crate::manifest::AnimationDef;
 
 /// Advance per-state animation timers and frame counters by `dt` seconds.
 /// Returns the current `elapsed` value for `BehaviorContext::elapsed_secs`.
-pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
+pub fn advance_anim(
+    state: &mut State,
+    dt: f64,
+    cfg: &Config,
+    animations: &HashMap<String, AnimationDef>,
+) -> f64 {
     match state {
         State::Falling { shocked, .. } => {
             *shocked = (*shocked - dt).max(0.0);
@@ -55,20 +63,22 @@ pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
         }
 
         State::Walking { frame, frame_elapsed, .. } => {
+            let anim = animations.get("walk").cloned().unwrap_or_default();
             *frame_elapsed += dt;
             while *frame_elapsed >= cfg.floor.walk_frame_secs {
                 *frame_elapsed -= cfg.floor.walk_frame_secs;
-                *frame = (*frame + 1) % 4;
+                *frame = (*frame + 1) % anim.cycle_len();
             }
             0.0
         }
 
         State::ClimbingUp { frame, frame_elapsed, wall_frames }
         | State::ClimbingDown { frame, frame_elapsed, wall_frames } => {
+            let anim = animations.get("climb").cloned().unwrap_or_default();
             *frame_elapsed += dt;
             while *frame_elapsed >= cfg.wall.climb_frame_secs {
                 *frame_elapsed -= cfg.wall.climb_frame_secs;
-                *frame = (*frame + 1) % 4;
+                *frame = (*frame + 1) % anim.cycle_len();
                 *wall_frames = wall_frames.saturating_add(1);
             }
             0.0
