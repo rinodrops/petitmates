@@ -694,7 +694,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     if ch.drag_offset.is_some() {
         ch.last_tick = Instant::now(); // keep dt fresh so release doesn't jump
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let Some(sprite) = assets.sprite(sr.name, sr.mirror) else { return };
+        let Some(sprite) = assets.sprite(&sr.name, sr.mirror) else { return };
         let (px, py) = (ch.char_pos.0 as i32, ch.char_pos.1 as i32);
         let bgra = sprite.bgra.clone();
         unsafe { set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, 200); }
@@ -850,7 +850,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         }
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
-    let sprite_w = assets.size(sr_for_ctx.name, sr_for_ctx.mirror).0;
+    let sprite_w = assets.size(&sr_for_ctx.name, sr_for_ctx.mirror).0;
     let (surface_progress, at_edge, jump_target, attract_target) = surface_context(
         &ch.surface, ch.char_pos, sprite_w, ch.facing,
         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
@@ -1024,10 +1024,10 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
 
-    let Some(sprite) = assets.sprite(sr.name, sr.mirror) else { return };
+    let Some(sprite) = assets.sprite(&sr.name, sr.mirror) else { return };
     let (sw, sh) = (sprite.w as f64, sprite.h as f64);
 
-    let anchor         = assets.anchor(sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
+    let anchor         = assets.anchor(&sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
     let stand_anchor_y = assets.anchor("s-stand").map(|a| a.y).unwrap_or(0.0);
     let (px, py) = surface_to_screen_pos(
         &ch.surface, ch.char_pos, (sw, sh), anchor, stand_anchor_y, wins, si,
@@ -1384,7 +1384,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                 let wins = windows_wm::list_windows(&si);
                                 let assets = Rc::clone(&app.chars[i].assets);
                                 let sr   = sprite_for_state(&app.chars[i].anim_state, app.chars[i].facing, &app.chars[i].assets.animations);
-                                let (sw, sh) = assets.size(sr.name, sr.mirror);
+                                let (sw, sh) = assets.size(&sr.name, sr.mirror);
                                 let anchor_cx = app.chars[i].char_pos.0 + sw / 2.0;
                                 let anchor_cy = app.chars[i].char_pos.1 + sh;
                                 let new_surface = windows_wm::find_surface_for_drop(

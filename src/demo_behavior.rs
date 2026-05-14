@@ -421,6 +421,16 @@ impl BehaviorScript for DemoBehavior {
 
             // ── Grabbed ──────────────────────────────────────────────
             State::Grabbed => Transition::Stay,
+
+            // ── OneShot ──────────────────────────────────────────────
+            State::OneShot { done, return_to, .. } => {
+                if *done {
+                    eprintln!("[demo] oneshot done → return_to");
+                    Transition::To(*return_to.clone())
+                } else {
+                    Transition::Stay
+                }
+            }
         }
     }
 
