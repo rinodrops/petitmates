@@ -106,6 +106,7 @@ struct CharState {
     last_screen_pos: (i32, i32),
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
+    speech_engine: crate::speech::SpeechEngine,
 }
 
 struct AppState {
@@ -118,6 +119,10 @@ struct AppState {
     debug_menu_char: usize,
     /// Target states stored between menu construction and WM_COMMAND dispatch.
     debug_menu_targets: Vec<State>,
+    /// Global speech lock countdown (seconds). Prevents overlapping speech.
+    speech_lock_remaining: f64,
+    speech_cfg: crate::user_config::SpeechConfig,
+    speech_tick: Instant,
 }
 
 thread_local! {
@@ -407,7 +412,7 @@ fn surface_host_hwnd(surface: &crate::behavior::Surface) -> Option<HWND> {
 
 /// Create a new layered `HWND` and return its initial `CharState`.
 /// The window class must already be registered.
-unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig) -> CharState {
+unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig, char_name: &str) -> CharState {
     let hinstance  = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide("PetitMatesOverlay");
     let hwnd = unsafe {
@@ -438,6 +443,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         drag_offset:     None,
         last_screen_pos: (-4096, -4096),
         debug_trigger:   None,
+        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
     }
 }
 
@@ -846,6 +852,27 @@ fn tick_all() {
             app.chars[i].config.lock().unwrap().reload_if_changed();
             let cfg = app.chars[i].config.lock().unwrap().current.clone();
             tick_char(&mut app.chars[i], &cfg, &si, &wins);
+        }
+
+        // Speech trigger evaluation.
+        if app.speech_cfg.enabled {
+            let now = Instant::now();
+            let speech_dt = now.duration_since(app.speech_tick).as_secs_f64().min(0.5);
+            app.speech_tick = now;
+            app.speech_lock_remaining = (app.speech_lock_remaining - speech_dt).max(0.0);
+            let lock = app.speech_lock_remaining;
+            let lock_sec = app.speech_cfg.speech_lock_sec;
+            for i in 0..app.chars.len() {
+                let state = app.chars[i].anim_state.clone();
+                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
+                    let text = line.text_en.as_deref()
+                        .or(line.text_ja.as_deref())
+                        .unwrap_or("...");
+                    eprintln!("[speech] {}", text);
+                    app.speech_lock_remaining = lock_sec;
+                    break;
+                }
+            }
         }
 
         // Update tray tooltip with countdown info when a debug trigger is pending.
@@ -1362,8 +1389,8 @@ pub fn run() {
 
         // Create both character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
-        let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone());
-        let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone());
+        let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone(), "bearded_dragon");
+        let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone(), "pond_turtle");
         let host_hwnd  = bd_char.hwnd;
 
         APP.with(|cell| {
@@ -1375,6 +1402,9 @@ pub fn run() {
                 pt_config,
                 debug_menu_char:    0,
                 debug_menu_targets: Vec::new(),
+                speech_lock_remaining: 0.0,
+                speech_cfg: user_cfg.speech,
+                speech_tick: Instant::now(),
             });
         });
 
