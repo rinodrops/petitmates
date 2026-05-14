@@ -129,6 +129,8 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: i32,
+    /// Resolved display language: "ja" or "en".
+    lang: String,
 }
 
 thread_local! {
@@ -1063,6 +1065,45 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     ch.last_screen_pos = (px, py);
 }
 
+// ---- Language detection ----
+
+/// Detect the OS preferred UI language, returning `"ja"` or `"en"`.
+///
+/// Uses `GetUserPreferredUILanguages` and returns `"ja"` if the first
+/// language whose BCP-47 tag starts with `"ja"` appears before any English
+/// tag.  Falls back to `"en"`.
+fn detect_system_language() -> String {
+    use windows_sys::Win32::Globalization::GetUserPreferredUILanguages;
+    use windows_sys::Win32::Foundation::FALSE;
+    const MUI_LANGUAGE_NAME: u32 = 0x08;
+    unsafe {
+        let mut num_langs: u32 = 0;
+        let mut buf_size: u32  = 0;
+        // First call: get required buffer size.
+        GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME, &mut num_langs, std::ptr::null_mut(), &mut buf_size,
+        );
+        if buf_size == 0 {
+            return "en".to_owned();
+        }
+        let mut buf: Vec<u16> = vec![0u16; buf_size as usize];
+        let ok = GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME, &mut num_langs, buf.as_mut_ptr(), &mut buf_size,
+        );
+        if ok == FALSE || buf_size == 0 {
+            return "en".to_owned();
+        }
+        // Buffer is a double-null-terminated list of null-separated strings.
+        for segment in buf.split(|&c| c == 0) {
+            if segment.is_empty() { continue; }
+            let tag = String::from_utf16_lossy(segment);
+            if tag.starts_with("ja") { return "ja".to_owned(); }
+            if tag.starts_with("en") { return "en".to_owned(); }
+        }
+    }
+    "en".to_owned()
+}
+
 // ---- Tick all characters (10 Hz timer callback) ----
 
 fn tick_all() {
@@ -1125,7 +1166,7 @@ fn tick_all() {
                 let state = app.chars[i].anim_state.clone();
                 if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
                     app.speech_lock_remaining = lock_sec;
-                    if let Some(bs) = crate::speech::BubbleState::new(&line) {
+                    if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
                         // Create bubble HWND lazily.
                         if app.chars[i].bubble_hwnd.is_null() {
                             let char_hwnd = app.chars[i].hwnd;
@@ -1683,6 +1724,8 @@ pub fn run() {
                 speech_cfg: user_cfg.speech,
                 speech_tick: Instant::now(),
                 font_size: user_cfg.display.font_size as i32,
+                lang: user_cfg.display.language.clone()
+                    .unwrap_or_else(detect_system_language),
             });
         });
 

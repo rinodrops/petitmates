@@ -97,6 +97,8 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: f64,
+    /// Resolved display language: "ja" or "en".
+    lang: String,
 }
 
 thread_local! {
@@ -104,6 +106,26 @@ thread_local! {
 }
 
 // ---- Panel helpers ----
+
+/// Detect the OS preferred language, returning `"ja"` or `"en"`.
+///
+/// Checks `NSLocale.preferredLanguages` in order; returns `"ja"` when
+/// the first language whose tag starts with `"ja"` appears before any
+/// English tag.  Falls back to `"en"`.
+fn detect_system_language() -> String {
+    use objc2_foundation::NSLocale;
+    let langs = unsafe { NSLocale::preferredLanguages() };
+    for i in 0..langs.len() {
+        let tag: String = unsafe { langs.objectAtIndex(i).to_string() };
+        if tag.starts_with("ja") {
+            return "ja".to_owned();
+        }
+        if tag.starts_with("en") {
+            return "en".to_owned();
+        }
+    }
+    "en".to_owned()
+}
 
 fn make_panel(image: &NSImage, mt: MainThreadMarker) -> Retained<NSPanel> {
     let sz = unsafe { image.size() };
@@ -1725,7 +1747,7 @@ fn tick() {
                     app.speech_lock_remaining = lock_sec;
 
                     // Show bubble.
-                    if let Some(bs) = crate::speech::BubbleState::new(&line) {
+                    if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
                         let char_frame = unsafe { app.chars[i].panel.frame() };
                         let existing   = app.chars[i].bubble_panel.as_ref();
                         let panel = show_bubble(existing, &bs.text, font_sz, char_frame, &si, mt);
@@ -1862,6 +1884,8 @@ pub fn run() {
             speech_cfg: user_cfg.speech,
             speech_tick: Instant::now(),
             font_size: user_cfg.display.font_size as f64,
+            lang: user_cfg.display.language.clone()
+                .unwrap_or_else(detect_system_language),
         });
     });
 
