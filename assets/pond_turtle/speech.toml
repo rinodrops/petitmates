@@ -7,6 +7,78 @@ text_en = "I feel like getting in the water."
 trigger = "random"
 weight  = 1.2
 
+# --- seasons (random) ---
+
+[[speech]]
+text_ja = "水がぬるくなってきた気がする"
+text_en = "The water feels warmer somehow."
+trigger = "random"
+seasons = ["spring"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "そろそろ外に出たくなってきた"
+text_en = "I'm starting to feel like going outside."
+trigger = "random"
+seasons = ["spring"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんか気持ちが軽くなってきた"
+text_en = "I feel a bit lighter somehow."
+trigger = "random"
+seasons = ["spring"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "水が気持ちいい季節だな"
+text_en = "The water must feel amazing this time of year."
+trigger = "random"
+seasons = ["summer"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "甲羅干しが楽しい時期だ"
+text_en = "This is a great time for basking."
+trigger = "random"
+seasons = ["summer"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんか水が冷たくなってきた感じがする"
+text_en = "The water feels colder somehow."
+trigger = "random"
+seasons = ["autumn"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "少し眠くなってきた気がする"
+text_en = "I feel like I'm getting a bit sleepy."
+trigger = "random"
+seasons = ["autumn"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "外だったら冬眠してたかも"
+text_en = "I'd probably be hibernating if I were outside."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "眠気がとれない感じがする"
+text_en = "I can't quite shake this sleepiness."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "春まで、ぼーっとしていよう"
+text_en = "I'll just drift along until spring."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.0
+
 [[speech]]
 text_ja = "甲羅干しの時間だ"
 text_en = "Time for some shell-warming."
