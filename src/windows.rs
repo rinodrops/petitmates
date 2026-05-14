@@ -131,6 +131,8 @@ struct AppState {
     font_size: i32,
     /// Resolved display language: "ja" or "en".
     lang: String,
+    /// Shared weather cache updated by the background weather thread.
+    weather: crate::weather::WeatherHandle,
 }
 
 thread_local! {
@@ -1172,7 +1174,8 @@ fn tick_all() {
             // Check for new speech lines.
             for i in 0..app.chars.len() {
                 let state = app.chars[i].anim_state.clone();
-                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
+                let weather_info = app.weather.get();
+                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock, weather_info.as_ref()) {
                     app.speech_lock_remaining = lock_sec;
                     if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
                         // Create bubble HWND lazily.
@@ -1723,6 +1726,7 @@ pub fn run() {
 
         // Create both character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
+        let weather_handle = crate::weather::spawn(&user_cfg.weather);
         let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone(), "bearded_dragon");
         let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone(), "pond_turtle");
         let host_hwnd  = bd_char.hwnd;
@@ -1742,6 +1746,7 @@ pub fn run() {
                 font_size: user_cfg.display.font_size as i32,
                 lang: user_cfg.display.language.clone()
                     .unwrap_or_else(detect_system_language),
+                weather: weather_handle,
             });
         });
 
