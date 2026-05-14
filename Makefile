@@ -90,21 +90,29 @@ app: | $(MACOS_DIR_T) $(RES_DIR_T)
 
 .PHONY: _plist
 _plist: | $(CONTENTS_T)
-	@rm -f "$(CONTENTS)/Info.plist"
-	/usr/libexec/PlistBuddy \
-		-c "Add :CFBundleName               string $(APP_NAME)" \
-		-c "Add :CFBundleIdentifier         string $(BUNDLE_ID)" \
-		-c "Add :CFBundleExecutable         string $(EXE_NAME)" \
-		-c "Add :CFBundleVersion            string $(VERSION)" \
-		-c "Add :CFBundleShortVersionString  string $(VERSION)" \
-		-c "Add :CFBundlePackageType        string APPL" \
-		-c "Add :LSMinimumSystemVersion     string $(MIN_MACOS)" \
-		-c "Add :NSPrincipalClass           string NSApplication" \
-		-c "Add :NSHighResolutionCapable    bool   YES" \
-		-c "Add :LSUIElement                bool   YES" \
-		-c "Add :CFBundleIconFile           string AppIcon" \
-		-c "Add :NSHumanReadableCopyright   string Copyright 2026 Rino, eMotionGraphics Inc." \
-		"$(CONTENTS)/Info.plist"
+	@printf '%s\n' \
+		'<?xml version="1.0" encoding="UTF-8"?>' \
+		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+		'<plist version="1.0">' \
+		'<dict>' \
+		'	<key>CFBundleName</key><string>$(APP_NAME)</string>' \
+		'	<key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string>' \
+		'	<key>CFBundleExecutable</key><string>$(EXE_NAME)</string>' \
+		'	<key>CFBundleVersion</key><string>$(VERSION)</string>' \
+		'	<key>CFBundleShortVersionString</key><string>$(VERSION)</string>' \
+		'	<key>CFBundlePackageType</key><string>APPL</string>' \
+		'	<key>CFBundleDevelopmentRegion</key><string>en</string>' \
+		'	<key>CFBundleLocalizations</key>' \
+		'	<array><string>en</string><string>ja</string></array>' \
+		'	<key>LSMinimumSystemVersion</key><string>$(MIN_MACOS)</string>' \
+		'	<key>NSPrincipalClass</key><string>NSApplication</string>' \
+		'	<key>NSHighResolutionCapable</key><true/>' \
+		'	<key>LSUIElement</key><true/>' \
+		'	<key>CFBundleIconFile</key><string>AppIcon</string>' \
+		'	<key>NSHumanReadableCopyright</key><string>Copyright 2026 Rino, eMotionGraphics Inc.</string>' \
+		'</dict>' \
+		'</plist>' \
+		> "$(CONTENTS)/Info.plist"
 
 # -----------------------------------------------------------------------
 # App icon (skip gracefully when assets/appicon.png does not exist)
