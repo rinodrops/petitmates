@@ -1580,7 +1580,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
-                let text  = to_wide("Petit Mates\r\nVersion 0.1.0\r\n\r\nA desktop accessory by Rino, eMotionGraphics Inc.");
+                let text  = to_wide(&format!("Petit Mates\r\nVersion {}\r\n\r\nA desktop accessory by Rino, eMotionGraphics Inc.", env!("CARGO_PKG_VERSION")));
                 let title = to_wide("About Petit Mates");
                 MessageBoxW(ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONINFORMATION);
                 0
