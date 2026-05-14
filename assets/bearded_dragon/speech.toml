@@ -86,16 +86,16 @@ temp_min = 30.0
 weight  = 1.1
 
 [[speech]]
-text_ja = "晴れてるのに体が温まらない…"
-text_en = "Sunny, but I'm still not warming up..."
+text_ja = "晴れてるのに外は冷えてるのかな"
+text_en = "Sunny, but cold out there, I guess."
 trigger = "weather"
 weather = ["sunny"]
 temp_max = 14.0
 weight  = 1.0
 
 [[speech]]
-text_ja = "日差しがあってもまだ寒い"
-text_en = "There's sunlight, but it's still cold."
+text_ja = "日差しはあっても外は寒いみたい"
+text_en = "The sun's out, but it's still cold outside."
 trigger = "weather"
 weather = ["sunny"]
 temp_max = 14.0
@@ -123,16 +123,16 @@ weather = ["cloudy"]
 weight  = 0.9
 
 [[speech]]
-text_ja = "曇ってて体が冷える…"
-text_en = "It's cloudy and I'm getting cold..."
+text_ja = "曇って外が冷えてそう…ここはあたたかいけど"
+text_en = "Cold and cloudy out there... warm in here, though."
 trigger = "weather"
 weather = ["cloudy"]
 temp_max = 14.0
 weight  = 1.2
 
 [[speech]]
-text_ja = "体が動かない感じ"
-text_en = "I can barely get myself moving."
+text_ja = "外じゃ体が動かなかっただろうな"
+text_en = "I'd barely be able to move if I were out there."
 trigger = "weather"
 weather = ["cloudy"]
 temp_max = 14.0
@@ -167,53 +167,53 @@ weather = ["rainy"]
 weight  = 0.9
 
 [[speech]]
-text_ja = "冷たい雨だ…体に堪える"
-text_en = "Cold rain... it really gets to me."
+text_ja = "冷たい雨みたい…ここにいてよかった"
+text_en = "Looks like cold rain out there... glad I'm in here."
 trigger = "weather"
 weather = ["rainy"]
 temp_max = 15.0
 weight  = 1.2
 
 [[speech]]
-text_ja = "雨で体が冷えていく感じ"
-text_en = "I can feel the rain chilling me."
+text_ja = "外で雨に当たってたら体が冷えてたな"
+text_en = "I'd have been freezing if I'd been out in that rain."
 trigger = "weather"
 weather = ["rainy"]
 temp_max = 15.0
 weight  = 1.0
 
 [[speech]]
-text_ja = "寒くて動きたくない"
-text_en = "Too cold to move."
+text_ja = "外は雪かな…ここはあたたかくていいな"
+text_en = "Snow out there, maybe... it's warm in here, though."
 trigger = "weather"
 weather = ["snowy"]
 weight  = 1.2
 
 [[speech]]
-text_ja = "体が固まる感じ…"
-text_en = "I feel like I'm freezing up..."
+text_ja = "外じゃ体が固まってたかも。ここはのんびりできる"
+text_en = "I might have frozen up out there. I can relax in here."
 trigger = "weather"
 weather = ["snowy"]
 weight  = 1.1
 
 [[speech]]
-text_ja = "このままじっとしてたい"
-text_en = "I just want to stay perfectly still."
+text_ja = "外の寒さ、ここじゃ関係ないな"
+text_en = "The cold out there doesn't reach me in here."
 trigger = "weather"
 weather = ["snowy"]
 weight  = 1.0
 
 [[speech]]
-text_ja = "こんなに寒いのは苦手だ"
-text_en = "I'm really not built for this kind of cold."
+text_ja = "外はとんでもなく寒いみたい。ここにいてよかった"
+text_en = "Must be freezing out there. Really glad I'm in here."
 trigger = "weather"
 weather = ["snowy"]
 temp_max = 5.0
 weight  = 1.3
 
 [[speech]]
-text_ja = "体がまったく動かない…"
-text_en = "I can barely move at all..."
+text_ja = "外じゃとっくに動けなくなってたな。ここは大丈夫"
+text_en = "I'd have stopped moving long ago out there. I'm fine in here."
 trigger = "weather"
 weather = ["snowy"]
 temp_max = 5.0
