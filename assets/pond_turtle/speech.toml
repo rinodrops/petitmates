@@ -31,3 +31,184 @@ text_en = "Phew."
 trigger = "state"
 state   = "landing"
 duration_sec = 3.0
+
+# --- weather ---
+
+[[speech]]
+text_ja = "甲羅干し日和な気がする"
+text_en = "Feels like a good day to warm my shell."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "甲羅があたたまってくる感じ"
+text_en = "I can feel my shell warming up."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日は日当たりのいいところにいたい"
+text_en = "I want to find a sunny spot today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "日差しは嬉しいけど、水も恋しい"
+text_en = "I love the sun, but I miss the water too."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 28.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "少し暑すぎかな…水に入りたい"
+text_en = "Maybe a little too hot... I want to get in the water."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 28.0
+weight  = 0.9
+
+[[speech]]
+text_ja = "暑すぎる…水に入りたい"
+text_en = "Too hot... I want to get in the water."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 32.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "日差しはあるのに、水が冷たそう"
+text_en = "There's sun, but the water must be cold."
+trigger = "weather"
+weather = ["sunny"]
+temp_max = 15.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅は温まるけど、水が冷たそう"
+text_en = "My shell warms up, but the water must be cold."
+trigger = "weather"
+weather = ["sunny"]
+temp_max = 12.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅がなかなか温まらない"
+text_en = "My shell just won't warm up."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "もう少し日が出てくれたらいいのに"
+text_en = "I wish there was a bit more sun."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか体がシャキっとしない"
+text_en = "I feel a bit sluggish."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "川の水、冷たそうだな。ここはあたたかいけど"
+text_en = "The water must be cold out there. Warm in here, though."
+trigger = "weather"
+weather = ["cloudy"]
+temp_max = 12.0
+weight  = 1.1
+
+[[speech]]
+text_ja = "外にいたら体が重くなってたかも。ここは大丈夫"
+text_en = "I'd be sluggish if I were outside. I'm fine in here."
+trigger = "weather"
+weather = ["cloudy"]
+temp_max = 12.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "雨の音が落ち着く"
+text_en = "The sound of rain is so calming."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "水かさが増してそうだな"
+text_en = "The water level must be rising."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "雨の日も嫌いじゃない"
+text_en = "I don't mind rainy days."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "川が賑やかになってそう"
+text_en = "The river must be lively right now."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.8
+
+[[speech]]
+text_ja = "冷たい雨みたい…ここは雨も当たらないし、あたたかい"
+text_en = "Looks like cold rain out there... I'm dry and warm in here."
+trigger = "weather"
+weather = ["rainy"]
+temp_max = 12.0
+weight  = 1.1
+
+[[speech]]
+text_ja = "外で雨に当たってたら動けなくなってたかも。ここでよかった"
+text_en = "I'd be slowing way down out there. Good thing I'm in here."
+trigger = "weather"
+weather = ["rainy"]
+temp_max = 10.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "外は冬眠向きの寒さみたいだけど、ここはあたたかくて"
+text_en = "Looks like hibernation weather out there, but it's warm in here."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "外だったら冬眠してたかも。ここは起きていられる"
+text_en = "I'd probably be hibernating if I were outside. In here I can stay awake."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "外を見ると眠くなるけど、ここにいたいな"
+text_en = "Looking out there makes me sleepy, but I want to stay in here."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "川が凍りそうな寒さみたい…ここでよかった"
+text_en = "Cold enough to freeze the river out there... I'm so glad I'm in here."
+trigger = "weather"
+weather = ["snowy"]
+temp_max = 3.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "こんな日は冬眠するしかなかっただろうな。ここは大丈夫だけど"
+text_en = "I'd have no choice but to hibernate out there. I'm okay in here, though."
+trigger = "weather"
+weather = ["snowy"]
+temp_max = 3.0
+weight  = 1.1
