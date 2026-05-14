@@ -41,11 +41,32 @@ duration_sec = 3.0
 # --- hour_change ---
 
 [[speech]]
-text_ja = "日付が変わった感じがする"
-text_en = "Feels like the day has turned over."
+text_ja = "朝ごはんの時間かな"
+text_en = "Breakfast time, maybe."
 trigger = "state"
 state   = "hour_change"
-hours   = [0]
+hours   = [7]
+
+[[speech]]
+text_ja = "お昼だ。コオロギ食べたい"
+text_en = "Noon. I want some crickets."
+trigger = "state"
+state   = "hour_change"
+hours   = [12]
+
+[[speech]]
+text_ja = "夕ごはんの時間かな"
+text_en = "Dinner time, maybe."
+trigger = "state"
+state   = "hour_change"
+hours   = [18]
+
+[[speech]]
+text_ja = "こんな夜中に目が覚めてしまった感じ…"
+text_en = "Feels like I woke up in the middle of the night..."
+trigger = "state"
+state   = "hour_change"
+hours   = [2]
 
 # --- weather ---
 
