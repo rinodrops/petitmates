@@ -1,5 +1,13 @@
 canonical_width = 512
 
+[animations.walk]
+frames = 3
+mode   = "ping-pong"
+
+[animations.climb]
+frames = 3
+mode   = "ping-pong"
+
 [sprites."f-hang-corner"]
 attachment = "point"
 x = 169
