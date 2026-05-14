@@ -693,7 +693,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     // position set by WM_MOUSEMOVE.
     if ch.drag_offset.is_some() {
         ch.last_tick = Instant::now(); // keep dt fresh so release doesn't jump
-        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations); else { return };
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let Some(sprite) = assets.sprite(sr.name, sr.mirror) else { return };
         let (px, py) = (ch.char_pos.0 as i32, ch.char_pos.1 as i32);
         let bgra = sprite.bgra.clone();
         unsafe { set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, 200); }
