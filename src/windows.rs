@@ -280,40 +280,55 @@ unsafe fn render_bubble_bgra(
     );
     let old_bmp = SelectObject(hdc_mem, hbmp);
 
-    // ---- Draw bubble body (white rounded rect) ----
-    let white_brush = CreateSolidBrush(0x00FFFFFF);
-    let white_pen   = CreatePen(PS_NULL as i32, 0, 0x00FFFFFF); // no border pen
-    let old_brush   = SelectObject(hdc_mem, white_brush);
-    let old_pen     = SelectObject(hdc_mem, white_pen);
-
-    RoundRect(
-        hdc_mem,
-        0,
-        body_top_y,
-        bubble_w,
-        body_top_y + bubble_h,
-        WIN_BUBBLE_CORNER,
-        WIN_BUBBLE_CORNER,
-    );
-
-    // ---- Draw tail triangle ----
+    // ---- Draw bubble as single combined path (fill + border stroke) ----
+    // Building one closed outer contour eliminates the seam between rect and
+    // tail, and gives the tail sides a consistent border stroke.
+    //
+    // AD_CLOCKWISE: clockwise on screen (Y-down).  Each corner is a 90° CW arc.
+    // r = radius of rounded corners (WIN_BUBBLE_CORNER is the ellipse diameter).
+    let r  = WIN_BUBBLE_CORNER / 2;
     let cx = bubble_w / 2;
-    let tail_pts: [POINT; 3] = if tail_at_bottom {
-        // Tail points downward from the bottom of the body.
-        [
-            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: bubble_h },
-            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: bubble_h },
-            POINT { x: cx, y: bubble_h + WIN_BUBBLE_TAIL_H },
-        ]
+
+    // 70%-gray border pen; white fill brush.
+    let border_pen  = CreatePen(PS_SOLID as i32, 1, 0x00B3B3B3_u32);
+    let fill_brush  = CreateSolidBrush(0x00FFFFFF_u32);
+    let old_pen     = SelectObject(hdc_mem, border_pen);
+    let old_brush   = SelectObject(hdc_mem, fill_brush);
+
+    SetArcDirection(hdc_mem, AD_CLOCKWISE as i32);
+    BeginPath(hdc_mem);
+    if tail_at_bottom {
+        // Body occupies y=0..bubble_h; tail points downward (y=bubble_h..total_h).
+        MoveToEx(hdc_mem, cx + WIN_BUBBLE_TAIL_W / 2, bubble_h, ptr::null_mut());
+        LineTo(hdc_mem, bubble_w - r, bubble_h);
+        ArcTo(hdc_mem, bubble_w-2*r, bubble_h-2*r, bubble_w,   bubble_h,   bubble_w-r, bubble_h,   bubble_w,   bubble_h-r);
+        LineTo(hdc_mem, bubble_w, r);
+        ArcTo(hdc_mem, bubble_w-2*r, 0,           bubble_w,   2*r,        bubble_w,   r,           bubble_w-r, 0);
+        LineTo(hdc_mem, r, 0);
+        ArcTo(hdc_mem, 0,          0,             2*r,        2*r,        r,          0,           0,          r);
+        LineTo(hdc_mem, 0, bubble_h - r);
+        ArcTo(hdc_mem, 0,          bubble_h-2*r, 2*r,        bubble_h,   0,          bubble_h-r,  r,          bubble_h);
+        LineTo(hdc_mem, cx - WIN_BUBBLE_TAIL_W / 2, bubble_h);
+        LineTo(hdc_mem, cx, total_h); // tail tip
+        CloseFigure(hdc_mem);
     } else {
-        // Tail points upward from the top of the body.
-        [
-            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H },
-            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H },
-            POINT { x: cx, y: 0 },
-        ]
-    };
-    Polygon(hdc_mem, tail_pts.as_ptr(), 3);
+        // Body occupies y=WIN_BUBBLE_TAIL_H..total_h; tail points upward (y=0..tail_h).
+        let ty = WIN_BUBBLE_TAIL_H;
+        MoveToEx(hdc_mem, cx + WIN_BUBBLE_TAIL_W / 2, ty, ptr::null_mut());
+        LineTo(hdc_mem, bubble_w - r, ty);
+        ArcTo(hdc_mem, bubble_w-2*r, ty,            bubble_w,   ty+2*r,     bubble_w-r, ty,          bubble_w,   ty+r);
+        LineTo(hdc_mem, bubble_w, total_h - r);
+        ArcTo(hdc_mem, bubble_w-2*r, total_h-2*r,   bubble_w,   total_h,    bubble_w,   total_h-r,   bubble_w-r, total_h);
+        LineTo(hdc_mem, r, total_h);
+        ArcTo(hdc_mem, 0,          total_h-2*r,     2*r,        total_h,    r,          total_h,     0,          total_h-r);
+        LineTo(hdc_mem, 0, ty + r);
+        ArcTo(hdc_mem, 0,          ty,              2*r,        ty+2*r,     0,          ty+r,        r,          ty);
+        LineTo(hdc_mem, cx - WIN_BUBBLE_TAIL_W / 2, ty);
+        LineTo(hdc_mem, cx, 0); // tail tip
+        CloseFigure(hdc_mem);
+    }
+    EndPath(hdc_mem);
+    StrokeAndFillPath(hdc_mem);
 
     // ---- Draw text ----
     let dark_text_color = 0x00333333u32;
@@ -350,8 +365,8 @@ unsafe fn render_bubble_bgra(
     SelectObject(hdc_mem, old_font);
     SelectObject(hdc_mem, old_bmp);
     DeleteObject(hbmp);
-    DeleteObject(white_brush as *mut _);
-    DeleteObject(white_pen as *mut _);
+    DeleteObject(fill_brush as *mut _);
+    DeleteObject(border_pen as *mut _);
     DeleteObject(hfont as *mut _);
     DeleteDC(hdc_mem);
     ReleaseDC(ptr::null_mut(), hdc_screen);
