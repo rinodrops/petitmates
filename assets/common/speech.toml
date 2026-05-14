@@ -55,3 +55,82 @@ text_en = "Staying up this late isn't good for you."
 trigger = "time"
 hours   = [0, 1, 2, 3]
 weight  = 0.8
+
+# --- weather ---
+
+[[speech]]
+text_ja = "光がまぶしい感じがする"
+text_en = "The light feels so bright."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか空が明るい"
+text_en = "The sky seems unusually bright today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "影が濃い感じがする"
+text_en = "The shadows look sharp today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんか薄暗い気がする"
+text_en = "It feels dimmer than usual."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "空が重たい感じ"
+text_en = "The sky looks heavy."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "空気が湿っぽい感じがする"
+text_en = "The air feels damp."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "土が濡れてそうだな"
+text_en = "The ground must be wet out there."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "水たまりができてそう"
+text_en = "There are probably puddles everywhere."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.8
+
+[[speech]]
+text_ja = "外が白い気がする"
+text_en = "It looks white out there."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "音が静かな感じがする"
+text_en = "Everything sounds so quiet."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "空気がつんとする感じ"
+text_en = "The air feels sharp and cold."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 0.8
