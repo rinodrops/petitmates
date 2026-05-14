@@ -91,6 +91,530 @@ text_en = "I just want to take it slow today."
 trigger = "random"
 weight  = 0.8
 
+# --- water ---
+
+[[speech]]
+text_ja = "水の音が聞こえそうな気がする"
+text_en = "I feel like I can almost hear water."
+trigger = "random"
+weight  = 1.2
+
+[[speech]]
+text_ja = "川に行きたいな"
+text_en = "I want to go to a river."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "水に潜ってみたい"
+text_en = "I want to dive in."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "池のことを思い出した"
+text_en = "I just thought of a pond."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "水面が光ってそうだな"
+text_en = "The water surface must be sparkling right now."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "水草の匂いがしそうな気がする"
+text_en = "I feel like I can almost smell water plants."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "川底って気持ちいいんだよな"
+text_en = "The river bottom always feels nice."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "水に浮かんでみたい"
+text_en = "I want to float in water."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ちょろちょろ流れる音が落ち着く"
+text_en = "The sound of a gentle stream is calming."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "流れがある場所がいいな"
+text_en = "I like places with flowing water."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "水ってなんであんなに気持ちいいんだろう"
+text_en = "Why does water feel so good?"
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "水の中で目を開けてみたいな"
+text_en = "I want to open my eyes underwater."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "今頃、池の水はどのくらいの温度かな"
+text_en = "I wonder what temperature the pond is right now."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "水辺って、なんか特別な感じがする"
+text_en = "There's something special about being near water."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "川って、どこまで続いてるんだろう"
+text_en = "I wonder how far a river goes."
+trigger = "random"
+weight  = 0.7
+
+# --- shell and basking ---
+
+[[speech]]
+text_ja = "甲羅、もう少し温めたい"
+text_en = "I want to warm my shell a little more."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅が日に当たると落ち着く"
+text_en = "My shell feels at ease in the sun."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "石の上で甲羅干し、したいな"
+text_en = "I want to bask on a warm rock."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "甲羅って、持って生まれたおふとんみたいなものかな"
+text_en = "Maybe my shell is like a blanket I was born with."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "甲羅の中って、安心するんだよな"
+text_en = "It's so reassuring inside my shell."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅干しって、最高だな"
+text_en = "Basking is just the best."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅ってどんな模様してるんだろう、自分の"
+text_en = "I wonder what pattern my own shell has."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "甲羅があって、よかったな"
+text_en = "I'm glad I have a shell."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ここは日当たりがいい気がする"
+text_en = "This spot feels sunny."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "甲羅って、脱げないんだけど、それでいいかな"
+text_en = "I can't take off my shell, but I think that's okay."
+trigger = "random"
+weight  = 0.8
+
+# --- observation ---
+
+[[speech]]
+text_ja = "あれ、なんか気になるな…"
+text_en = "Hmm, something caught my attention..."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "静かに見てると、いろんなことが見えてくる"
+text_en = "When you watch quietly, you notice a lot."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか動いた気がした"
+text_en = "I thought I saw something move."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "よく見てみると、きれいだな"
+text_en = "When you look closely, it's beautiful."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "空気の匂いが変わった気がする"
+text_en = "The air smells a little different."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "じっとしてると、いろいろ分かってくる"
+text_en = "Staying still, you figure out a lot."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "さっきと何か違う気がするな"
+text_en = "Something feels different from before."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "見てると飽きないな"
+text_en = "I could watch this forever."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "そういえば、ずっと気になってたことがある"
+text_en = "Actually, there's been something on my mind."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "なんか気配がした"
+text_en = "I sensed something."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "ゆっくり近づいてみようかな"
+text_en = "Maybe I'll slowly get a little closer."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "なんでもないかな、やっぱり"
+text_en = "It's probably nothing after all."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "観察するのって、楽しいんだよな"
+text_en = "Watching things is actually fun."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "何かが変わった気がするけど、何だろう"
+text_en = "Something changed, but I can't tell what."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんか音がした気がする"
+text_en = "I thought I heard something."
+trigger = "random"
+weight  = 0.8
+
+# --- futon and drowsiness ---
+
+[[speech]]
+text_ja = "おふとんで丸まりたい"
+text_en = "I want to curl up in a warm futon."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "丸くなって寝たいな"
+text_en = "I want to curl up and sleep."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ぬくぬくしたい"
+text_en = "I want to be all cozy and warm."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "そっとしておいてほしいな"
+text_en = "I just want to be left in peace."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "もう少し眠っていたいな"
+text_en = "I want to sleep a little longer."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日はもう寝てもいいかな"
+text_en = "Maybe it's okay to just sleep for the rest of today."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "ふかふかのところで寝たい"
+text_en = "I want to sleep somewhere soft."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんかうとうとしてきた"
+text_en = "I'm starting to drift off."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "眠くなってきたかも"
+text_en = "I might be getting sleepy."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "甲羅の中でうとうとするのが好きだな"
+text_en = "I love dozing off inside my shell."
+trigger = "random"
+weight  = 0.9
+
+# --- stillness and peace ---
+
+[[speech]]
+text_ja = "静かな時間が好きだな"
+text_en = "I love quiet moments."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "こういう静けさが落ち着く"
+text_en = "This kind of stillness calms me."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "何もしない時間も、大事かな"
+text_en = "Time for doing nothing might be important too."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんか心が落ち着いてる"
+text_en = "My heart feels calm."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "しずかしずか"
+text_en = "So quiet."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "こういう日が好きだな"
+text_en = "I like days like this."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ゆっくりしてていいんだよね"
+text_en = "It's okay to take my time, right?"
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ここにいると落ち着く"
+text_en = "Being here calms me down."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日はどこにも行かなくていいな"
+text_en = "I don't need to go anywhere today."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "急いでも、どこにも着かないんだよな"
+text_en = "Even if I hurried, I wouldn't get anywhere."
+trigger = "random"
+weight  = 0.8
+
+# --- lighthearted ---
+
+[[speech]]
+text_ja = "カメって言葉、なんかいい響きだな"
+text_en = "The word 'turtle' has a nice sound to it."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "川の名前って、誰がつけたんだろう"
+text_en = "Who names rivers, I wonder."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "水って、何でできてるんだろう"
+text_en = "What is water made of, I wonder."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "のんびりしすぎたかな。…いや、これくらいがちょうどいい"
+text_en = "Maybe I'm too relaxed... no, this is just right."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "呼んだ？"
+text_en = "Did you call me?"
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "今日もいてくれてありがとう"
+text_en = "Thanks for being here today too."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "ずっとここにいていいのかな"
+text_en = "Is it really okay if I stay here forever?"
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "なんで空は青いんだろう。関係ないけど"
+text_en = "Why is the sky blue? Not that it matters."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "ぼーっとするの、得意なんだよな"
+text_en = "I'm pretty good at spacing out."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "そういえば、今日は何日だっけ"
+text_en = "Come to think of it, what's today's date?"
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "時間ってながいな"
+text_en = "Time sure is long."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "生きてるって、なんかすごいな"
+text_en = "Being alive is kind of amazing."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ねーねー"
+text_en = "Hey."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "カメのくせに、夢は大きいんだよな"
+text_en = "For a turtle, I have pretty big dreams."
+trigger = "random"
+weight  = 0.7
+
+[[speech]]
+text_ja = "なんかいい一日だな、と思ってた"
+text_en = "I was just thinking, this is a pretty good day."
+trigger = "random"
+weight  = 0.9
+
+# --- simple thoughts ---
+
+[[speech]]
+text_ja = "なんか今日は穏やかな気がする"
+text_en = "It feels peaceful today somehow."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "特に急ぐこともないな"
+text_en = "There's nothing to rush about."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ふと、空の色が気になった"
+text_en = "I suddenly wondered about the color of the sky."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "これからどうなるかな、とか考えてた"
+text_en = "I was thinking about what comes next."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "今日も、ここにいる"
+text_en = "Today too, I'm here."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんかいいな、こういうの"
+text_en = "I kind of love this."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "このままでいいな"
+text_en = "I'm happy staying like this."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "ここが好きだな"
+text_en = "I love it here."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なにも起きない一日も、悪くないな"
+text_en = "A day where nothing happens isn't bad at all."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "生きてるって感じがする"
+text_en = "I feel alive."
+trigger = "random"
+weight  = 0.9
+
 [[speech]]
 text_ja = "ここはどこだろう"
 text_en = "Where am I?"
