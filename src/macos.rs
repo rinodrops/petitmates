@@ -208,7 +208,8 @@ fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retain
         let mas_cls = AnyClass::get(c"NSMutableAttributedString").unwrap();
         let ms: *mut AnyObject = msg_send![mas_cls, alloc];
         let ms: *mut AnyObject = msg_send![ms, initWithString: &*ns_text];
-        let full_range = objc2_foundation::NSRange::new(0, ns_text.len());
+        // NSRange expects UTF-16 code unit count, not UTF-8 byte count.
+        let full_range = objc2_foundation::NSRange::new(0, ns_text.len_utf16());
         let _: () = msg_send![ms, setAttributes: attrs range: full_range];
 
         // Measure text.
