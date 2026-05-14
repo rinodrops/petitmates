@@ -1,6 +1,60 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+// ── Animation definitions ─────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimMode {
+    Loop,
+    PingPong,
+    Once,
+}
+
+impl Default for AnimMode {
+    fn default() -> Self { AnimMode::PingPong }
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct AnimationDef {
+    pub frames: u8,
+    #[serde(default)]
+    pub mode: AnimMode,
+}
+
+impl Default for AnimationDef {
+    fn default() -> Self { AnimationDef { frames: 3, mode: AnimMode::PingPong } }
+}
+
+impl AnimationDef {
+    /// Total number of ticks in one full animation cycle.
+    pub fn cycle_len(&self) -> u8 {
+        match self.mode {
+            AnimMode::Loop | AnimMode::Once => self.frames.max(1),
+            AnimMode::PingPong => {
+                if self.frames <= 1 { 1 } else { 2 * (self.frames - 1) }
+            }
+        }
+    }
+
+    /// Convert a tick counter (0..cycle_len) to a sprite index (0..frames).
+    pub fn sprite_index(&self, tick: u8) -> u8 {
+        match self.mode {
+            AnimMode::Loop => tick % self.frames.max(1),
+            AnimMode::Once => tick.min(self.frames.saturating_sub(1)),
+            AnimMode::PingPong => {
+                let n = self.frames;
+                if n <= 1 { return 0; }
+                let period = 2 * (n - 1);
+                let t = tick % period;
+                if t < n { t } else { period - t }
+            }
+        }
+    }
+}
+
+// ── Sprite attachment types ───────────────────────────────────────────────────
+
 /// Sprite attachment types for anchor-point calculation.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -26,16 +80,24 @@ pub struct Manifest {
     pub canonical_width: f64,
     #[serde(default)]
     pub sprites: HashMap<String, SpriteInfo>,
+    #[serde(default)]
+    pub animations: HashMap<String, AnimationDef>,
 }
 
-#[allow(dead_code)]
+impl Manifest {
+    /// Returns the `AnimationDef` for `name`, falling back to the default
+    /// (3 frames, ping-pong) when the animation is not defined in the manifest.
+    pub fn anim(&self, name: &str) -> AnimationDef {
+        self.animations.get(name).cloned().unwrap_or_default()
+    }
+}
+
 pub fn load(char_dir: &Path) -> Option<Manifest> {
     let text = std::fs::read_to_string(char_dir.join("manifest.toml")).ok()?;
     toml::from_str(&text).ok()
 }
 
 /// Parse a `Manifest` from raw TOML bytes (used for embedded assets on Windows).
-#[allow(dead_code)]
 pub fn load_from_bytes(bytes: &[u8]) -> Option<Manifest> {
     let text = std::str::from_utf8(bytes).ok()?;
     toml::from_str(text).ok()
