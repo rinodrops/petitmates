@@ -284,7 +284,11 @@ unsafe fn render_bubble_bgra(
     // Building one closed outer contour eliminates the seam between rect and
     // tail, and gives the tail sides a consistent border stroke.
     //
-    // AD_CLOCKWISE: clockwise on screen (Y-down).  Each corner is a 90° CW arc.
+    // The two branches trace in opposite winding directions in screen (Y-down)
+    // coords, so each branch sets its own arc direction before BeginPath:
+    //   tail_at_bottom: path goes CCW → convex corners need AD_COUNTERCLOCKWISE
+    //   tail_at_top:    path goes CW  → convex corners need AD_CLOCKWISE
+    //
     // r = radius of rounded corners (WIN_BUBBLE_CORNER is the ellipse diameter).
     let r  = WIN_BUBBLE_CORNER / 2;
     let cx = bubble_w / 2;
@@ -295,10 +299,11 @@ unsafe fn render_bubble_bgra(
     let old_pen     = SelectObject(hdc_mem, border_pen);
     let old_brush   = SelectObject(hdc_mem, fill_brush);
 
-    SetArcDirection(hdc_mem, AD_CLOCKWISE as i32);
     BeginPath(hdc_mem);
     if tail_at_bottom {
         // Body occupies y=0..bubble_h; tail points downward (y=bubble_h..total_h).
+        // Path traces CCW → convex corners need CCW arcs.
+        SetArcDirection(hdc_mem, AD_COUNTERCLOCKWISE as i32);
         MoveToEx(hdc_mem, cx + WIN_BUBBLE_TAIL_W / 2, bubble_h, ptr::null_mut());
         LineTo(hdc_mem, bubble_w - r, bubble_h);
         ArcTo(hdc_mem, bubble_w-2*r, bubble_h-2*r, bubble_w,   bubble_h,   bubble_w-r, bubble_h,   bubble_w,   bubble_h-r);
@@ -313,6 +318,8 @@ unsafe fn render_bubble_bgra(
         CloseFigure(hdc_mem);
     } else {
         // Body occupies y=WIN_BUBBLE_TAIL_H..total_h; tail points upward (y=0..tail_h).
+        // Path traces CW → convex corners need CW arcs.
+        SetArcDirection(hdc_mem, AD_CLOCKWISE as i32);
         let ty = WIN_BUBBLE_TAIL_H;
         MoveToEx(hdc_mem, cx + WIN_BUBBLE_TAIL_W / 2, ty, ptr::null_mut());
         LineTo(hdc_mem, bubble_w - r, ty);
