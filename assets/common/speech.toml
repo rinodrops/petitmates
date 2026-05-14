@@ -11,6 +11,50 @@ text_en = "Feeling pretty lazy today..."
 trigger = "random"
 weight  = 1.0
 
+# --- weekday (random) ---
+
+[[speech]]
+text_ja = "なんか今日は気合いが必要な感じがする"
+text_en = "Feels like today calls for some extra energy."
+trigger = "random"
+weekdays = ["Mon"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "一週間が始まった感じ"
+text_en = "Feels like the week is just starting."
+trigger = "random"
+weekdays = ["Mon"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "週末が近い感じがする"
+text_en = "I can feel the weekend getting close."
+trigger = "random"
+weekdays = ["Fri"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "今日はなんかいい予感がする"
+text_en = "I have a good feeling about today."
+trigger = "random"
+weekdays = ["Fri"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日はのんびりできそうな気がする"
+text_en = "I feel like today is for taking it easy."
+trigger = "random"
+weekdays = ["Sat", "Sun"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんかゆったりした空気がする"
+text_en = "The air feels relaxed today."
+trigger = "random"
+weekdays = ["Sat", "Sun"]
+weight  = 1.0
+
 [[speech]]
 text_ja = "ちょっと眠い"
 text_en = "A bit sleepy..."
