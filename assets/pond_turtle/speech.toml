@@ -35,11 +35,32 @@ duration_sec = 3.0
 # --- hour_change ---
 
 [[speech]]
-text_ja = "日付が変わった感じがする"
-text_en = "Feels like the day has turned over."
+text_ja = "丑三つ時だ…"
+text_en = "The witching hour..."
 trigger = "state"
 state   = "hour_change"
-hours   = [0]
+hours   = [2]
+
+[[speech]]
+text_ja = "こんな時間に起きてるのはお化けかカメか"
+text_en = "Who's up at this hour — a ghost or a turtle?"
+trigger = "state"
+state   = "hour_change"
+hours   = [3]
+
+[[speech]]
+text_ja = "川が目を覚ます時間かな"
+text_en = "The river must be waking up about now."
+trigger = "state"
+state   = "hour_change"
+hours   = [6]
+
+[[speech]]
+text_ja = "甲羅干しのいい時間だな"
+text_en = "Good time to warm my shell."
+trigger = "state"
+state   = "hour_change"
+hours   = [12]
 
 # --- weather ---
 
