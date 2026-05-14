@@ -99,6 +99,8 @@ struct AppState {
     font_size: f64,
     /// Resolved display language: "ja" or "en".
     lang: String,
+    /// Shared weather cache updated by the background weather thread.
+    weather: crate::weather::WeatherHandle,
 }
 
 thread_local! {
@@ -1793,9 +1795,10 @@ fn tick() {
             }
 
             // Check for new speech lines.
+            let weather_info = app.weather.get();
             for i in 0..app.chars.len() {
                 let state = app.chars[i].anim_state.clone();
-                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
+                if let Some(line) = app.chars[i].speech_engine.tick(&state, lock, weather_info.as_ref()) {
                     app.speech_lock_remaining = lock_sec;
 
                     // Show bubble.
@@ -1904,6 +1907,8 @@ pub fn run() {
         ]
     };
 
+    let weather_handle = crate::weather::spawn(&user_cfg.weather);
+
     let menu_handler = MenuDelegate::new(mt);
     let lang = user_cfg.display.language.clone()
         .unwrap_or_else(detect_system_language);
@@ -1939,6 +1944,7 @@ pub fn run() {
             speech_tick: Instant::now(),
             font_size: user_cfg.display.font_size as f64,
             lang: lang,
+            weather: weather_handle,
         });
     });
 

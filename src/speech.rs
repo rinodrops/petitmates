@@ -247,7 +247,15 @@ impl SpeechEngine {
     ///
     /// `lock_remaining`: global speech lock countdown (seconds). When > 0 the
     /// random/time triggers are suppressed; state triggers still fire.
-    pub fn tick(&mut self, state: &State, lock_remaining: f64) -> Option<SpeechLine> {
+    ///
+    /// `weather`: latest weather snapshot from `WeatherHandle::get()`, or `None`
+    /// if weather fetching is disabled / not yet available.
+    pub fn tick(
+        &mut self,
+        state: &State,
+        lock_remaining: f64,
+        weather: Option<&crate::weather::WeatherInfo>,
+    ) -> Option<SpeechLine> {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f64().min(0.5);
         self.last_tick = now;
@@ -276,7 +284,7 @@ impl SpeechEngine {
         }
         self.random_timer = 0.0;
         self.next_random_interval = 45.0 + self.rng.random::<f64>() * 45.0;
-        self.pick_random_or_time()
+        self.pick_random_or_time(weather)
     }
 
     fn pick_state(&mut self, trigger_name: &str) -> Option<SpeechLine> {
@@ -293,7 +301,7 @@ impl SpeechEngine {
         Some(self.make_line(candidates[idx]))
     }
 
-    fn pick_random_or_time(&mut self) -> Option<SpeechLine> {
+    fn pick_random_or_time(&mut self, weather: Option<&crate::weather::WeatherInfo>) -> Option<SpeechLine> {
         let (hour, weekday, month, season) = current_time_info();
         let candidates: Vec<(&SpeechEntry, f64)> = self.data.entries.iter()
             .filter_map(|e| match e.trigger {
@@ -302,6 +310,18 @@ impl SpeechEngine {
                     if time_matches(e, hour, &weekday, month, &season) {
                         Some((e, e.weight))
                     } else {
+                        None
+                    }
+                }
+                TriggerKind::Weather => {
+                    if let Some(w) = weather {
+                        if weather_matches(e, w) {
+                            Some((e, e.weight))
+                        } else {
+                            None
+                        }
+                    } else {
+                        // No weather data available — suppress weather triggers.
                         None
                     }
                 }
@@ -377,6 +397,26 @@ fn time_matches(entry: &SpeechEntry, hour: u8, weekday: &str, month: u8, season:
     }
     if let Some(seasons) = &entry.seasons {
         if !seasons.iter().any(|s| s == season) {
+            return false;
+        }
+    }
+    true
+}
+
+fn weather_matches(entry: &SpeechEntry, info: &crate::weather::WeatherInfo) -> bool {
+    if let Some(cats) = &entry.weather {
+        let cat_str = info.category.as_str();
+        if !cats.iter().any(|c| c == cat_str) {
+            return false;
+        }
+    }
+    if let Some(max) = entry.temp_max {
+        if info.temp_c > max {
+            return false;
+        }
+    }
+    if let Some(min) = entry.temp_min {
+        if info.temp_c < min {
             return false;
         }
     }
