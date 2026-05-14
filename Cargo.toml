@@ -21,14 +21,17 @@ objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", features = [
     "NSAnimationContext",
     "NSApplication",
+    "NSBezierPath",
     "NSButton",
     "NSColor",
     "NSEvent",
+    "NSFont",
     "NSImage",
     "NSImageView",
     "NSMenu",
     "NSMenuItem",
     "NSPanel",
+    "NSParagraphStyle",
     "NSRunningApplication",
     "NSScreen",
     "NSStatusBar",
@@ -39,6 +42,7 @@ objc2-app-kit = { version = "0.3.2", features = [
 ] }
 objc2-foundation = { version = "0.3.2", features = [
     "NSArray",
+    "NSAttributedString",
     "NSBundle",
     "NSDictionary",
     "NSFileManager",

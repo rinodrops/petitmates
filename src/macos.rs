@@ -10,15 +10,15 @@ use std::time::Instant;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, ClassType, MainThreadOnly};
+use objc2::{define_class, msg_send, AnyThread, ClassType, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
-    NSEventMask, NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSPanel,
-    NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBezierPath,
+    NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop,
-    NSRunLoopMode, NSString, NSTimer,
+    MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSRunLoop, NSRunLoopMode, NSSize, NSString, NSTimer,
 };
 
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
@@ -68,6 +68,10 @@ struct CharState {
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
     speech_engine: crate::speech::SpeechEngine,
+    /// Active speech bubble state; None when no bubble is shown.
+    bubble_state: Option<crate::speech::BubbleState>,
+    /// The transparent NSPanel that renders the speech bubble; None when hidden.
+    bubble_panel: Option<Retained<NSPanel>>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -91,6 +95,8 @@ struct AppState {
     speech_lock_remaining: f64,
     speech_cfg: crate::user_config::SpeechConfig,
     speech_tick: Instant,
+    /// Font size for speech bubbles (from user.toml).
+    font_size: f64,
 }
 
 thread_local! {
@@ -139,6 +145,184 @@ fn swap_sprite(
             // does not autoresize to the old panel dimensions.
             panel.setContentSize(sz);
             panel.setContentView(Some(&*make_image_view(img, mt)));
+        }
+    }
+}
+
+// ---- Speech bubble rendering ----
+
+const BUBBLE_PADDING: f64 = 12.0;
+const BUBBLE_CORNER:  f64 = 8.0;
+const BUBBLE_TAIL_H:  f64 = 10.0;
+const BUBBLE_TAIL_W:  f64 = 14.0;
+const BUBBLE_MAX_W:   f64 = 240.0;
+const BUBBLE_MIN_W:   f64 = 60.0;
+const BUBBLE_MARGIN:  f64 = 8.0;
+
+/// Render speech text into an `NSImage` shaped as a rounded-rect speech bubble.
+///
+/// `tail_at_bottom` — the tail points downward when the bubble sits *above* the
+/// character and upward when it sits *below*.
+fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retained<NSImage> {
+    unsafe {
+        use objc2::runtime::AnyClass;
+
+        let ns_text = NSString::from_str(text);
+        let font    = NSFont::systemFontOfSize(font_size);
+        // NSMutableParagraphStyle: word-wrap mode
+        let para_cls = AnyClass::get(c"NSMutableParagraphStyle").unwrap();
+        let para: *mut AnyObject = msg_send![para_cls, new];
+        let _: () = msg_send![para, setLineBreakMode: 0u64]; // NSLineBreakByWordWrapping = 0
+        let text_color = NSColor::colorWithWhite_alpha(0.15, 1.0);
+
+        // Build NSDictionary of text attributes via msg_send.
+        let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
+        let attrs: *mut AnyObject = msg_send![dict_cls, new];
+        let _: () = msg_send![attrs, setObject: &*font       forKey: &*NSString::from_str("NSFont")];
+        let _: () = msg_send![attrs, setObject: para         forKey: &*NSString::from_str("NSParagraphStyle")];
+        let _: () = msg_send![attrs, setObject: &*text_color forKey: &*NSString::from_str("NSForegroundColor")];
+
+        // Build NSMutableAttributedString.
+        let mas_cls = AnyClass::get(c"NSMutableAttributedString").unwrap();
+        let ms: *mut AnyObject = msg_send![mas_cls, alloc];
+        let ms: *mut AnyObject = msg_send![ms, initWithString: &*ns_text];
+        let full_range = objc2_foundation::NSRange::new(0, ns_text.len());
+        let _: () = msg_send![ms, setAttributes: attrs range: full_range];
+
+        // Measure text.
+        let constraint = NSSize::new(BUBBLE_MAX_W - BUBBLE_PADDING * 2.0, 1000.0);
+        let bounds: NSRect = msg_send![
+            ms,
+            boundingRectWithSize: constraint
+            options: 1u64
+            context: std::ptr::null_mut::<AnyObject>()
+        ];
+        let text_w = bounds.size.width.ceil();
+        let text_h = bounds.size.height.ceil();
+
+        let bubble_w = (text_w + BUBBLE_PADDING * 2.0).max(BUBBLE_MIN_W);
+        let bubble_h = text_h + BUBBLE_PADDING * 2.0;
+        let total_h  = bubble_h + BUBBLE_TAIL_H;
+
+        // Y origin of the body in the image (NS coords = Y-up from bottom).
+        let body_y   = if tail_at_bottom { BUBBLE_TAIL_H } else { 0.0 };
+        let body_rect = NSRect::new(
+            NSPoint::new(0.0, body_y),
+            NSSize::new(bubble_w, bubble_h),
+        );
+
+        let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(bubble_w, total_h));
+        img.lockFocus();
+
+        // Rounded rect body.
+        let bg = NSColor::colorWithWhite_alpha(1.0, 0.93);
+        bg.setFill();
+        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+            body_rect, BUBBLE_CORNER, BUBBLE_CORNER,
+        );
+        path.fill();
+
+        // Subtle border.
+        NSColor::colorWithWhite_alpha(0.70, 0.7).setStroke();
+        path.setLineWidth(0.5);
+        path.stroke();
+
+        // Tail triangle.
+        let cx = bubble_w / 2.0;
+        let tail_path = NSBezierPath::bezierPath();
+        if tail_at_bottom {
+            tail_path.moveToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
+            tail_path.lineToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
+            tail_path.lineToPoint(NSPoint::new(cx, 0.0));
+        } else {
+            let top = bubble_h;
+            tail_path.moveToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, top));
+            tail_path.lineToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, top));
+            tail_path.lineToPoint(NSPoint::new(cx, top + BUBBLE_TAIL_H));
+        }
+        tail_path.closePath();
+        bg.setFill();
+        tail_path.fill();
+
+        // Text.
+        let text_rect = NSRect::new(
+            NSPoint::new(
+                (bubble_w - text_w) / 2.0,
+                body_y + (bubble_h - text_h) / 2.0,
+            ),
+            NSSize::new(text_w, text_h),
+        );
+        let _: () = msg_send![
+            ms,
+            drawWithRect: text_rect
+            options: 1u64
+            context: std::ptr::null_mut::<AnyObject>()
+        ];
+
+        img.unlockFocus();
+        img
+    }
+}
+
+/// Create or update the speech-bubble `NSPanel` for a character.
+///
+/// `char_ns_frame` — the character panel's frame in NS (Cocoa) screen coords.
+fn show_bubble(
+    existing: Option<&Retained<NSPanel>>,
+    text: &str,
+    font_size: f64,
+    char_ns_frame: NSRect,
+    si: &ScreenInfo,
+    mt: MainThreadMarker,
+) -> Retained<NSPanel> {
+    // Choose placement: above the character if space allows, else below.
+    let est_h = 60.0 + BUBBLE_TAIL_H;
+    let tail_at_bottom =
+        char_ns_frame.origin.y + char_ns_frame.size.height + est_h + BUBBLE_MARGIN < si.height;
+
+    let img    = make_bubble_image(text, tail_at_bottom, font_size);
+    let img_sz = unsafe { img.size() };
+
+    let cx       = char_ns_frame.origin.x + char_ns_frame.size.width / 2.0;
+    let bubble_x = (cx - img_sz.width / 2.0).max(0.0).min(si.width - img_sz.width);
+    let bubble_y = if tail_at_bottom {
+        char_ns_frame.origin.y + char_ns_frame.size.height + BUBBLE_MARGIN
+    } else {
+        char_ns_frame.origin.y - img_sz.height - BUBBLE_MARGIN
+    };
+
+    let origin = NSPoint::new(bubble_x, bubble_y);
+
+    if let Some(p) = existing {
+        unsafe {
+            p.setContentSize(img_sz);
+            p.setContentView(Some(&*make_image_view(&img, mt)));
+            p.setFrameOrigin(origin);
+        }
+        p.clone()
+    } else {
+        unsafe {
+            let p = NSPanel::initWithContentRect_styleMask_backing_defer(
+                NSPanel::alloc(mt),
+                NSRect::new(origin, img_sz),
+                NSWindowStyleMask::from_bits_retain(128),
+                NSBackingStoreType::Buffered,
+                false,
+            );
+            p.setBackgroundColor(Some(&NSColor::clearColor()));
+            p.setOpaque(false);
+            p.setHasShadow(false);
+            // Level 1 = floating above normal windows.
+            p.setLevel(1);
+            p.setCollectionBehavior(
+                NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary,
+            );
+            p.setIgnoresMouseEvents(true);
+            p.setAlphaValue(1.0);
+            p.setContentView(Some(&*make_image_view(&img, mt)));
+            p.orderFront(None);
+            p
         }
     }
 }
@@ -308,6 +492,8 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         drag_offset: None,
         debug_trigger: None,
         speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        bubble_state: None,
+        bubble_panel: None,
     }
 }
 
@@ -1509,16 +1695,43 @@ fn tick() {
             let speech_dt = now.duration_since(app.speech_tick).as_secs_f64().min(0.5);
             app.speech_tick = now;
             app.speech_lock_remaining = (app.speech_lock_remaining - speech_dt).max(0.0);
-            let lock = app.speech_lock_remaining;
+            let lock     = app.speech_lock_remaining;
             let lock_sec = app.speech_cfg.speech_lock_sec;
+            let font_sz  = app.font_size;
+
+            // Advance existing bubbles.
+            for ch in &mut app.chars {
+                if let Some(bs) = &mut ch.bubble_state {
+                    bs.remaining_sec -= speech_dt;
+                    if bs.remaining_sec <= 0.0 {
+                        // Expire.
+                        if let Some(p) = ch.bubble_panel.take() {
+                            unsafe { p.orderOut(None) };
+                        }
+                        ch.bubble_state = None;
+                    } else {
+                        // Update alpha for fade-out.
+                        if let Some(p) = &ch.bubble_panel {
+                            unsafe { p.setAlphaValue(bs.alpha()) };
+                        }
+                    }
+                }
+            }
+
+            // Check for new speech lines.
             for i in 0..app.chars.len() {
                 let state = app.chars[i].anim_state.clone();
                 if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
-                    let text = line.text_en.as_deref()
-                        .or(line.text_ja.as_deref())
-                        .unwrap_or("...");
-                    eprintln!("[speech] {}", text);
                     app.speech_lock_remaining = lock_sec;
+
+                    // Show bubble.
+                    if let Some(bs) = crate::speech::BubbleState::new(&line) {
+                        let char_frame = unsafe { app.chars[i].panel.frame() };
+                        let existing   = app.chars[i].bubble_panel.as_ref();
+                        let panel = show_bubble(existing, &bs.text, font_sz, char_frame, &si, mt);
+                        app.chars[i].bubble_panel = Some(panel);
+                        app.chars[i].bubble_state = Some(bs);
+                    }
                     break;
                 }
             }
@@ -1529,6 +1742,37 @@ fn tick() {
             .filter_map(|c| c.debug_trigger.as_ref().map(|(_, r)| *r))
             .reduce(f64::min);
         update_status_countdown(&app._status_item, min_remaining, mt);
+
+        // Reposition active bubble panels to track their character.
+        let font_sz = app.font_size;
+        for ch in &app.chars {
+            if ch.bubble_state.is_none() { continue; }
+            if let Some(bp) = &ch.bubble_panel {
+                let char_frame = unsafe { ch.panel.frame() };
+                let est_h = 60.0 + BUBBLE_TAIL_H;
+                let tail_at_bottom = char_frame.origin.y + char_frame.size.height
+                    + est_h + BUBBLE_MARGIN < si.height;
+                let cx = char_frame.origin.x + char_frame.size.width / 2.0;
+                let bp_frame = unsafe { bp.frame() };
+                let bubble_x = (cx - bp_frame.size.width / 2.0).max(0.0)
+                    .min(si.width - bp_frame.size.width);
+                let bubble_y = if tail_at_bottom {
+                    char_frame.origin.y + char_frame.size.height + BUBBLE_MARGIN
+                } else {
+                    char_frame.origin.y - bp_frame.size.height - BUBBLE_MARGIN
+                };
+                unsafe {
+                    bp.setFrameOrigin(NSPoint::new(bubble_x, bubble_y));
+                    // Keep bubble above character panel.
+                    let char_num: u32 = msg_send![&*ch.panel, windowNumber];
+                    bp.orderWindow_relativeTo(
+                        objc2_app_kit::NSWindowOrderingMode::Above,
+                        char_num as isize,
+                    );
+                }
+                let _ = font_sz; // suppress unused warning
+            }
+        }
 
         // ⌥⌘ hover tracking: when Option+Command is held and the cursor is
         // directly over a character panel, temporarily stop ignoring mouse events
@@ -1617,6 +1861,7 @@ pub fn run() {
             speech_lock_remaining: 0.0,
             speech_cfg: user_cfg.speech,
             speech_tick: Instant::now(),
+            font_size: user_cfg.display.font_size as f64,
         });
     });
 

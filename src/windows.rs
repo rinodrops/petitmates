@@ -107,6 +107,10 @@ struct CharState {
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
     speech_engine: crate::speech::SpeechEngine,
+    /// Active speech bubble state; None when no bubble is shown.
+    bubble_state: Option<crate::speech::BubbleState>,
+    /// HWND for the speech bubble layered window; null when not created yet.
+    bubble_hwnd: HWND,
 }
 
 struct AppState {
@@ -123,6 +127,8 @@ struct AppState {
     speech_lock_remaining: f64,
     speech_cfg: crate::user_config::SpeechConfig,
     speech_tick: Instant,
+    /// Font size for speech bubbles (from user.toml).
+    font_size: i32,
 }
 
 thread_local! {
@@ -185,6 +191,224 @@ unsafe fn set_layered_content(
         DeleteDC(hdc_mem);
         ReleaseDC(ptr::null_mut(), hdc_screen);
     }
+}
+
+// ---- Speech bubble rendering (Windows GDI) ----
+
+const WIN_BUBBLE_PADDING: i32 = 12;
+const WIN_BUBBLE_CORNER:  i32 = 10; // rounded rect ellipse diameter
+const WIN_BUBBLE_TAIL_H:  i32 = 10;
+const WIN_BUBBLE_TAIL_W:  i32 = 14;
+const WIN_BUBBLE_MARGIN:  i32 = 8;
+const WIN_BUBBLE_MAX_W:   i32 = 240;
+const WIN_BUBBLE_MIN_W:   i32 = 60;
+
+/// Render a speech bubble into a BGRA pixel buffer using GDI.
+///
+/// Returns `(Vec<u8>, width, height)`.  Pixels outside the bubble shape are
+/// transparent (`alpha = 0`); pixels inside are fully opaque (`alpha = 255`).
+///
+/// `tail_at_bottom` — tail points down (bubble above character).
+unsafe fn render_bubble_bgra(
+    text: &str,
+    tail_at_bottom: bool,
+    font_size: i32,
+) -> (Vec<u8>, i32, i32) {
+    let hdc_screen = GetDC(ptr::null_mut());
+    let hdc_mem    = CreateCompatibleDC(hdc_screen);
+
+    // ---- Create font ----
+    // Negative height = font size in points (logical height).
+    let hfont = CreateFontW(
+        -font_size,    // height (negative = pt size)
+        0, 0, 0,
+        FW_NORMAL as i32,
+        FALSE as u32, FALSE as u32, FALSE as u32,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        to_wide("Segoe UI").as_ptr(),
+    );
+    let old_font = SelectObject(hdc_mem, hfont);
+
+    // ---- Measure text ----
+    let text_wide   = to_wide(text);
+    let max_text_w  = WIN_BUBBLE_MAX_W - WIN_BUBBLE_PADDING * 2;
+    let mut measure = RECT { left: 0, top: 0, right: max_text_w, bottom: 2000 };
+    DrawTextW(
+        hdc_mem, text_wide.as_ptr(), -1,
+        &mut measure,
+        DT_WORDBREAK | DT_CALCRECT,
+    );
+    let text_w = measure.right  - measure.left;
+    let text_h = measure.bottom - measure.top;
+
+    // ---- Layout ----
+    let bubble_w = (text_w + WIN_BUBBLE_PADDING * 2).max(WIN_BUBBLE_MIN_W);
+    let bubble_h = text_h + WIN_BUBBLE_PADDING * 2;
+    let total_h  = bubble_h + WIN_BUBBLE_TAIL_H;
+    let img_w    = bubble_w;
+    let img_h    = total_h;
+
+    // body_top_y in GDI coords (Y-down from top of image)
+    let body_top_y = if tail_at_bottom { 0 } else { WIN_BUBBLE_TAIL_H };
+
+    // ---- Create DIB section ----
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize:          mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth:         img_w,
+            biHeight:        -img_h, // top-down
+            biPlanes:        1,
+            biBitCount:      32,
+            biCompression:   BI_RGB,
+            biSizeImage:     0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed:       0,
+            biClrImportant:  0,
+        },
+        bmiColors: [RGBQUAD { rgbBlue: 0, rgbGreen: 0, rgbRed: 0, rgbReserved: 0 }],
+    };
+    let mut bits: *mut c_void = ptr::null_mut();
+    let hbmp = CreateDIBSection(
+        hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0,
+    );
+    let old_bmp = SelectObject(hdc_mem, hbmp);
+
+    // ---- Draw bubble body (white rounded rect) ----
+    let white_brush = CreateSolidBrush(0x00FFFFFF);
+    let white_pen   = CreatePen(PS_NULL as i32, 0, 0x00FFFFFF); // no border pen
+    let old_brush   = SelectObject(hdc_mem, white_brush);
+    let old_pen     = SelectObject(hdc_mem, white_pen);
+
+    RoundRect(
+        hdc_mem,
+        0,
+        body_top_y,
+        bubble_w,
+        body_top_y + bubble_h,
+        WIN_BUBBLE_CORNER,
+        WIN_BUBBLE_CORNER,
+    );
+
+    // ---- Draw tail triangle ----
+    let cx = bubble_w / 2;
+    let tail_pts: [POINT; 3] = if tail_at_bottom {
+        // Tail points downward from the bottom of the body.
+        [
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: bubble_h },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: bubble_h },
+            POINT { x: cx, y: bubble_h + WIN_BUBBLE_TAIL_H },
+        ]
+    } else {
+        // Tail points upward from the top of the body.
+        [
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H },
+            POINT { x: cx, y: 0 },
+        ]
+    };
+    Polygon(hdc_mem, tail_pts.as_ptr(), 3);
+
+    // ---- Draw text ----
+    let dark_text_color = 0x00333333u32;
+    SetTextColor(hdc_mem, dark_text_color);
+    SetBkMode(hdc_mem, TRANSPARENT as i32);
+    SelectObject(hdc_mem, hfont); // ensure font is set
+
+    let text_x = (bubble_w - text_w) / 2;
+    let text_y = body_top_y + (bubble_h - text_h) / 2;
+    let mut text_rect = RECT {
+        left:   text_x,
+        top:    text_y,
+        right:  text_x + text_w + 1,
+        bottom: text_y + text_h + 1,
+    };
+    DrawTextW(hdc_mem, text_wide.as_ptr(), -1, &mut text_rect, DT_WORDBREAK);
+
+    // ---- Read pixels and fix alpha ----
+    GdiFlush();
+    let pixel_count = (img_w * img_h) as usize;
+    let mut bgra = vec![0u8; pixel_count * 4];
+    ptr::copy_nonoverlapping(bits as *const u8, bgra.as_mut_ptr(), bgra.len());
+
+    // GDI doesn't write alpha (A=0). Set A=255 for all drawn (non-black) pixels.
+    for chunk in bgra.chunks_mut(4) {
+        if chunk[0] != 0 || chunk[1] != 0 || chunk[2] != 0 {
+            chunk[3] = 255;
+        }
+    }
+
+    // ---- Cleanup ----
+    SelectObject(hdc_mem, old_brush);
+    SelectObject(hdc_mem, old_pen);
+    SelectObject(hdc_mem, old_font);
+    SelectObject(hdc_mem, old_bmp);
+    DeleteObject(hbmp);
+    DeleteObject(white_brush as *mut _);
+    DeleteObject(white_pen as *mut _);
+    DeleteObject(hfont as *mut _);
+    DeleteDC(hdc_mem);
+    ReleaseDC(ptr::null_mut(), hdc_screen);
+
+    (bgra, img_w, img_h)
+}
+
+/// Create the speech-bubble HWND (called once per character).
+unsafe fn create_bubble_hwnd(hinstance: HINSTANCE, char_hwnd: HWND) -> HWND {
+    let class_name = to_wide("PetitMatesOverlay");
+    let hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+        class_name.as_ptr(),
+        ptr::null(),
+        WS_POPUP,
+        0, 0, 1, 1,
+        char_hwnd, // owner = character window → inherits Z-order relationship
+        ptr::null_mut(), hinstance, ptr::null(),
+    );
+    hwnd
+}
+
+/// Render and position the bubble HWND above or below the character sprite.
+unsafe fn update_bubble_hwnd(
+    bubble_hwnd: HWND,
+    text: &str,
+    font_size: i32,
+    char_x: i32, char_y: i32,
+    char_w: i32, char_h: i32,
+    screen_w: i32, screen_h: i32,
+    alpha_u8: u8,
+) {
+    // Choose placement.
+    let est_h = 60 + WIN_BUBBLE_TAIL_H;
+    let tail_at_bottom =
+        char_y - est_h - WIN_BUBBLE_MARGIN > 0; // space *above* char (Y-down coords)
+
+    let (bgra, bw, bh) = render_bubble_bgra(text, tail_at_bottom, font_size);
+
+    let bx = {
+        let cx = char_x + char_w / 2;
+        (cx - bw / 2).max(0).min(screen_w - bw)
+    };
+    let by = if tail_at_bottom {
+        (char_y - bh - WIN_BUBBLE_MARGIN).max(0)
+    } else {
+        (char_y + char_h + WIN_BUBBLE_MARGIN).min(screen_h - bh)
+    };
+
+    set_layered_content(bubble_hwnd, &bgra, bw, bh, bx, by, alpha_u8);
+
+    // Ensure window is visible.
+    ShowWindow(bubble_hwnd, SW_SHOWNOACTIVATE);
+    // Keep just above the character HWND.
+    SetWindowPos(
+        bubble_hwnd, char_hwnd,
+        bx, by, bw, bh,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
 }
 
 // ---- Surface → screen position ----
@@ -444,6 +668,8 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         last_screen_pos: (-4096, -4096),
         debug_trigger:   None,
         speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        bubble_state: None,
+        bubble_hwnd: ptr::null_mut(),
     }
 }
 
@@ -860,16 +1086,67 @@ fn tick_all() {
             let speech_dt = now.duration_since(app.speech_tick).as_secs_f64().min(0.5);
             app.speech_tick = now;
             app.speech_lock_remaining = (app.speech_lock_remaining - speech_dt).max(0.0);
-            let lock = app.speech_lock_remaining;
+            let lock     = app.speech_lock_remaining;
             let lock_sec = app.speech_cfg.speech_lock_sec;
+            let font_sz  = app.font_size;
+            let hinstance = unsafe { GetModuleHandleW(ptr::null()) };
+
+            // Advance existing bubbles.
+            for ch in &mut app.chars {
+                if let Some(bs) = &mut ch.bubble_state {
+                    bs.remaining_sec -= speech_dt;
+                    if bs.remaining_sec <= 0.0 {
+                        if !ch.bubble_hwnd.is_null() {
+                            unsafe { ShowWindow(ch.bubble_hwnd, SW_HIDE) };
+                        }
+                        ch.bubble_state = None;
+                    } else if !ch.bubble_hwnd.is_null() {
+                        // Reposition to track character.
+                        let alpha = (bs.alpha() * 255.0) as u8;
+                        let (cx, cy) = ch.last_screen_pos;
+                        let (sw, sh) = (si.width as i32, si.height as i32);
+                        let sprite_w = ch.assets.sprite("s-stand", false)
+                            .map(|s| s.w).unwrap_or(150);
+                        let sprite_h = ch.assets.sprite("s-stand", false)
+                            .map(|s| s.h).unwrap_or(150);
+                        let text = bs.text.clone();
+                        unsafe {
+                            update_bubble_hwnd(
+                                ch.bubble_hwnd, &text, font_sz,
+                                cx, cy, sprite_w, sprite_h, sw, sh, alpha,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Check for new speech lines.
             for i in 0..app.chars.len() {
                 let state = app.chars[i].anim_state.clone();
                 if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
-                    let text = line.text_en.as_deref()
-                        .or(line.text_ja.as_deref())
-                        .unwrap_or("...");
-                    eprintln!("[speech] {}", text);
                     app.speech_lock_remaining = lock_sec;
+                    if let Some(bs) = crate::speech::BubbleState::new(&line) {
+                        // Create bubble HWND lazily.
+                        if app.chars[i].bubble_hwnd.is_null() {
+                            let char_hwnd = app.chars[i].hwnd;
+                            app.chars[i].bubble_hwnd =
+                                unsafe { create_bubble_hwnd(hinstance, char_hwnd) };
+                        }
+                        let (cx, cy) = app.chars[i].last_screen_pos;
+                        let (sw, sh) = (si.width as i32, si.height as i32);
+                        let sprite_w = app.chars[i].assets.sprite("s-stand", false)
+                            .map(|s| s.w).unwrap_or(150);
+                        let sprite_h = app.chars[i].assets.sprite("s-stand", false)
+                            .map(|s| s.h).unwrap_or(150);
+                        let text = bs.text.clone();
+                        unsafe {
+                            update_bubble_hwnd(
+                                app.chars[i].bubble_hwnd, &text, font_sz,
+                                cx, cy, sprite_w, sprite_h, sw, sh, 255,
+                            );
+                        }
+                        app.chars[i].bubble_state = Some(bs);
+                    }
                     break;
                 }
             }
@@ -1405,6 +1682,7 @@ pub fn run() {
                 speech_lock_remaining: 0.0,
                 speech_cfg: user_cfg.speech,
                 speech_tick: Instant::now(),
+                font_size: user_cfg.display.font_size as i32,
             });
         });
 

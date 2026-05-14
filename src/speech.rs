@@ -170,6 +170,41 @@ pub struct SpeechLine {
     pub fade_out_sec: f64,
 }
 
+/// Live state of a speech bubble being displayed for one character.
+#[derive(Clone, Debug)]
+pub struct BubbleState {
+    /// The resolved display text (already chosen from ja/en).
+    pub text: String,
+    /// Total seconds to display (including fade-out period).
+    pub duration_sec: f64,
+    /// Seconds of the fade-out transition at the end.
+    pub fade_out_sec: f64,
+    /// Seconds remaining until the bubble disappears.
+    pub remaining_sec: f64,
+}
+
+impl BubbleState {
+    pub fn new(line: &SpeechLine) -> Option<Self> {
+        let text = line.text_en.clone()
+            .or_else(|| line.text_ja.clone())?;
+        Some(BubbleState {
+            text,
+            duration_sec: line.duration_sec,
+            fade_out_sec: line.fade_out_sec,
+            remaining_sec: line.duration_sec,
+        })
+    }
+
+    /// Returns the current alpha value (0.0–1.0) for fade-out.
+    pub fn alpha(&self) -> f64 {
+        if self.remaining_sec >= self.fade_out_sec {
+            1.0
+        } else {
+            (self.remaining_sec / self.fade_out_sec).max(0.0)
+        }
+    }
+}
+
 /// Per-character speech trigger engine.
 ///
 /// Call [`SpeechEngine::tick`] every game tick. When it returns `Some`, display
