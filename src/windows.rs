@@ -693,8 +693,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     // position set by WM_MOUSEMOVE.
     if ch.drag_offset.is_some() {
         ch.last_tick = Instant::now(); // keep dt fresh so release doesn't jump
-        let sr = sprite_for_state(&ch.anim_state, ch.facing);
-        let Some(sprite) = assets.sprite(sr.name, sr.mirror) else { return };
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations); else { return };
         let (px, py) = (ch.char_pos.0 as i32, ch.char_pos.1 as i32);
         let bgra = sprite.bgra.clone();
         unsafe { set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, 200); }
@@ -719,7 +718,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     }
 
     // Advance per-state animation timers.
-    let elapsed = advance_anim(&mut ch.anim_state, dt, cfg);
+    let elapsed = advance_anim(&mut ch.anim_state, dt, cfg, &ch.assets.animations);
 
     // Save y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -848,7 +847,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             let p = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
             sprite_for_turn(p, ch.facing)
         }
-        other => sprite_for_state(other, ch.facing),
+        other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
     let sprite_w = assets.size(sr_for_ctx.name, sr_for_ctx.mirror).0;
     let (surface_progress, at_edge, jump_target, attract_target) = surface_context(
@@ -1021,7 +1020,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             let p = (*elapsed / cfg.floor.turn_duration).clamp(0.0, 1.0);
             sprite_for_turn(p, ch.facing)
         }
-        other => sprite_for_state(other, ch.facing),
+        other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
 
     let Some(sprite) = assets.sprite(sr.name, sr.mirror) else { return };
@@ -1383,7 +1382,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                 let si   = windows_wm::screen_info();
                                 let wins = windows_wm::list_windows(&si);
                                 let assets = Rc::clone(&app.chars[i].assets);
-                                let sr   = sprite_for_state(&app.chars[i].anim_state, app.chars[i].facing);
+                                let sr   = sprite_for_state(&app.chars[i].anim_state, app.chars[i].facing, &app.chars[i].assets.animations);
                                 let (sw, sh) = assets.size(sr.name, sr.mirror);
                                 let anchor_cx = app.chars[i].char_pos.0 + sw / 2.0;
                                 let anchor_cy = app.chars[i].char_pos.1 + sh;

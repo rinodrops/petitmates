@@ -4,7 +4,10 @@
 //! When `mirror` is `true` the renderer must flip the image horizontally
 //! before drawing — no extra sprite files are needed.
 
+use std::collections::HashMap;
+
 use crate::behavior::{Dir, Side, State};
+use crate::manifest::AnimationDef;
 
 /// Result of `sprite_for_state`.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,31 +42,37 @@ impl SpriteRef {
     }
 }
 
-/// Walk animation: ping-pong 0 → 1 → 2 → 1 → 0 → …
-/// `frame` wraps in the range 0..=3 (engine uses `% 4`).
-fn walk_frame_name(frame: u8) -> &'static str {
-    match frame % 4 {
-        0 => "s-walk-0",
-        1 | 3 => "s-walk-1",
-        _ => "s-walk-2", // 2
-    }
+/// Walk animation frame names indexed by sprite index (0-based).
+static WALK_FRAME_NAMES: &[&str] = &[
+    "s-walk-0", "s-walk-1", "s-walk-2", "s-walk-3",
+    "s-walk-4", "s-walk-5", "s-walk-6", "s-walk-7",
+];
+
+/// Climb animation frame names indexed by sprite index (0-based).
+static CLIMB_FRAME_NAMES: &[&str] = &[
+    "s-hang-wall-0", "s-hang-wall-1", "s-hang-wall-2", "s-hang-wall-3",
+    "s-hang-wall-4", "s-hang-wall-5", "s-hang-wall-6", "s-hang-wall-7",
+];
+
+fn walk_frame_name(tick: u8, anim: &AnimationDef) -> &'static str {
+    let idx = anim.sprite_index(tick) as usize;
+    WALK_FRAME_NAMES.get(idx).copied().unwrap_or("s-walk-0")
 }
 
-/// Climb animation: ping-pong 0 → 1 → 2 → 1 → 0 → …
-/// `frame` wraps in the range 0..=3 (engine uses `% 4`).
-fn climb_frame_name(frame: u8) -> &'static str {
-    match frame % 4 {
-        0 => "s-hang-wall-0",
-        1 | 3 => "s-hang-wall-1",
-        _ => "s-hang-wall-2", // 2
-    }
+fn climb_frame_name(tick: u8, anim: &AnimationDef) -> &'static str {
+    let idx = anim.sprite_index(tick) as usize;
+    CLIMB_FRAME_NAMES.get(idx).copied().unwrap_or("s-hang-wall-0")
 }
 
 /// Return the sprite and mirror flag for the current `State`.
 ///
 /// `facing` is the character's current horizontal direction.
 /// For wall/corner states, direction is derived from `Side`.
-pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
+pub fn sprite_for_state(
+    state: &State,
+    facing: Dir,
+    animations: &HashMap<String, AnimationDef>,
+) -> SpriteRef {
     match state {
         // ── Airborne ─────────────────────────────────────────────────
         State::Falling { shocked, .. } => {
@@ -77,7 +86,8 @@ pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
         State::Observing { .. } => SpriteRef::side("s-stand", facing),
 
         State::Walking { dir, frame, .. } => {
-            SpriteRef::side(walk_frame_name(*frame), *dir)
+            let anim = animations.get("walk").cloned().unwrap_or_default();
+            SpriteRef::side(walk_frame_name(*frame, &anim), *dir)
         }
 
         // Turn-around: three-phase animation driven by elapsed vs turn_duration.
@@ -110,7 +120,8 @@ pub fn sprite_for_state(state: &State, facing: Dir) -> SpriteRef {
 
         State::ClimbingUp { frame, .. } | State::ClimbingDown { frame, .. } => {
             let side = wall_side_from_surface(facing);
-            SpriteRef::wall(climb_frame_name(*frame), side)
+            let anim = animations.get("climb").cloned().unwrap_or_default();
+            SpriteRef::wall(climb_frame_name(*frame, &anim), side)
         }
 
         State::WallPause { .. } => {
@@ -167,12 +178,15 @@ mod tests {
     use super::*;
     use crate::behavior::State;
 
+    fn no_anims() -> HashMap<String, AnimationDef> { HashMap::new() }
+
     #[test]
     fn walk_frames_cycle() {
         for (frame, expected) in [(0, "s-walk-0"), (1, "s-walk-1"), (2, "s-walk-2")] {
             let s = sprite_for_state(
                 &State::Walking { dir: Dir::Left, frame, frame_elapsed: 0.0 },
                 Dir::Left,
+                &no_anims(),
             );
             assert_eq!(s.name, expected);
             assert!(!s.mirror, "left-facing should not mirror");
@@ -184,6 +198,7 @@ mod tests {
         let s = sprite_for_state(
             &State::Walking { dir: Dir::Right, frame: 0, frame_elapsed: 0.0 },
             Dir::Right,
+            &no_anims(),
         );
         assert!(s.mirror);
     }
@@ -193,6 +208,7 @@ mod tests {
         let sit = sprite_for_state(
             &State::CornerRest { elapsed: 0.0, duration: 5.0, lying: false },
             Dir::Left,
+            &no_anims(),
         );
         assert_eq!(sit.name, "f-sit");
         assert!(!sit.mirror);
@@ -200,6 +216,7 @@ mod tests {
         let lie = sprite_for_state(
             &State::CornerRest { elapsed: 0.0, duration: 5.0, lying: true },
             Dir::Left,
+            &no_anims(),
         );
         assert_eq!(lie.name, "f-lie");
     }
@@ -224,6 +241,7 @@ mod tests {
         let s = sprite_for_state(
             &State::ClimbingUp { frame: 0, frame_elapsed: 0.0, wall_frames: 0 },
             Dir::Left,
+            &no_anims(),
         );
         assert_eq!(s.name, "s-hang-wall-0");
         assert!(!s.mirror, "right wall: authored sprite, no mirror");
@@ -232,7 +250,28 @@ mod tests {
         let s2 = sprite_for_state(
             &State::ClimbingUp { frame: 0, frame_elapsed: 0.0, wall_frames: 0 },
             Dir::Right,
+            &no_anims(),
         );
         assert!(s2.mirror, "left wall: needs mirror");
+    }
+
+    #[test]
+    fn anim_def_ping_pong() {
+        let anim = AnimationDef { frames: 3, mode: crate::manifest::AnimMode::PingPong };
+        // cycle: 0→1→2→1, length 4
+        assert_eq!(anim.cycle_len(), 4);
+        assert_eq!(anim.sprite_index(0), 0);
+        assert_eq!(anim.sprite_index(1), 1);
+        assert_eq!(anim.sprite_index(2), 2);
+        assert_eq!(anim.sprite_index(3), 1);
+    }
+
+    #[test]
+    fn anim_def_loop() {
+        let anim = AnimationDef { frames: 4, mode: crate::manifest::AnimMode::Loop };
+        assert_eq!(anim.cycle_len(), 4);
+        assert_eq!(anim.sprite_index(0), 0);
+        assert_eq!(anim.sprite_index(3), 3);
+        assert_eq!(anim.sprite_index(4), 0);
     }
 }
