@@ -1,0 +1,33 @@
+# Builtin speech lines for the Pond Turtle character.
+# Layer 2 of 4 in the merge order.
+
+[[speech]]
+text_ja = "水に入りたいな"
+text_en = "I feel like getting in the water."
+trigger = "random"
+weight  = 1.2
+
+[[speech]]
+text_ja = "甲羅干しの時間だ"
+text_en = "Time for some shell-warming."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "のんびりしたいな"
+text_en = "I just want to take it slow today."
+trigger = "random"
+weight  = 0.8
+
+[[speech]]
+text_ja = "ここはどこだろう"
+text_en = "Where am I?"
+trigger = "state"
+state   = "startup"
+
+[[speech]]
+text_ja = "ふっ"
+text_en = "Phew."
+trigger = "state"
+state   = "landing"
+duration_sec = 3.0
