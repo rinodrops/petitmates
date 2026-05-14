@@ -281,19 +281,20 @@ unsafe fn render_bubble_bgra(
     let old_bmp = SelectObject(hdc_mem, hbmp);
 
     // ---- Draw bubble as single combined path (fill + border stroke) ----
-    // Building one closed outer contour eliminates the seam between rect and
-    // tail, and gives the tail sides a consistent border stroke.
+    // AngleArc(center_x, center_y, radius, start_deg, sweep_deg) is more
+    // predictable than ArcTo at small integer-pixel radii: no radial-point
+    // rounding errors, no need to call SetArcDirection.
     //
-    // The two branches trace in opposite winding directions in screen (Y-down)
-    // coords, so each branch sets its own arc direction before BeginPath:
-    //   tail_at_bottom: path goes CCW → convex corners need AD_COUNTERCLOCKWISE
-    //   tail_at_top:    path goes CW  → convex corners need AD_CLOCKWISE
+    // GDI angle convention (Y-down): 0°=right, 90°=down, 180°=left, 270°=up.
+    // Positive sweep = CW on screen; negative sweep = CCW on screen.
     //
-    // r = radius of rounded corners (WIN_BUBBLE_CORNER is the ellipse diameter).
-    let r  = WIN_BUBBLE_CORNER / 2;
-    let cx = bubble_w / 2;
+    //   tail_at_bottom: outer contour goes CCW on screen → sweep = -90°
+    //   tail_at_top:    outer contour goes CW  on screen → sweep = +90°
+    let r   = WIN_BUBBLE_CORNER / 2;
+    let bw  = bubble_w;
+    let tw  = WIN_BUBBLE_TAIL_W;
+    let cx  = bw / 2;
 
-    // 70%-gray border pen; white fill brush.
     let border_pen  = CreatePen(PS_SOLID as i32, 1, 0x00B3B3B3_u32);
     let fill_brush  = CreateSolidBrush(0x00FFFFFF_u32);
     let old_pen     = SelectObject(hdc_mem, border_pen);
@@ -301,37 +302,43 @@ unsafe fn render_bubble_bgra(
 
     BeginPath(hdc_mem);
     if tail_at_bottom {
-        // Body occupies y=0..bubble_h; tail points downward (y=bubble_h..total_h).
-        // Path traces CCW → convex corners need CCW arcs.
-        SetArcDirection(hdc_mem, AD_COUNTERCLOCKWISE as i32);
-        MoveToEx(hdc_mem, cx + WIN_BUBBLE_TAIL_W / 2, bubble_h, ptr::null_mut());
-        LineTo(hdc_mem, bubble_w - r, bubble_h);
-        ArcTo(hdc_mem, bubble_w-2*r, bubble_h-2*r, bubble_w,   bubble_h,   bubble_w-r, bubble_h,   bubble_w,   bubble_h-r);
-        LineTo(hdc_mem, bubble_w, r);
-        ArcTo(hdc_mem, bubble_w-2*r, 0,           bubble_w,   2*r,        bubble_w,   r,           bubble_w-r, 0);
+        // Body: y 0..bubble_h  Tail points down: y bubble_h..total_h
+        MoveToEx(hdc_mem, cx + tw / 2, bubble_h, ptr::null_mut());
+        // → bottom-right corner  (center bw-r, bubble_h-r)  90°→0°  sweep -90
+        LineTo(hdc_mem, bw - r, bubble_h);
+        AngleArc(hdc_mem, bw - r, bubble_h - r, r as u32, 90.0_f32, -90.0_f32);
+        // → top-right corner  (center bw-r, r)  0°→270°  sweep -90
+        LineTo(hdc_mem, bw, r);
+        AngleArc(hdc_mem, bw - r, r, r as u32, 0.0_f32, -90.0_f32);
+        // → top-left corner  (center r, r)  270°→180°  sweep -90
         LineTo(hdc_mem, r, 0);
-        ArcTo(hdc_mem, 0,          0,             2*r,        2*r,        r,          0,           0,          r);
+        AngleArc(hdc_mem, r, r, r as u32, 270.0_f32, -90.0_f32);
+        // → bottom-left corner  (center r, bubble_h-r)  180°→90°  sweep -90
         LineTo(hdc_mem, 0, bubble_h - r);
-        ArcTo(hdc_mem, 0,          bubble_h-2*r, 2*r,        bubble_h,   0,          bubble_h-r,  r,          bubble_h);
-        LineTo(hdc_mem, cx - WIN_BUBBLE_TAIL_W / 2, bubble_h);
-        LineTo(hdc_mem, cx, total_h); // tail tip
+        AngleArc(hdc_mem, r, bubble_h - r, r as u32, 180.0_f32, -90.0_f32);
+        // → tail base left → tip
+        LineTo(hdc_mem, cx - tw / 2, bubble_h);
+        LineTo(hdc_mem, cx, total_h);
         CloseFigure(hdc_mem);
     } else {
-        // Body occupies y=WIN_BUBBLE_TAIL_H..total_h; tail points upward (y=0..tail_h).
-        // Path traces CW → convex corners need CW arcs.
-        SetArcDirection(hdc_mem, AD_CLOCKWISE as i32);
+        // Body: y tail_h..total_h  Tail points up: y 0..tail_h
         let ty = WIN_BUBBLE_TAIL_H;
-        MoveToEx(hdc_mem, cx + WIN_BUBBLE_TAIL_W / 2, ty, ptr::null_mut());
-        LineTo(hdc_mem, bubble_w - r, ty);
-        ArcTo(hdc_mem, bubble_w-2*r, ty,            bubble_w,   ty+2*r,     bubble_w-r, ty,          bubble_w,   ty+r);
-        LineTo(hdc_mem, bubble_w, total_h - r);
-        ArcTo(hdc_mem, bubble_w-2*r, total_h-2*r,   bubble_w,   total_h,    bubble_w,   total_h-r,   bubble_w-r, total_h);
+        MoveToEx(hdc_mem, cx + tw / 2, ty, ptr::null_mut());
+        // → top-right corner  (center bw-r, ty+r)  270°→0°  sweep +90
+        LineTo(hdc_mem, bw - r, ty);
+        AngleArc(hdc_mem, bw - r, ty + r, r as u32, 270.0_f32, 90.0_f32);
+        // → bottom-right corner  (center bw-r, total_h-r)  0°→90°  sweep +90
+        LineTo(hdc_mem, bw, total_h - r);
+        AngleArc(hdc_mem, bw - r, total_h - r, r as u32, 0.0_f32, 90.0_f32);
+        // → bottom-left corner  (center r, total_h-r)  90°→180°  sweep +90
         LineTo(hdc_mem, r, total_h);
-        ArcTo(hdc_mem, 0,          total_h-2*r,     2*r,        total_h,    r,          total_h,     0,          total_h-r);
+        AngleArc(hdc_mem, r, total_h - r, r as u32, 90.0_f32, 90.0_f32);
+        // → top-left corner  (center r, ty+r)  180°→270°  sweep +90
         LineTo(hdc_mem, 0, ty + r);
-        ArcTo(hdc_mem, 0,          ty,              2*r,        ty+2*r,     0,          ty+r,        r,          ty);
-        LineTo(hdc_mem, cx - WIN_BUBBLE_TAIL_W / 2, ty);
-        LineTo(hdc_mem, cx, 0); // tail tip
+        AngleArc(hdc_mem, r, ty + r, r as u32, 180.0_f32, 90.0_f32);
+        // → tail base left → tip
+        LineTo(hdc_mem, cx - tw / 2, ty);
+        LineTo(hdc_mem, cx, 0);
         CloseFigure(hdc_mem);
     }
     EndPath(hdc_mem);
