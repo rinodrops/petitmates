@@ -129,6 +129,8 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: i32,
+    /// Resolved display language: "ja" or "en".
+    lang: String,
 }
 
 thread_local! {
@@ -224,11 +226,11 @@ unsafe fn render_bubble_bgra(
         0, 0, 0,
         FW_NORMAL as i32,
         FALSE as u32, FALSE as u32, FALSE as u32,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE,
+        DEFAULT_CHARSET as u32,
+        OUT_DEFAULT_PRECIS as u32,
+        CLIP_DEFAULT_PRECIS as u32,
+        CLEARTYPE_QUALITY as u32,
+        (DEFAULT_PITCH | FF_DONTCARE) as u32,
         to_wide("Segoe UI").as_ptr(),
     );
     let old_font = SelectObject(hdc_mem, hfont);
@@ -278,40 +280,49 @@ unsafe fn render_bubble_bgra(
     );
     let old_bmp = SelectObject(hdc_mem, hbmp);
 
-    // ---- Draw bubble body (white rounded rect) ----
-    let white_brush = CreateSolidBrush(0x00FFFFFF);
-    let white_pen   = CreatePen(PS_NULL as i32, 0, 0x00FFFFFF); // no border pen
-    let old_brush   = SelectObject(hdc_mem, white_brush);
-    let old_pen     = SelectObject(hdc_mem, white_pen);
-
-    RoundRect(
-        hdc_mem,
-        0,
-        body_top_y,
-        bubble_w,
-        body_top_y + bubble_h,
-        WIN_BUBBLE_CORNER,
-        WIN_BUBBLE_CORNER,
-    );
-
-    // ---- Draw tail triangle ----
+    // ---- Draw bubble using combined GDI region (no arc rounding artifacts) ----
+    // GDI arcs are always aliased: at small radii even AngleArc looks jagged.
+    // Instead use CreateRoundRectRgn (body) + CreatePolygonRgn (tail) combined
+    // with CombineRgn(RGN_OR).  FillRgn + FrameRgn then trace only the outer
+    // boundary, so there is no seam line at the tail junction.
     let cx = bubble_w / 2;
+
+    // Body region (rounded rect).
+    let body_rgn = if tail_at_bottom {
+        CreateRoundRectRgn(0, 0, bubble_w, bubble_h,
+                           WIN_BUBBLE_CORNER, WIN_BUBBLE_CORNER)
+    } else {
+        CreateRoundRectRgn(0, WIN_BUBBLE_TAIL_H, bubble_w, total_h,
+                           WIN_BUBBLE_CORNER, WIN_BUBBLE_CORNER)
+    };
+
+    // Tail triangle — base overlaps body by 2 px so CombineRgn(RGN_OR) merges
+    // without a pixel gap.
     let tail_pts: [POINT; 3] = if tail_at_bottom {
-        // Tail points downward from the bottom of the body.
         [
-            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: bubble_h },
-            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: bubble_h },
-            POINT { x: cx, y: bubble_h + WIN_BUBBLE_TAIL_H },
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: bubble_h - 2 },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: bubble_h - 2 },
+            POINT { x: cx,                          y: total_h      },
         ]
     } else {
-        // Tail points upward from the top of the body.
         [
-            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H },
-            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H },
-            POINT { x: cx, y: 0 },
+            POINT { x: cx - WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H + 2 },
+            POINT { x: cx + WIN_BUBBLE_TAIL_W / 2, y: WIN_BUBBLE_TAIL_H + 2 },
+            POINT { x: cx,                          y: 0                     },
         ]
     };
-    Polygon(hdc_mem, tail_pts.as_ptr(), 3);
+    let tail_rgn = CreatePolygonRgn(tail_pts.as_ptr(), 3, 2 /* WINDING */);
+
+    let combined_rgn = CreateRectRgn(0, 0, 1, 1);
+    CombineRgn(combined_rgn, body_rgn, tail_rgn, 3 /* RGN_OR */);
+
+    let fill_brush   = CreateSolidBrush(0x00FFFFFF_u32);
+    let border_brush = CreateSolidBrush(0x00B3B3B3_u32);
+    FillRgn(hdc_mem, combined_rgn, fill_brush);
+    FrameRgn(hdc_mem, combined_rgn, border_brush, 1, 1);
+    DeleteObject(combined_rgn);
+    DeleteObject(body_rgn);
+    DeleteObject(tail_rgn);
 
     // ---- Draw text ----
     let dark_text_color = 0x00333333u32;
@@ -343,13 +354,11 @@ unsafe fn render_bubble_bgra(
     }
 
     // ---- Cleanup ----
-    SelectObject(hdc_mem, old_brush);
-    SelectObject(hdc_mem, old_pen);
     SelectObject(hdc_mem, old_font);
     SelectObject(hdc_mem, old_bmp);
     DeleteObject(hbmp);
-    DeleteObject(white_brush as *mut _);
-    DeleteObject(white_pen as *mut _);
+    DeleteObject(fill_brush);
+    DeleteObject(border_brush);
     DeleteObject(hfont as *mut _);
     DeleteDC(hdc_mem);
     ReleaseDC(ptr::null_mut(), hdc_screen);
@@ -375,6 +384,7 @@ unsafe fn create_bubble_hwnd(hinstance: HINSTANCE, char_hwnd: HWND) -> HWND {
 /// Render and position the bubble HWND above or below the character sprite.
 unsafe fn update_bubble_hwnd(
     bubble_hwnd: HWND,
+    char_hwnd: HWND,
     text: &str,
     font_size: i32,
     char_x: i32, char_y: i32,
@@ -1063,6 +1073,45 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     ch.last_screen_pos = (px, py);
 }
 
+// ---- Language detection ----
+
+/// Detect the OS preferred UI language, returning `"ja"` or `"en"`.
+///
+/// Uses `GetUserPreferredUILanguages` and returns `"ja"` if the first
+/// language whose BCP-47 tag starts with `"ja"` appears before any English
+/// tag.  Falls back to `"en"`.
+fn detect_system_language() -> String {
+    use windows_sys::Win32::Globalization::GetUserPreferredUILanguages;
+    use windows_sys::Win32::Foundation::FALSE;
+    const MUI_LANGUAGE_NAME: u32 = 0x08;
+    unsafe {
+        let mut num_langs: u32 = 0;
+        let mut buf_size: u32  = 0;
+        // First call: get required buffer size.
+        GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME, &mut num_langs, std::ptr::null_mut(), &mut buf_size,
+        );
+        if buf_size == 0 {
+            return "en".to_owned();
+        }
+        let mut buf: Vec<u16> = vec![0u16; buf_size as usize];
+        let ok = GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME, &mut num_langs, buf.as_mut_ptr(), &mut buf_size,
+        );
+        if ok == FALSE || buf_size == 0 {
+            return "en".to_owned();
+        }
+        // Buffer is a double-null-terminated list of null-separated strings.
+        for segment in buf.split(|&c| c == 0) {
+            if segment.is_empty() { continue; }
+            let tag = String::from_utf16_lossy(segment);
+            if tag.starts_with("ja") { return "ja".to_owned(); }
+            if tag.starts_with("en") { return "en".to_owned(); }
+        }
+    }
+    "en".to_owned()
+}
+
 // ---- Tick all characters (10 Hz timer callback) ----
 
 fn tick_all() {
@@ -1112,7 +1161,7 @@ fn tick_all() {
                         let text = bs.text.clone();
                         unsafe {
                             update_bubble_hwnd(
-                                ch.bubble_hwnd, &text, font_sz,
+                                ch.bubble_hwnd, ch.hwnd, &text, font_sz,
                                 cx, cy, sprite_w, sprite_h, sw, sh, alpha,
                             );
                         }
@@ -1125,7 +1174,7 @@ fn tick_all() {
                 let state = app.chars[i].anim_state.clone();
                 if let Some(line) = app.chars[i].speech_engine.tick(&state, lock) {
                     app.speech_lock_remaining = lock_sec;
-                    if let Some(bs) = crate::speech::BubbleState::new(&line) {
+                    if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
                         // Create bubble HWND lazily.
                         if app.chars[i].bubble_hwnd.is_null() {
                             let char_hwnd = app.chars[i].hwnd;
@@ -1141,7 +1190,7 @@ fn tick_all() {
                         let text = bs.text.clone();
                         unsafe {
                             update_bubble_hwnd(
-                                app.chars[i].bubble_hwnd, &text, font_sz,
+                                app.chars[i].bubble_hwnd, app.chars[i].hwnd, &text, font_sz,
                                 cx, cy, sprite_w, sprite_h, sw, sh, 255,
                             );
                         }
@@ -1394,7 +1443,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.bd_assets);
                         let config = app.bd_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        let ch     = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
                         app.chars.push(ch);
                     }
                 });
@@ -1427,7 +1476,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.pt_assets);
                         let config = app.pt_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config);
+                        let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
                         app.chars.push(ch);
                     }
                 });
@@ -1683,6 +1732,8 @@ pub fn run() {
                 speech_cfg: user_cfg.speech,
                 speech_tick: Instant::now(),
                 font_size: user_cfg.display.font_size as i32,
+                lang: user_cfg.display.language.clone()
+                    .unwrap_or_else(detect_system_language),
             });
         });
 
