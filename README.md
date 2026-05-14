@@ -65,6 +65,8 @@ They sit, lie down, fall asleep, turn their heads, open their mouths — and occ
 
 Characters occasionally say something. A small speech bubble appears above them — no demands, just a passing thought.
 
+![speech](docs/screenshots/speech.gif)
+
 | Trigger     | When it fires                                                                                   |
 | ----------- | ----------------------------------------------------------------------------------------------- |
 | Random      | Every minute or two, drawn by weighted chance                                                   |
