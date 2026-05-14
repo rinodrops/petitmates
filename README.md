@@ -61,6 +61,18 @@ Both characters live system-wide — on top of your app windows and the desktop,
 
 They sit, lie down, fall asleep, turn their heads, open their mouths — and occasionally decide to visit a different window on their own.
 
+## Speech
+
+Characters occasionally say something. A small speech bubble appears above them — no demands, just a passing thought.
+
+| Trigger | When it fires |
+| ------- | ------------- |
+| Random | Every minute or two, drawn by weighted chance |
+| Time of day | Certain lines appear only in the morning, at noon, late at night, etc. |
+| Weather | Reactions to sunny, cloudy, rainy, or snowy conditions — requires a city setting in `user.toml` |
+| Hour change | A brief remark exactly when the clock turns to the next hour (e.g. midnight) |
+| Events | A word at startup, on landing, or other moments |
+
 ## System Requirements
 
 | Platform | Requirement                                                 |
