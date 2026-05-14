@@ -38,6 +38,15 @@ trigger = "state"
 state   = "landing"
 duration_sec = 3.0
 
+# --- hour_change ---
+
+[[speech]]
+text_ja = "日付が変わった感じがする"
+text_en = "Feels like the day has turned over."
+trigger = "state"
+state   = "hour_change"
+hours   = [0]
+
 # --- weather ---
 
 [[speech]]
