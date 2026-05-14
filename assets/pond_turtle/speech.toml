@@ -31,3 +31,184 @@ text_en = "Phew."
 trigger = "state"
 state   = "landing"
 duration_sec = 3.0
+
+# --- weather ---
+
+[[speech]]
+text_ja = "甲羅干し日和な気がする"
+text_en = "Feels like a good day to warm my shell."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "甲羅があたたまってくる感じ"
+text_en = "I can feel my shell warming up."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "今日は日当たりのいいところにいたい"
+text_en = "I want to find a sunny spot today."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "日差しは嬉しいけど、水も恋しい"
+text_en = "I love the sun, but I miss the water too."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 28.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "少し暑すぎかな…水に入りたい"
+text_en = "Maybe a little too hot... I want to get in the water."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 28.0
+weight  = 0.9
+
+[[speech]]
+text_ja = "暑すぎる…水に入りたい"
+text_en = "Too hot... I want to get in the water."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 32.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "日差しはあるのに、水が冷たそう"
+text_en = "There's sun, but the water must be cold."
+trigger = "weather"
+weather = ["sunny"]
+temp_max = 15.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅は温まるけど、体の芯が冷えてる"
+text_en = "My shell warms up, but I'm still cold inside."
+trigger = "weather"
+weather = ["sunny"]
+temp_max = 12.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "甲羅がなかなか温まらない"
+text_en = "My shell just won't warm up."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "もう少し日が出てくれたらいいのに"
+text_en = "I wish there was a bit more sun."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか体がシャキっとしない"
+text_en = "I feel a bit sluggish."
+trigger = "weather"
+weather = ["cloudy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "曇って冷える…川の水も冷たそう"
+text_en = "Cold and cloudy... the river must be frigid."
+trigger = "weather"
+weather = ["cloudy"]
+temp_max = 12.0
+weight  = 1.1
+
+[[speech]]
+text_ja = "体がだんだん重くなってきた"
+text_en = "My body is getting heavier and heavier."
+trigger = "weather"
+weather = ["cloudy"]
+temp_max = 12.0
+weight  = 1.0
+
+[[speech]]
+text_ja = "雨の音が落ち着く"
+text_en = "The sound of rain is so calming."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "水かさが増してそうだな"
+text_en = "The water level must be rising."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "雨の日も嫌いじゃない"
+text_en = "I don't mind rainy days."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "川が賑やかになってそう"
+text_en = "The river must be lively right now."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.8
+
+[[speech]]
+text_ja = "冷たい雨だ…体に堪える"
+text_en = "Cold rain... this really gets to me."
+trigger = "weather"
+weather = ["rainy"]
+temp_max = 12.0
+weight  = 1.1
+
+[[speech]]
+text_ja = "体が動かなくなってきた気がする"
+text_en = "I feel like I'm slowing down."
+trigger = "weather"
+weather = ["rainy"]
+temp_max = 10.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "冬眠したい気分"
+text_en = "I feel like hibernating."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.2
+
+[[speech]]
+text_ja = "体の動きが遅くなってきた…"
+text_en = "I'm slowing down..."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.1
+
+[[speech]]
+text_ja = "このまままるくなって眠りたい"
+text_en = "I just want to curl up and sleep."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "冬眠の準備、できてなかった"
+text_en = "I wasn't ready for this cold."
+trigger = "weather"
+weather = ["snowy"]
+temp_max = 3.0
+weight  = 1.2
+
+[[speech]]
+text_ja = "川が凍りそうだ…"
+text_en = "The river might be freezing over..."
+trigger = "weather"
+weather = ["snowy"]
+temp_max = 3.0
+weight  = 1.1
