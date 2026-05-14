@@ -224,6 +224,8 @@ pub struct SpeechEngine {
     startup_fired: bool,
     /// Whether the previous tick was in `LandingStandUp`.
     prev_in_landing: bool,
+    /// Last known clock hour; used to detect hour changes.
+    last_hour: Option<u8>,
 }
 
 impl SpeechEngine {
@@ -240,6 +242,7 @@ impl SpeechEngine {
             next_random_interval: next_interval,
             startup_fired: false,
             prev_in_landing: false,
+            last_hour: None,
         }
     }
 
@@ -277,6 +280,18 @@ impl SpeechEngine {
             }
         }
 
+        // Hour-change event trigger (bypasses global lock, fires once per hour).
+        {
+            use chrono::Timelike;
+            let current_hour = chrono::Local::now().hour() as u8;
+            let prev = self.last_hour.replace(current_hour);
+            if prev.is_some() && prev != Some(current_hour) {
+                if let Some(line) = self.pick_hour_change(current_hour) {
+                    return Some(line);
+                }
+            }
+        }
+
         // Random/time triggers: advance timer and check.
         self.random_timer += dt;
         if self.random_timer < self.next_random_interval || lock_remaining > 0.0 {
@@ -285,6 +300,21 @@ impl SpeechEngine {
         self.random_timer = 0.0;
         self.next_random_interval = 45.0 + self.rng.random::<f64>() * 45.0;
         self.pick_random_or_time(weather)
+    }
+
+    fn pick_hour_change(&mut self, hour: u8) -> Option<SpeechLine> {
+        let candidates: Vec<&SpeechEntry> = self.data.entries.iter()
+            .filter(|e| {
+                e.trigger == TriggerKind::State
+                    && e.state.as_deref() == Some("hour_change")
+                    && e.hours.as_ref().map_or(true, |h| h.contains(&hour))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let idx = self.rng.random_range(0..candidates.len());
+        Some(self.make_line(candidates[idx]))
     }
 
     fn pick_state(&mut self, trigger_name: &str) -> Option<SpeechLine> {
