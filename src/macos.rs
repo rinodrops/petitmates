@@ -97,6 +97,8 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: f64,
+    /// Resolved display language: "ja" or "en".
+    lang: String,
 }
 
 thread_local! {
@@ -104,6 +106,26 @@ thread_local! {
 }
 
 // ---- Panel helpers ----
+
+/// Detect the OS preferred language, returning `"ja"` or `"en"`.
+///
+/// Checks `NSLocale.preferredLanguages` in order; returns `"ja"` when
+/// the first language whose tag starts with `"ja"` appears before any
+/// English tag.  Falls back to `"en"`.
+fn detect_system_language() -> String {
+    use objc2_foundation::NSLocale;
+    let langs = unsafe { NSLocale::preferredLanguages() };
+    for i in 0..langs.len() {
+        let tag: String = unsafe { langs.objectAtIndex(i).to_string() };
+        if tag.starts_with("ja") {
+            return "ja".to_owned();
+        }
+        if tag.starts_with("en") {
+            return "en".to_owned();
+        }
+    }
+    "en".to_owned()
+}
 
 fn make_panel(image: &NSImage, mt: MainThreadMarker) -> Retained<NSPanel> {
     let sz = unsafe { image.size() };
@@ -186,7 +208,8 @@ fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retain
         let mas_cls = AnyClass::get(c"NSMutableAttributedString").unwrap();
         let ms: *mut AnyObject = msg_send![mas_cls, alloc];
         let ms: *mut AnyObject = msg_send![ms, initWithString: &*ns_text];
-        let full_range = objc2_foundation::NSRange::new(0, ns_text.len());
+        // NSRange expects UTF-16 code unit count, not UTF-8 byte count.
+        let full_range = objc2_foundation::NSRange::new(0, ns_text.len_utf16());
         let _: () = msg_send![ms, setAttributes: attrs range: full_range];
 
         // Measure text.
@@ -197,52 +220,92 @@ fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retain
             options: 1u64
             context: std::ptr::null_mut::<AnyObject>()
         ];
-        let text_w = bounds.size.width.ceil();
-        let text_h = bounds.size.height.ceil();
+        let text_w = bounds.size.width.ceil().max(1.0);
+        let text_h = bounds.size.height.ceil().max(1.0);
 
         let bubble_w = (text_w + BUBBLE_PADDING * 2.0).max(BUBBLE_MIN_W);
         let bubble_h = text_h + BUBBLE_PADDING * 2.0;
         let total_h  = bubble_h + BUBBLE_TAIL_H;
 
         // Y origin of the body in the image (NS coords = Y-up from bottom).
-        let body_y   = if tail_at_bottom { BUBBLE_TAIL_H } else { 0.0 };
-        let body_rect = NSRect::new(
-            NSPoint::new(0.0, body_y),
-            NSSize::new(bubble_w, bubble_h),
-        );
+        let body_y = if tail_at_bottom { BUBBLE_TAIL_H } else { 0.0 };
 
         let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(bubble_w, total_h));
         img.lockFocus();
 
-        // Rounded rect body.
+        // Build a single combined outer-contour path (rounded rect + tail) so
+        // that fill and stroke are applied uniformly to the whole shape.  This
+        // eliminates the visible seam line at the rect/tail junction and gives
+        // the tail sides the same border as the rest of the bubble.
+        //
+        // Both branches trace the outer contour counter-clockwise (CCW) in NS
+        // Y-up coordinates, which keeps the shape interior on the left.
+        let cx = bubble_w / 2.0;
+        let r  = BUBBLE_CORNER;
+        let outer = NSBezierPath::bezierPath();
+
+        if tail_at_bottom {
+            // Start at right tail base, go CCW around the whole shape.
+            outer.moveToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
+            outer.lineToPoint(NSPoint::new(bubble_w - r, BUBBLE_TAIL_H));
+            // Bottom-right arc: 270° → 0°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, BUBBLE_TAIL_H + r)
+                radius: r  startAngle: 270.0_f64  endAngle: 0.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(bubble_w, BUBBLE_TAIL_H + bubble_h - r));
+            // Top-right arc: 0° → 90°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, BUBBLE_TAIL_H + bubble_h - r)
+                radius: r  startAngle: 0.0_f64  endAngle: 90.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(r, BUBBLE_TAIL_H + bubble_h));
+            // Top-left arc: 90° → 180°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, BUBBLE_TAIL_H + bubble_h - r)
+                radius: r  startAngle: 90.0_f64  endAngle: 180.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(0.0, BUBBLE_TAIL_H + r));
+            // Bottom-left arc: 180° → 270°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, BUBBLE_TAIL_H + r)
+                radius: r  startAngle: 180.0_f64  endAngle: 270.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
+            outer.lineToPoint(NSPoint::new(cx, 0.0));
+            // closePath draws back to the start (right tail base).
+        } else {
+            // tail_at_top: start at right tail base, go CCW.
+            outer.moveToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, bubble_h));
+            outer.lineToPoint(NSPoint::new(cx, bubble_h + BUBBLE_TAIL_H));
+            outer.lineToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, bubble_h));
+            outer.lineToPoint(NSPoint::new(r, bubble_h));
+            // Top-left arc: 90° → 180°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, bubble_h - r)
+                radius: r  startAngle: 90.0_f64  endAngle: 180.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(0.0, r));
+            // Bottom-left arc: 180° → 270°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(r, r)
+                radius: r  startAngle: 180.0_f64  endAngle: 270.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(bubble_w - r, 0.0));
+            // Bottom-right arc: 270° → 0°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, r)
+                radius: r  startAngle: 270.0_f64  endAngle: 0.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(bubble_w, bubble_h - r));
+            // Top-right arc: 0° → 90°, CCW
+            let _: () = msg_send![&*outer,
+                appendBezierPathWithArcWithCenter: NSPoint::new(bubble_w - r, bubble_h - r)
+                radius: r  startAngle: 0.0_f64  endAngle: 90.0_f64  clockwise: false];
+            outer.lineToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, bubble_h));
+        }
+        outer.closePath();
+
+        // Fill then stroke the single combined path — no seam at the junction.
         let bg = NSColor::colorWithWhite_alpha(1.0, 0.93);
         bg.setFill();
-        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-            body_rect, BUBBLE_CORNER, BUBBLE_CORNER,
-        );
-        path.fill();
-
-        // Subtle border.
+        outer.fill();
         NSColor::colorWithWhite_alpha(0.70, 0.7).setStroke();
-        path.setLineWidth(0.5);
-        path.stroke();
-
-        // Tail triangle.
-        let cx = bubble_w / 2.0;
-        let tail_path = NSBezierPath::bezierPath();
-        if tail_at_bottom {
-            tail_path.moveToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
-            tail_path.lineToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, BUBBLE_TAIL_H));
-            tail_path.lineToPoint(NSPoint::new(cx, 0.0));
-        } else {
-            let top = bubble_h;
-            tail_path.moveToPoint(NSPoint::new(cx - BUBBLE_TAIL_W / 2.0, top));
-            tail_path.lineToPoint(NSPoint::new(cx + BUBBLE_TAIL_W / 2.0, top));
-            tail_path.lineToPoint(NSPoint::new(cx, top + BUBBLE_TAIL_H));
-        }
-        tail_path.closePath();
-        bg.setFill();
-        tail_path.fill();
+        outer.setLineWidth(0.5);
+        outer.stroke();
 
         // Text.
         let text_rect = NSRect::new(
@@ -258,7 +321,6 @@ fn make_bubble_image(text: &str, tail_at_bottom: bool, font_size: f64) -> Retain
             options: 1u64
             context: std::ptr::null_mut::<AnyObject>()
         ];
-
         img.unlockFocus();
         img
     }
@@ -312,8 +374,10 @@ fn show_bubble(
             p.setBackgroundColor(Some(&NSColor::clearColor()));
             p.setOpaque(false);
             p.setHasShadow(false);
-            // Level 1 = floating above normal windows.
-            p.setLevel(1);
+            // Level 0 = NSNormalWindowLevel, same as the character panel.
+            // The tick loop repositions the bubble just above the character
+            // panel each frame via orderWindow:Above:relativeTo:.
+            p.setLevel(0);
             p.setCollectionBehavior(
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
@@ -1725,7 +1789,7 @@ fn tick() {
                     app.speech_lock_remaining = lock_sec;
 
                     // Show bubble.
-                    if let Some(bs) = crate::speech::BubbleState::new(&line) {
+                    if let Some(bs) = crate::speech::BubbleState::new(&line, &app.lang) {
                         let char_frame = unsafe { app.chars[i].panel.frame() };
                         let existing   = app.chars[i].bubble_panel.as_ref();
                         let panel = show_bubble(existing, &bs.text, font_sz, char_frame, &si, mt);
@@ -1764,10 +1828,10 @@ fn tick() {
                 unsafe {
                     bp.setFrameOrigin(NSPoint::new(bubble_x, bubble_y));
                     // Keep bubble above character panel.
-                    let char_num: u32 = msg_send![&*ch.panel, windowNumber];
+                    let char_num: isize = msg_send![&*ch.panel, windowNumber];
                     bp.orderWindow_relativeTo(
                         objc2_app_kit::NSWindowOrderingMode::Above,
-                        char_num as isize,
+                        char_num,
                     );
                 }
                 let _ = font_sz; // suppress unused warning
@@ -1862,6 +1926,8 @@ pub fn run() {
             speech_cfg: user_cfg.speech,
             speech_tick: Instant::now(),
             font_size: user_cfg.display.font_size as f64,
+            lang: user_cfg.display.language.clone()
+                .unwrap_or_else(detect_system_language),
         });
     });
 

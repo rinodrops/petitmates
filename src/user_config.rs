@@ -18,6 +18,9 @@ pub struct DisplayConfig {
     pub sprite_size: u32,
     /// Font size in points for speech bubbles (OS default font).
     pub font_size: u32,
+    /// Speech bubble display language: "en" or "ja".
+    /// When absent, the OS preferred language is used (falls back to "en").
+    pub language: Option<String>,
 }
 
 impl Default for DisplayConfig {
@@ -25,6 +28,7 @@ impl Default for DisplayConfig {
         Self {
             sprite_size: 150,
             font_size: 14,
+            language: None,
         }
     }
 }
