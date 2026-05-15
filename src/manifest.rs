@@ -4,7 +4,7 @@ use std::path::Path;
 // ── Animation definitions ─────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AnimMode {
     Loop,
     PingPong,
