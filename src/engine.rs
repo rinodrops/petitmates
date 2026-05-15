@@ -27,7 +27,7 @@ pub fn advance_anim(
         State::LandingStandUp { elapsed }
         | State::Observing { elapsed, .. }
         | State::TurningAround { elapsed, .. }
-        | State::PeekDown { elapsed, .. }
+        | State::SurfaceInteract { elapsed, .. }
         | State::JumpRunup { elapsed, .. }
         | State::WallEntry { elapsed }
         | State::WallPause { elapsed, .. }

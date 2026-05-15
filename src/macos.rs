@@ -22,7 +22,7 @@ use objc2_foundation::{
 };
 
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
-use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, Transition};
+use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, SurfaceEdge, Transition};
 use crate::config::{make_shared, Config, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
@@ -840,6 +840,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                         surface_progress: 0.5,
                         facing: ch.facing,
                         at_edge: false,
+                        surface_edge_info: SurfaceEdge::None,
                         jump_target: None,
                         attract_target: None,
                     };
@@ -1282,6 +1283,7 @@ fn tick_char(
                 surface_progress: 0.5,
                 facing: ch.facing,
                 at_edge: false,
+                surface_edge_info: SurfaceEdge::None,
                 jump_target: None,
                 attract_target: None,
             };
@@ -1440,6 +1442,7 @@ fn tick_char(
                         surface_progress: 0.5,
                         facing: ch.facing,
                         at_edge: false,
+                        surface_edge_info: SurfaceEdge::None,
                         jump_target: None,
                         attract_target: None,
                     };
@@ -1501,6 +1504,7 @@ fn tick_char(
             surface_progress,
             facing: ch.facing,
             at_edge,
+            surface_edge_info: SurfaceEdge::compute(&ch.surface, at_edge, surface_progress),
             jump_target,
             attract_target,
         };
