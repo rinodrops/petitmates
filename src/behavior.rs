@@ -108,6 +108,20 @@ pub enum State {
     /// `shocked > 0` means the character just fell off a ledge; shows `f-shocked`
     /// sprite until it counts down to zero.
     Falling { vx: f64, vy: f64, shocked: f64 },
+    /// Controlled parabolic jump toward a target wall (replaces the instant snap
+    /// from `JumpRunup`). Physics are the same as `Falling`; arrival is detected
+    /// when `char_pos.0` reaches `target_cx` (from the correct direction).
+    Airborne {
+        vx: f64,
+        vy: f64,
+        target_win_id: u32,
+        target_side: Side,
+        landing_mode: LandingMode,
+        /// Precomputed horizontal snap X; arrival triggers when char_pos.0 crosses this.
+        target_cx: f64,
+        /// Approximate target Y (used only for initial vx/vy calculation).
+        target_cy: f64,
+    },
 
     // -- Floor / WindowTop --
     /// Playing `s-stand-up` after landing.

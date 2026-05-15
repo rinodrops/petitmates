@@ -79,6 +79,7 @@ pub fn sprite_for_state(
             if *shocked > 0.0 { SpriteRef::front("f-shocked") }
             else { SpriteRef::side("s-jump", facing) }
         }
+        State::Airborne { .. } => SpriteRef::side("s-jump", facing),
 
         // ── Floor / Window top ────────────────────────────────────────
         State::LandingStandUp { .. } => SpriteRef::side("s-stand-up", facing),
