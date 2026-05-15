@@ -108,7 +108,9 @@ pub fn sprite_for_state(
         State::Sleeping { head_front: false, .. } => SpriteRef::side("s-lie-sleep", facing),
         State::Sleeping { head_front: true,  .. } => SpriteRef::front("f-lie-sleep"),
 
-        State::PeekDown { dir, .. } => SpriteRef::side("s-peek-down", *dir),
+        State::SurfaceInteract { animation, dir, .. } => {
+            SpriteRef::new(format!("s-{animation}"), *dir == Dir::Right)
+        }
 
         State::JumpRunup { .. } => SpriteRef::side("s-stand-up", facing),
 
