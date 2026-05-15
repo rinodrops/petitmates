@@ -119,6 +119,17 @@ pub enum State {
     /// Resting at the upper corner (`f-sit` or `f-lie`).
     CornerRest { elapsed: f64, duration: f64, lying: bool },
 
+    // -- One-shot animation --
+    /// Plays `animation` once from the manifest, then transitions to `return_to`.
+    /// The engine advances `frame` and sets `done = true` after the last frame.
+    OneShot {
+        animation: String,
+        frame: u8,
+        frame_elapsed: f64,
+        done: bool,
+        return_to: Box<State>,
+    },
+
     // -- User interaction --
     /// Character is being dragged by the user (⌘+drag on macOS).
     #[allow(dead_code)]

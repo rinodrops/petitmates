@@ -83,5 +83,19 @@ pub fn advance_anim(
             }
             0.0
         }
+
+        State::OneShot { animation, frame, frame_elapsed, done, .. } => {
+            if *done { return 0.0; }
+            let anim = animations.get(animation.as_str()).cloned().unwrap_or_default();
+            *frame_elapsed += dt;
+            while *frame_elapsed >= anim.frame_secs && !*done {
+                *frame_elapsed -= anim.frame_secs;
+                *frame += 1;
+                if *frame >= anim.frames.max(1) {
+                    *done = true;
+                }
+            }
+            0.0
+        }
     }
 }
