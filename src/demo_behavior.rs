@@ -129,7 +129,7 @@ impl BehaviorScript for DemoBehavior {
         match ctx.state {
 
             // ── Airborne ─────────────────────────────────────────────
-            State::Falling { .. } => Transition::Stay,
+            State::Falling { .. } | State::Airborne { .. } => Transition::Stay,
 
             // ── Landing ──────────────────────────────────────────────
             State::LandingStandUp { .. } => {

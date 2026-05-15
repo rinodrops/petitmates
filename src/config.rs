@@ -235,6 +235,11 @@ pub struct JumpConfig {
     /// idle state (Observing / StandIdle / SitIdle / LieIdle) expires on the
     /// Desktop surface (0..1).
     pub climb_attract_prob: f64,
+    /// Horizontal flight speed during a parabolic jump (px/s).
+    pub air_speed: f64,
+    /// Minimum upward velocity magnitude at jump launch (px/s).
+    /// Ensures the arc is always visible even when the target is at the same height.
+    pub min_jump_vy: f64,
 }
 
 impl Default for JumpConfig {
@@ -246,6 +251,8 @@ impl Default for JumpConfig {
             wall_jump_floor_margin: 150.0,
             climb_attract_dist: 600.0,
             climb_attract_prob: 0.35,
+            air_speed: 350.0,
+            min_jump_vy: 200.0,
         }
     }
 }
