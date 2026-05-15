@@ -1,8 +1,8 @@
 canonical_width = 512
 
 [animations.walk]
-frames = 3
-mode   = "ping-pong"
+frames = 4
+mode   = "loop"
 
 [animations.climb]
 frames = 3
@@ -91,12 +91,16 @@ y = 283
 
 [sprites."s-walk-0"]
 attachment = "line_y"
-y = 264
+y = 254
 
 [sprites."s-walk-1"]
 attachment = "line_y"
-y = 268
+y = 250
 
 [sprites."s-walk-2"]
 attachment = "line_y"
-y = 269
+y = 255
+
+[sprites."s-walk-3"]
+attachment = "line_y"
+y = 254
