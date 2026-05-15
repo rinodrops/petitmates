@@ -200,15 +200,20 @@ impl BehaviorScript for RustBehavior {
                 }
                 let dir = Self::toward_corner(ctx.surface_progress);
                 if self.rnd_bool(cfg.floor.peek_prob) {
-                    Transition::To(State::PeekDown { elapsed: 0.0, dir })
+                    Transition::To(State::SurfaceInteract {
+                        animation: "peek-down".to_string(),
+                        elapsed: 0.0,
+                        duration: cfg.floor.peek_duration,
+                        dir,
+                    })
                 } else {
                     Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 })
                 }
             }
 
-            // ── PeekDown ─────────────────────────────────────────────
-            State::PeekDown { dir, .. } => {
-                if e < cfg.floor.peek_duration { return Transition::Stay; }
+            // ── SurfaceInteract ───────────────────────────────────────
+            State::SurfaceInteract { dir, duration, .. } => {
+                if e < *duration { return Transition::Stay; }
                 if self.rnd_bool(cfg.floor.peek_walk_prob) {
                     Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 })
                 } else {
@@ -360,7 +365,12 @@ impl BehaviorScript for RustBehavior {
                         to_dir: ctx.facing.opposite(),
                     })
                 } else {
-                    Transition::To(State::PeekDown { elapsed: 0.0, dir: ctx.facing })
+                    Transition::To(State::SurfaceInteract {
+                        animation: "peek-down".to_string(),
+                        elapsed: 0.0,
+                        duration: cfg.floor.peek_duration,
+                        dir: ctx.facing,
+                    })
                 }
             }
 

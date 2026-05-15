@@ -27,7 +27,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, Transition};
+use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, SurfaceEdge, Transition};
 use crate::config::{make_shared_win_for, SharedConfig};
 use crate::engine::advance_anim;
 use crate::manifest;
@@ -712,7 +712,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             state: &ch.anim_state, surface: &ch.surface,
             elapsed_secs: 0.0, config: cfg, rng01: 0.0,
             surface_progress: 0.5, facing: ch.facing,
-            at_edge: false, jump_target: None, attract_target: None,
+            at_edge: false, surface_edge_info: SurfaceEdge::None,
+            jump_target: None, attract_target: None,
         };
         ch.anim_state = ch.behavior.on_surface_lost(&ctx);
         ch.surface = Surface::Airborne;
@@ -821,7 +822,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                         state: &ch.anim_state, surface: &new_surface,
                         elapsed_secs: 0.0, config: cfg, rng01: 0.0,
                         surface_progress: 0.5, facing: ch.facing,
-                        at_edge: false, jump_target: None, attract_target: None,
+                        at_edge: false, surface_edge_info: SurfaceEdge::None,
+                        jump_target: None, attract_target: None,
                     };
                     ch.behavior.on_landed(&ctx)
                 };
@@ -868,6 +870,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             state: &ch.anim_state, surface: &ch.surface,
             elapsed_secs: elapsed, config: cfg, rng01: 0.0,
             surface_progress, facing: ch.facing, at_edge, jump_target,
+            surface_edge_info: SurfaceEdge::compute(&ch.surface, at_edge, surface_progress),
             attract_target,
         };
         ch.behavior.next_state(&ctx)
@@ -1398,7 +1401,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                         state: &State::Grabbed, surface: &new_surface,
                                         elapsed_secs: 0.0, config: &cfg, rng01: 0.0,
                                         surface_progress: 0.5, facing: app.chars[i].facing,
-                                        at_edge: false, jump_target: None, attract_target: None,
+                                        at_edge: false, surface_edge_info: SurfaceEdge::None,
+                                        jump_target: None, attract_target: None,
                                     };
                                     app.chars[i].behavior.on_landed(&ctx)
                                 };

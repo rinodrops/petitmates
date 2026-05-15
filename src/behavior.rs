@@ -42,7 +42,39 @@ pub enum LandingMode {
     TopLanding,
 }
 
-// ---- Surface ----
+// ---- SurfaceEdge ----
+
+/// Describes the type of surface boundary the character is currently at.
+/// Computed from `Surface`, `at_edge`, and `surface_progress` each tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceEdge {
+    /// Not at any boundary.
+    None,
+    /// At the front edge of a window top (character reached the edge it was walking toward).
+    WindowTopFront,
+    /// At the top of a window wall (reached by climbing up).
+    WallTop,
+    /// At the bottom of a window wall (reached by climbing down).
+    WallBottom,
+    /// At the screen boundary on the desktop.
+    DesktopEdge,
+}
+
+impl SurfaceEdge {
+    /// Derive the surface edge from context fields.
+    pub fn compute(surface: &Surface, at_edge: bool, surface_progress: f64) -> Self {
+        if !at_edge { return Self::None; }
+        match surface {
+            Surface::WindowTop { .. }         => Self::WindowTopFront,
+            Surface::WindowWall { .. } => {
+                if surface_progress < 0.5 { Self::WallTop } else { Self::WallBottom }
+            }
+            Surface::Desktop { .. }           => Self::DesktopEdge,
+            _                                 => Self::None,
+        }
+    }
+}
+
 
 /// Where the character currently resides.
 /// Positions are in CG coordinates (origin = screen top-left, Y down).
@@ -96,8 +128,10 @@ pub enum State {
     LieIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Sleeping.
     Sleeping { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
-    /// Peeking down over the edge.
-    PeekDown { elapsed: f64, dir: Dir },
+    /// Playing a named edge animation (generalised `PeekDown`).
+    /// `animation` names a sprite `s-{animation}`; when elapsed ≥ duration the
+    /// behavior script decides the next state.
+    SurfaceInteract { animation: String, elapsed: f64, duration: f64, dir: Dir },
     /// Short run-up before jumping to a wall.
     JumpRunup { elapsed: f64, target_win_id: u32, target_side: Side, landing_mode: LandingMode },
 
@@ -168,6 +202,9 @@ pub struct BehaviorContext<'a> {
     /// True when the character has reached the boundary of the surface in
     /// the direction it is heading (edge of window-top, top/bottom of wall, etc.).
     pub at_edge: bool,
+    /// Semantic description of the current surface boundary (derived from
+    /// `surface`, `at_edge`, and `surface_progress`).
+    pub surface_edge_info: SurfaceEdge,
     /// Nearest window and side eligible for a wall-jump (Desktop surface only).
     /// Restricted to the current walking direction and `wall_jump_max_dist`.
     pub jump_target: Option<(u32, Side)>,
