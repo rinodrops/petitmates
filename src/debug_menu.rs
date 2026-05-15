@@ -49,6 +49,7 @@ pub fn state_name(state: &State) -> &'static str {
         State::CornerTransitionSide { .. }  => "CornerTransitionSide",
         State::CornerTransitionFront { .. } => "CornerTransitionFront",
         State::CornerRest { .. }            => "CornerRest",
+        State::OneShot { .. }               => "OneShot",
         State::Grabbed                      => "Grabbed",
     }
 }

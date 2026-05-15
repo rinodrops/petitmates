@@ -821,7 +821,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
 
             // Sprite dimensions for foot position.
             let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-            let (fw, fh) = ch.assets.image(sr.name, sr.mirror)
+            let (fw, fh) = ch.assets.image(&sr.name, sr.mirror)
                 .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
                 .unwrap_or((150.0, 150.0));
             let foot_x = ch.char_pos.0 + fw / 2.0;
@@ -1297,8 +1297,8 @@ fn tick_char(
             let sr_cur = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
             let sr_new = sprite_for_state(&fallback, ch.facing, &ch.assets.animations);
             if let (Some(img_cur), Some(img_new)) = (
-                ch.assets.image(sr_cur.name, sr_cur.mirror),
-                ch.assets.image(sr_new.name, sr_new.mirror),
+                ch.assets.image(&sr_cur.name, sr_cur.mirror),
+                ch.assets.image(&sr_new.name, sr_new.mirror),
             ) {
                 let cur_sz = unsafe { img_cur.size() };
                 let new_sz = unsafe { img_new.size() };
@@ -1475,7 +1475,7 @@ fn tick_char(
         }
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
-    let sprite_sz = ch.assets.image(sr_for_ctx.name, sr_for_ctx.mirror)
+    let sprite_sz = ch.assets.image(&sr_for_ctx.name, sr_for_ctx.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
     let (surface_progress, at_edge, jump_target, attract_target) =
@@ -1685,12 +1685,12 @@ fn tick_char(
         }
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
-    swap_sprite(&ch.panel, &ch.assets, sr.name, sr.mirror, mt);
+    swap_sprite(&ch.panel, &ch.assets, &sr.name, sr.mirror, mt);
 
     // Move panel to surface-derived NS origin.
-    let anchor = ch.assets.anchor(sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
+    let anchor = ch.assets.anchor(&sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
     let stand_anchor_y = ch.assets.anchor("s-stand").map(|a| a.y).unwrap_or(0.0);
-    let sz = ch.assets.image(sr.name, sr.mirror)
+    let sz = ch.assets.image(&sr.name, sr.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
     let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);

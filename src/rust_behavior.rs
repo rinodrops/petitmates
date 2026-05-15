@@ -656,6 +656,17 @@ impl BehaviorScript for RustBehavior {
 
             // ── Grabbed ──────────────────────────────────────────────
             State::Grabbed => Transition::Stay,
+
+            // ── OneShot ──────────────────────────────────────────────
+            // The engine drives frame advancement and sets `done`.
+            // When done, return to `return_to`.
+            State::OneShot { done, return_to, .. } => {
+                if *done {
+                    Transition::To(*return_to.clone())
+                } else {
+                    Transition::Stay
+                }
+            }
         }
     }
 

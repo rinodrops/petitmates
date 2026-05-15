@@ -4,7 +4,7 @@ use std::path::Path;
 // ── Animation definitions ─────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AnimMode {
     Loop,
     PingPong,
@@ -15,15 +15,20 @@ impl Default for AnimMode {
     fn default() -> Self { AnimMode::PingPong }
 }
 
+fn default_frame_secs() -> f64 { 0.12 }
+
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AnimationDef {
     pub frames: u8,
     #[serde(default)]
     pub mode: AnimMode,
+    /// Seconds per frame (used by OneShot and future animations).
+    #[serde(default = "default_frame_secs")]
+    pub frame_secs: f64,
 }
 
 impl Default for AnimationDef {
-    fn default() -> Self { AnimationDef { frames: 3, mode: AnimMode::PingPong } }
+    fn default() -> Self { AnimationDef { frames: 3, mode: AnimMode::PingPong, frame_secs: 0.12 } }
 }
 
 impl AnimationDef {
