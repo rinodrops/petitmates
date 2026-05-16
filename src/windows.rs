@@ -29,7 +29,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, SurfaceEdge, Transition};
 use crate::config::{make_shared_win_for, SharedConfig};
-use crate::engine::advance_anim;
+use crate::engine::{advance_anim, vertical_offset};
 use crate::manifest;
 use crate::rust_behavior::RustBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
@@ -1176,6 +1176,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     let (px, py) = surface_to_screen_pos(
         &ch.surface, ch.char_pos, (sw, sh), anchor, stand_anchor_y, wins, si,
     );
+    let py = py - vertical_offset(&ch.anim_state, &assets.animations) as i32;
 
     // Hover: check whether cursor is over the sprite.
     let alpha: u8 = unsafe {
