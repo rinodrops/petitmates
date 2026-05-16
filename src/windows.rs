@@ -218,6 +218,7 @@ unsafe fn render_bubble_bgra(
     tail_at_bottom: bool,
     font_size: i32,
 ) -> (Vec<u8>, i32, i32) {
+    unsafe {
     let hdc_screen = GetDC(ptr::null_mut());
     let hdc_mem    = CreateCompatibleDC(hdc_screen);
 
@@ -366,21 +367,23 @@ unsafe fn render_bubble_bgra(
     ReleaseDC(ptr::null_mut(), hdc_screen);
 
     (bgra, img_w, img_h)
+    } // unsafe
 }
 
 /// Create the speech-bubble HWND (called once per character).
 unsafe fn create_bubble_hwnd(hinstance: HINSTANCE, char_hwnd: HWND) -> HWND {
     let class_name = to_wide("PetitMatesOverlay");
-    let hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
-        class_name.as_ptr(),
-        ptr::null(),
-        WS_POPUP,
-        0, 0, 1, 1,
-        char_hwnd, // owner = character window → inherits Z-order relationship
-        ptr::null_mut(), hinstance, ptr::null(),
-    );
-    hwnd
+    unsafe {
+        CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+            class_name.as_ptr(),
+            ptr::null(),
+            WS_POPUP,
+            0, 0, 1, 1,
+            char_hwnd, // owner = character window → inherits Z-order relationship
+            ptr::null_mut(), hinstance, ptr::null(),
+        )
+    }
 }
 
 /// Render and position the bubble HWND above or below the character sprite.
@@ -399,7 +402,7 @@ unsafe fn update_bubble_hwnd(
     let tail_at_bottom =
         char_y - est_h - WIN_BUBBLE_MARGIN > 0; // space *above* char (Y-down coords)
 
-    let (bgra, bw, bh) = render_bubble_bgra(text, tail_at_bottom, font_size);
+    let (bgra, bw, bh) = unsafe { render_bubble_bgra(text, tail_at_bottom, font_size) };
 
     let bx = {
         let cx = char_x + char_w / 2;
@@ -411,16 +414,18 @@ unsafe fn update_bubble_hwnd(
         (char_y + char_h + WIN_BUBBLE_MARGIN).min(screen_h - bh)
     };
 
-    set_layered_content(bubble_hwnd, &bgra, bw, bh, bx, by, alpha_u8);
+    unsafe { set_layered_content(bubble_hwnd, &bgra, bw, bh, bx, by, alpha_u8); }
 
     // Ensure window is visible.
-    ShowWindow(bubble_hwnd, SW_SHOWNOACTIVATE);
+    unsafe { ShowWindow(bubble_hwnd, SW_SHOWNOACTIVATE); }
     // Keep just above the character HWND.
-    SetWindowPos(
-        bubble_hwnd, char_hwnd,
-        bx, by, bw, bh,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-    );
+    unsafe {
+        SetWindowPos(
+            bubble_hwnd, char_hwnd,
+            bx, by, bw, bh,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
 }
 
 // ---- Surface → screen position ----
