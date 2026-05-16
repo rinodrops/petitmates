@@ -92,6 +92,7 @@ pub struct Manifest {
 impl Manifest {
     /// Returns the `AnimationDef` for `name`, falling back to the default
     /// (3 frames, ping-pong) when the animation is not defined in the manifest.
+    #[allow(dead_code)]
     pub fn anim(&self, name: &str) -> AnimationDef {
         self.animations.get(name).cloned().unwrap_or_default()
     }
@@ -103,6 +104,7 @@ pub fn load(char_dir: &Path) -> Option<Manifest> {
 }
 
 /// Parse a `Manifest` from raw TOML bytes (used for embedded assets on Windows).
+#[allow(dead_code)]
 pub fn load_from_bytes(bytes: &[u8]) -> Option<Manifest> {
     let text = std::str::from_utf8(bytes).ok()?;
     toml::from_str(text).ok()
