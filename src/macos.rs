@@ -1814,11 +1814,18 @@ fn tick_char(
     // Z-order: place the panel just above its host window so windows in front
     // of the host naturally occlude the character.
     unsafe {
-        if let Some(wid) = surface_host_win_id(&ch.surface) {
+        let z_host = surface_host_win_id(&ch.surface).or_else(|| {
+            match &ch.anim_state {
+                State::JumpRunup { target_win_id, .. } |
+                State::Airborne  { target_win_id, .. } => Some(*target_win_id),
+                _ => None,
+            }
+        });
+        if let Some(wid) = z_host {
             // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
             let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
         } else {
-            // Desktop / Airborne: bring to front within the normal level.
+            // Desktop (not jumping): bring to front within the normal level.
             ch.panel.orderFront(None);
         }
     }

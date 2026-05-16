@@ -1153,7 +1153,15 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         // that window and the host. If result == ch.hwnd the character is
         // already correctly positioned and SetWindowPos becomes a no-op.
         // On Desktop / Airborne: place at HWND_TOP (front of non-topmost).
-        let insert_after: HWND = if let Some(host) = surface_host_hwnd(&ch.surface) {
+        let z_host_hwnd: Option<HWND> = surface_host_hwnd(&ch.surface).or_else(|| {
+            let win_id = match &ch.anim_state {
+                State::JumpRunup { target_win_id, .. } |
+                State::Airborne  { target_win_id, .. } => Some(*target_win_id),
+                _ => None,
+            }?;
+            wins.iter().find(|w| w.id == win_id).map(|w| w.id as HWND)
+        });
+        let insert_after: HWND = if let Some(host) = z_host_hwnd {
             let above = GetWindow(host, GW_HWNDPREV);
             if above.is_null() { HWND_TOP } else { above }
         } else {
