@@ -47,19 +47,19 @@
 
 Both characters live system-wide — on top of your app windows and the desktop, not inside any one application.
 
-| Animation                                 | Preview                                            |
-| ----------------------------------------- | -------------------------------------------------- |
-| Drop in from above, stand up, look around | ![fall-land](docs/screenshots/fall-land.gif)       |
-| Walk along window edges                   | ![walk-top](docs/screenshots/walk-top.gif)         |
-| Peek down over the edge                   | ![peek-down](docs/screenshots/peek-down.gif)       |
-| Climb up the wall                         | ![climb-wall](docs/screenshots/climb-wall.gif)     |
-| Jump between windows                      | ![window-jump](docs/screenshots/window-jump.gif)   |
-| Fall off the edge in surprise             | ![shocked-fall](docs/screenshots/shocked-fall.gif) |
-| Stroll along the desktop floor            | ![floor-walk](docs/screenshots/floor-walk.gif)     |
-| Fade when your cursor hovers              | ![hover-fade](docs/screenshots/hover-fade.gif)     |
-| Grab and drop onto any surface            | ![drag-drop](docs/screenshots/drag-drop.gif)       |
+| Animation                                           | Preview                                            |
+| --------------------------------------------------- | -------------------------------------------------- |
+| Drop in from above, stand up, look around           | ![fall-land](docs/screenshots/fall-land.gif)       |
+| Walk along window edges with a natural bouncy gait  | ![walk-top](docs/screenshots/walk-top.gif)         |
+| Peek down over the edge                             | ![peek-down](docs/screenshots/peek-down.gif)       |
+| Climb up the wall                                   | ![climb-wall](docs/screenshots/climb-wall.gif)     |
+| Jump between windows in a physical arc              | ![window-jump](docs/screenshots/window-jump.gif)   |
+| Fall off the edge in surprise                       | ![shocked-fall](docs/screenshots/shocked-fall.gif) |
+| Stroll along the desktop floor                      | ![floor-walk](docs/screenshots/floor-walk.gif)     |
+| Fade when your cursor hovers                        | ![hover-fade](docs/screenshots/hover-fade.gif)     |
+| Grab and drop onto any surface                      | ![drag-drop](docs/screenshots/drag-drop.gif)       |
 
-They sit, lie down, fall asleep, turn their heads, open their mouths — and occasionally decide to visit a different window on their own.
+They sit, lie down, fall asleep, turn their heads, open their mouths — and occasionally break into a run or decide to visit a different window on their own.
 
 ## Speech
 
@@ -158,6 +158,21 @@ pond_turtle_config.toml      ← optional override
 ```
 
 If no override file is present, built-in defaults are used.
+
+## Release Notes
+
+### v0.3.0
+- Characters walk with a natural bouncy gait (vertical oscillation)
+- Characters occasionally break into a run when hurrying between locations
+- Window-to-window jumps now follow a physically realistic parabolic arc
+- Engine: animation frames and playback modes configurable per character in `manifest.toml`
+
+### v0.2.0
+- Speech bubbles with random, time-of-day, weather, and event triggers
+- Weather API integration (Open-Meteo) — reactions to current conditions
+
+### v0.1.0
+- Initial release
 
 ## License
 

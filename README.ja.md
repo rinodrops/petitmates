@@ -50,16 +50,16 @@
 | アニメーション                              | プレビュー                                         |
 | ------------------------------------------- | -------------------------------------------------- |
 | 画面外上から落下 → 着地してキョロキョロ観察 | ![fall-land](docs/screenshots/fall-land.gif)       |
-| ウィンドウ上端を端から端へ歩く              | ![walk-top](docs/screenshots/walk-top.gif)         |
+| 跳ねるような歩き方でウィンドウ上端を歩く    | ![walk-top](docs/screenshots/walk-top.gif)         |
 | 端からのぞき込む                            | ![peek-down](docs/screenshots/peek-down.gif)       |
 | 壁を登る                                    | ![climb-wall](docs/screenshots/climb-wall.gif)     |
-| コーナーから別ウィンドウへジャンプ移動      | ![window-jump](docs/screenshots/window-jump.gif)   |
+| 放物線を描いて別ウィンドウへジャンプ        | ![window-jump](docs/screenshots/window-jump.gif)   |
 | 端から驚いて落下                            | ![shocked-fall](docs/screenshots/shocked-fall.gif) |
 | デスクトップの床をのんびり歩く              | ![floor-walk](docs/screenshots/floor-walk.gif)     |
 | カーソルをかざすと半透明になる              | ![hover-fade](docs/screenshots/hover-fade.gif)     |
 | ⌘+ドラッグでつかんで別の場所へ移動          | ![drag-drop](docs/screenshots/drag-drop.gif)       |
 
-座ったり，横になったり，眠ったり，首を傾けたり，口を開けたり——そして気が向いたら自分で別のウィンドウへ移動します。
+座ったり，横になったり，眠ったり，首を傾けたり，口を開けたり——急いでいるときは走り出すことも。気が向いたら自分で別のウィンドウへ移動します。
 
 ## 発話
 
@@ -158,6 +158,21 @@ pond_turtle_config.toml      ← オプション（上書き用）
 ```
 
 ファイルがない場合は内蔵のデフォルト値が使用されます。
+
+## リリースノート
+
+### v0.3.0
+- 歩行時に上下に弾むような自然なステップを追加（垂直振動）
+- 急ぐ場面でキャラクターが走り出すようになった（Running ステート）
+- ウィンドウ間ジャンプが放物線物理に対応し，より自然な弧を描くように
+- エンジン: アニメーションのフレーム数・再生モードを `manifest.toml` でキャラクターごとに定義可能に
+
+### v0.2.0
+- 吹き出しによる発話（ランダム・時間帯・天気・イベントトリガー）
+- 天気 API 連携（Open-Meteo）— 現在の天気に応じたリアクション
+
+### v0.1.0
+- 初回リリース
 
 ## ライセンス
 
