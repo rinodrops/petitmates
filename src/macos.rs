@@ -45,7 +45,8 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
     match surface {
         Surface::WindowTop { win_id, .. }
         | Surface::WindowWall { win_id, .. }
-        | Surface::WindowUpperCorner { win_id, .. } => Some(*win_id),
+        | Surface::WindowUpperCorner { win_id, .. }
+        | Surface::WindowBottom { win_id, .. } => Some(*win_id),
         _ => None,
     }
 }
@@ -1154,6 +1155,15 @@ fn surface_to_ns_origin(
             NSPoint::new(ns_x, ns_y)
         }
 
+        // Window bottom: foot on the window's bottom edge, x_local from left edge.
+        Surface::WindowBottom { win_id, x_local } => {
+            let Some(win) = wm::find_win(*win_id, wins) else {
+                return NSPoint::ZERO;
+            };
+            let ns_foot = si.height - win.bottom();
+            NSPoint::new(win.x + x_local - sw / 2.0, ns_foot - anchor.y)
+        }
+
     }
 }
 
@@ -1272,6 +1282,15 @@ fn surface_context(
             let at_edge = *y_local <= edge_margin || *y_local >= win.h - edge_margin;
             (progress, at_edge, None, None)
         }
+        Surface::WindowBottom { win_id, x_local } => {
+            let Some(win) = wm::find_win(*win_id, wins) else {
+                return (0.5, false, None, None);
+            };
+            let progress = (x_local / win.w).clamp(0.0, 1.0);
+            let at_edge = *x_local <= edge_margin + sprite_w / 2.0
+                || *x_local >= win.w - edge_margin - sprite_w / 2.0;
+            (progress, at_edge, None, None)
+        }
         _ => (0.5, false, None, None),
     }
 }
@@ -1366,7 +1385,8 @@ fn tick_char(
                     *x = x.clamp(half_w, si.width - half_w);
                     ch.char_pos.0 = *x;
                 }
-                Surface::WindowTop { x_local, .. } => {
+                Surface::WindowTop { x_local, .. }
+                | Surface::WindowBottom { x_local, .. } => {
                     *x_local += match dir { Dir::Left => -delta, Dir::Right => delta };
                 }
                 _ => {}
@@ -1742,6 +1762,22 @@ fn tick_char(
                                     Some(Surface::WindowWall { win_id: win.id, side, y_local })
                                 }
                             }
+                        } else { None }
+                    } else { None }
+                }
+                // ClimbingDown reached the wall bottom: step onto WindowBottom.
+                (State::Walking { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
+                    if let Some(win) = wm::find_win(*win_id, wins) {
+                        if *y_local >= win.h - 4.0 {
+                            let corner_offset = sprite_sz.0 / 2.0 + 4.0;
+                            let x_local = match side {
+                                Side::Left  => corner_offset,
+                                Side::Right => win.w - corner_offset,
+                            };
+                            ch.char_pos.0 = win.x + x_local;
+                            ch.char_pos.1 = win.bottom();
+                            ch.facing = *dir;
+                            Some(Surface::WindowBottom { win_id: *win_id, x_local })
                         } else { None }
                     } else { None }
                 }
