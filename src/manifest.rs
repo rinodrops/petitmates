@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 // ── Animation definitions ─────────────────────────────────────────────────────
@@ -92,17 +93,21 @@ pub struct Manifest {
 impl Manifest {
     /// Returns the `AnimationDef` for `name`, falling back to the default
     /// (3 frames, ping-pong) when the animation is not defined in the manifest.
+    #[allow(dead_code)]
     pub fn anim(&self, name: &str) -> AnimationDef {
         self.animations.get(name).cloned().unwrap_or_default()
     }
 }
 
+/// Parse a `Manifest` from filesystem TOML (used for hot-reload on macOS).
+#[cfg(target_os = "macos")]
 pub fn load(char_dir: &Path) -> Option<Manifest> {
     let text = std::fs::read_to_string(char_dir.join("manifest.toml")).ok()?;
     toml::from_str(&text).ok()
 }
 
 /// Parse a `Manifest` from raw TOML bytes (used for embedded assets on Windows).
+#[cfg(target_os = "windows")]
 pub fn load_from_bytes(bytes: &[u8]) -> Option<Manifest> {
     let text = std::str::from_utf8(bytes).ok()?;
     toml::from_str(text).ok()
