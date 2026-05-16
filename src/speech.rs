@@ -53,7 +53,9 @@ pub struct SpeechEntry {
     pub duration_sec: Option<f64>,
 
     // --- future: oneshot animation ---
+    #[allow(dead_code)]
     pub oneshot:      Option<String>,
+    #[allow(dead_code)]
     pub oneshot_sync: Option<String>,
 }
 
@@ -176,6 +178,7 @@ pub struct BubbleState {
     /// The resolved display text (already chosen from ja/en).
     pub text: String,
     /// Total seconds to display (including fade-out period).
+    #[allow(dead_code)]
     pub duration_sec: f64,
     /// Seconds of the fade-out transition at the end.
     pub fade_out_sec: f64,

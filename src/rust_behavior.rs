@@ -243,7 +243,6 @@ impl BehaviorScript for RustBehavior {
                 if !ctx.at_edge { return Transition::Stay; }
                 match ctx.surface {
                     Surface::WindowTop { .. } => {
-                        // edge_idle_prob is checked first so its value is the exact
                         // idle rate (90% → idle 90% of the time, period).
                         if self.rnd_bool(cfg.floor.edge_idle_prob) {
                             let r = self.rnd();
@@ -287,6 +286,9 @@ impl BehaviorScript for RustBehavior {
                             // has since moved beyond the screen edge.
                             Transition::To(self.make_stand_idle(ctx))
                         }
+                    }
+                    Surface::WindowBottom { .. } => {
+                        Transition::To(State::TurningAround { elapsed: 0.0, to_dir: dir.opposite() })
                     }
                     _ => Transition::Stay,
                 }
@@ -334,9 +336,9 @@ impl BehaviorScript for RustBehavior {
                             })
                         };
                     }
-                    // Desktop screen edge: walk inward.  Skip the attract_target
+                    // Desktop / WindowBottom edge: walk inward.  Skip the attract_target
                     // check below to avoid re-triggering toward the same unreachable window.
-                    if let Surface::Desktop { .. } = ctx.surface {
+                    if matches!(ctx.surface, Surface::Desktop { .. } | Surface::WindowBottom { .. }) {
                         let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
@@ -404,8 +406,8 @@ impl BehaviorScript for RustBehavior {
                             Transition::To(self.make_stand_idle(ctx))
                         };
                     }
-                    // Desktop screen edge: walk inward.
-                    if let Surface::Desktop { .. } = ctx.surface {
+                    // Desktop / WindowBottom edge: walk inward.
+                    if matches!(ctx.surface, Surface::Desktop { .. } | Surface::WindowBottom { .. }) {
                         let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
@@ -463,8 +465,8 @@ impl BehaviorScript for RustBehavior {
                             Transition::To(self.make_sit_idle(ctx))
                         };
                     }
-                    // Desktop screen edge: walk inward.
-                    if let Surface::Desktop { .. } = ctx.surface {
+                    // Desktop / WindowBottom edge: walk inward.
+                    if matches!(ctx.surface, Surface::Desktop { .. } | Surface::WindowBottom { .. }) {
                         let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
@@ -569,10 +571,12 @@ impl BehaviorScript for RustBehavior {
             // ── Climbing Down ────────────────────────────────────────
             State::ClimbingDown { wall_frames, .. } => {
                 if ctx.at_edge {
-                    // Reached the bottom of the wall — drop off.
-                    // (Only fires when descending from the top; jumps from the
-                    //  desktop climb *up* and never reach this branch.)
-                    return Transition::To(State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 });
+                    // Reached the bottom of the wall — step onto WindowBottom.
+                    let dir = match ctx.surface {
+                        Surface::WindowWall { side: Side::Left, .. } => Dir::Right,
+                        _ => Dir::Left,
+                    };
+                    return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                 }
                 if *wall_frames > 0 && wall_frames % 3 == 0 && self.rnd_bool(cfg.wall.pause_prob) {
                     let dur = self.rnd_range(cfg.wall.pause_duration);

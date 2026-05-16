@@ -218,6 +218,7 @@ unsafe fn render_bubble_bgra(
     tail_at_bottom: bool,
     font_size: i32,
 ) -> (Vec<u8>, i32, i32) {
+    unsafe {
     let hdc_screen = GetDC(ptr::null_mut());
     let hdc_mem    = CreateCompatibleDC(hdc_screen);
 
@@ -366,21 +367,23 @@ unsafe fn render_bubble_bgra(
     ReleaseDC(ptr::null_mut(), hdc_screen);
 
     (bgra, img_w, img_h)
+    } // unsafe
 }
 
 /// Create the speech-bubble HWND (called once per character).
 unsafe fn create_bubble_hwnd(hinstance: HINSTANCE, char_hwnd: HWND) -> HWND {
     let class_name = to_wide("PetitMatesOverlay");
-    let hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
-        class_name.as_ptr(),
-        ptr::null(),
-        WS_POPUP,
-        0, 0, 1, 1,
-        char_hwnd, // owner = character window → inherits Z-order relationship
-        ptr::null_mut(), hinstance, ptr::null(),
-    );
-    hwnd
+    unsafe {
+        CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+            class_name.as_ptr(),
+            ptr::null(),
+            WS_POPUP,
+            0, 0, 1, 1,
+            char_hwnd, // owner = character window → inherits Z-order relationship
+            ptr::null_mut(), hinstance, ptr::null(),
+        )
+    }
 }
 
 /// Render and position the bubble HWND above or below the character sprite.
@@ -399,7 +402,7 @@ unsafe fn update_bubble_hwnd(
     let tail_at_bottom =
         char_y - est_h - WIN_BUBBLE_MARGIN > 0; // space *above* char (Y-down coords)
 
-    let (bgra, bw, bh) = render_bubble_bgra(text, tail_at_bottom, font_size);
+    let (bgra, bw, bh) = unsafe { render_bubble_bgra(text, tail_at_bottom, font_size) };
 
     let bx = {
         let cx = char_x + char_w / 2;
@@ -411,16 +414,18 @@ unsafe fn update_bubble_hwnd(
         (char_y + char_h + WIN_BUBBLE_MARGIN).min(screen_h - bh)
     };
 
-    set_layered_content(bubble_hwnd, &bgra, bw, bh, bx, by, alpha_u8);
+    unsafe { set_layered_content(bubble_hwnd, &bgra, bw, bh, bx, by, alpha_u8); }
 
     // Ensure window is visible.
-    ShowWindow(bubble_hwnd, SW_SHOWNOACTIVATE);
+    unsafe { ShowWindow(bubble_hwnd, SW_SHOWNOACTIVATE); }
     // Keep just above the character HWND.
-    SetWindowPos(
-        bubble_hwnd, char_hwnd,
-        bx, by, bw, bh,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-    );
+    unsafe {
+        SetWindowPos(
+            bubble_hwnd, char_hwnd,
+            bx, by, bw, bh,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
 }
 
 // ---- Surface → screen position ----
@@ -497,6 +502,16 @@ fn surface_to_screen_pos(
                     Side::Left  => win.x as i32,
                 }
             };
+            (sx, sy)
+        }
+
+        // Window bottom: foot on win.bottom(), centred on x_local.
+        Surface::WindowBottom { win_id, x_local } => {
+            let Some(win) = windows_wm::find_win(*win_id, wins) else {
+                return (-4096, -4096);
+            };
+            let sx = (win.x + x_local - sw / 2.0) as i32;
+            let sy = (win.bottom() - sh + anchor.y) as i32;
             (sx, sy)
         }
     }
@@ -611,6 +626,15 @@ fn surface_context(
             let at_edge  = *y_local <= edge_margin || *y_local >= win.h - edge_margin;
             (progress, at_edge, None, None)
         }
+        Surface::WindowBottom { win_id, x_local } => {
+            let Some(win) = windows_wm::find_win(*win_id, wins) else {
+                return (0.5, false, None, None);
+            };
+            let progress = (x_local / win.w).clamp(0.0, 1.0);
+            let at_edge  = *x_local <= edge_margin + sprite_w / 2.0
+                        || *x_local >= win.w - edge_margin - sprite_w / 2.0;
+            (progress, at_edge, None, None)
+        }
         _ => (0.5, false, None, None),
     }
 }
@@ -661,7 +685,8 @@ fn surface_host_hwnd(surface: &crate::behavior::Surface) -> Option<HWND> {
     match surface {
         Surface::WindowTop { win_id, .. }
         | Surface::WindowWall { win_id, .. }
-        | Surface::WindowUpperCorner { win_id, .. } => Some(*win_id as HWND),
+        | Surface::WindowUpperCorner { win_id, .. }
+        | Surface::WindowBottom { win_id, .. } => Some(*win_id as HWND),
         _ => None,
     }
 }
@@ -764,7 +789,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                     *x = x.clamp(half_w, si.width - half_w);
                     ch.char_pos.0 = *x;
                 }
-                Surface::WindowTop { x_local, .. } => {
+                Surface::WindowTop { x_local, .. }
+                | Surface::WindowBottom { x_local, .. } => {
                     *x_local += match dir { Dir::Left => -delta, Dir::Right => delta };
                 }
                 _ => {}
@@ -1070,6 +1096,22 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                                     Some(Surface::WindowWall { win_id: win.id, side, y_local })
                                 }
                             }
+                        } else { None }
+                    } else { None }
+                }
+                // ClimbingDown reached the wall bottom: step onto WindowBottom.
+                (State::Walking { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
+                    if let Some(win) = windows_wm::find_win(*win_id, wins) {
+                        if *y_local >= win.h - 4.0 {
+                            let corner_offset = sprite_w / 2.0 + 4.0;
+                            let x_local = match side {
+                                Side::Left  => corner_offset,
+                                Side::Right => win.w - corner_offset,
+                            };
+                            ch.char_pos.0 = win.x + x_local;
+                            ch.char_pos.1 = win.bottom();
+                            ch.facing = *dir;
+                            Some(Surface::WindowBottom { win_id: *win_id, x_local })
                         } else { None }
                     } else { None }
                 }

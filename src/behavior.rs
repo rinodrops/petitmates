@@ -90,6 +90,9 @@ pub enum Surface {
     WindowWall { win_id: u32, side: Side, y_local: f64 },
     /// Upper corner of a window (junction of top edge and side wall).
     WindowUpperCorner { win_id: u32, side: Side },
+    /// Bottom edge of a window. `x_local` is offset from the window's left edge.
+    /// Character stands below the window's bottom edge (hanging from the underside).
+    WindowBottom { win_id: u32, x_local: f64 },
     /// In the air (falling or jumping). Not bound to any surface.
     Airborne,
 }
@@ -170,6 +173,7 @@ pub enum State {
     // -- One-shot animation --
     /// Plays `animation` once from the manifest, then transitions to `return_to`.
     /// The engine advances `frame` and sets `done = true` after the last frame.
+    #[allow(dead_code)]
     OneShot {
         animation: String,
         frame: u8,
@@ -218,6 +222,7 @@ pub struct BehaviorContext<'a> {
     pub at_edge: bool,
     /// Semantic description of the current surface boundary (derived from
     /// `surface`, `at_edge`, and `surface_progress`).
+    #[allow(dead_code)]
     pub surface_edge_info: SurfaceEdge,
     /// Nearest window and side eligible for a wall-jump (Desktop surface only).
     /// Restricted to the current walking direction and `wall_jump_max_dist`.
