@@ -88,6 +88,18 @@ pub struct SpriteInfo {
     pub y: Option<f64>,
 }
 
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct SurfaceConfig {
+    #[serde(default = "bool_true")]
+    pub window_bottom: bool,
+}
+
+fn bool_true() -> bool { true }
+
+impl Default for SurfaceConfig {
+    fn default() -> Self { SurfaceConfig { window_bottom: true } }
+}
+
 #[derive(serde::Deserialize, Debug)]
 pub struct Manifest {
     /// Pixel width the sprite was authored at (used for scaling).
@@ -96,6 +108,8 @@ pub struct Manifest {
     pub sprites: HashMap<String, SpriteInfo>,
     #[serde(default)]
     pub animations: HashMap<String, AnimationDef>,
+    #[serde(default)]
+    pub surfaces: SurfaceConfig,
 }
 
 impl Manifest {
