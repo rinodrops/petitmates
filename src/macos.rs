@@ -531,6 +531,30 @@ fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
 
 // ---- Spawn helper ----
 
+/// Precompute the horizontal snap X and approximate target Y for an `Airborne` jump.
+/// `target_cx` is used for arrival detection; `target_cy` is an approximation for
+/// physics (vx/vy) calculation only — actual snap Y uses the character's real position.
+fn airborne_snap_target(
+    win: &wm::WinInfo,
+    side: Side,
+    landing_mode: LandingMode,
+    assets: &SpriteAssets,
+    current_cy: f64,
+) -> (f64, f64) {
+    let hang_h  = assets.image("s-hang-wall-0", false).map(|img| unsafe { img.size() }.height).unwrap_or(150.0);
+    let stand_w = assets.image("s-stand", false).map(|img| unsafe { img.size() }.width).unwrap_or(150.0);
+    let target_cx = match side {
+        Side::Right => win.right() - stand_w,
+        Side::Left  => win.x,
+    };
+    let target_cy = match landing_mode {
+        LandingMode::ClimbFromBottom  => (win.y + win.h - hang_h / 2.0).clamp(win.y, win.y + win.h),
+        LandingMode::ClimbFromCurrent => current_cy,
+        LandingMode::TopLanding       => win.y,
+    };
+    (target_cx, target_cy)
+}
+
 /// Create one character, place it in a startup-drop position, and return
 /// the fully initialised `CharState`.  Caller is responsible for pushing it
 /// into `AppState::chars`.
@@ -1325,7 +1349,7 @@ fn tick_char(
 
     // Update char_pos for Airborne / Walking states.
     match &ch.anim_state {
-        State::Falling { vx, vy, .. } => {
+        State::Falling { vx, vy, .. } | State::Airborne { vx, vy, .. } => {
             let (vx, vy) = (*vx, *vy);
             let (cx, cy) = ch.char_pos;
             ch.char_pos = (cx + vx * dt, cy + vy * dt);
@@ -1369,9 +1393,62 @@ fn tick_char(
         }
     }
 
-    // Gravity for Falling state (cap vy to prevent tunneling).
-    if let State::Falling { vy, .. } = &mut ch.anim_state {
+    // Gravity for Falling / Airborne states (cap vy to prevent tunneling).
+    if let State::Falling { vy, .. } | State::Airborne { vy, .. } = &mut ch.anim_state {
         *vy = (*vy + cfg.jump.gravity * 60.0 * dt).min(600.0);
+    }
+
+    // Airborne arrival: snap to wall when character reaches the target X.
+    if let State::Airborne { vx, vy, target_win_id, target_side, landing_mode, target_cx, .. }
+        = ch.anim_state.clone()
+    {
+        let arrived = if vx >= 0.0 { ch.char_pos.0 >= target_cx }
+                      else         { ch.char_pos.0 <= target_cx };
+        if arrived {
+            if let Some(win) = wm::find_win(target_win_id, wins) {
+                let hang_h = ch.assets.image("s-hang-wall-0", false)
+                    .map(|img| unsafe { img.size() }.height)
+                    .unwrap_or(150.0);
+                let stand_w = ch.assets.image("s-stand", false)
+                    .map(|img| unsafe { img.size() }.width)
+                    .unwrap_or(150.0);
+                match landing_mode {
+                    LandingMode::TopLanding => {
+                        let x_local = match target_side {
+                            Side::Left  => stand_w / 2.0 + 4.0,
+                            Side::Right => win.w - stand_w / 2.0 - 4.0,
+                        };
+                        ch.char_pos = (win.x + x_local, win.y);
+                        ch.facing   = match target_side {
+                            Side::Left  => Dir::Right,
+                            Side::Right => Dir::Left,
+                        };
+                        ch.surface    = Surface::WindowTop { win_id: win.id, x_local };
+                        ch.anim_state = State::Observing { elapsed: 0.0, duration: 3.0 };
+                    }
+                    LandingMode::ClimbFromCurrent | LandingMode::ClimbFromBottom => {
+                        let jump_h = ch.assets.image("s-jump", false)
+                            .map(|img| unsafe { img.size() }.height)
+                            .unwrap_or(hang_h);
+                        let y_local = (ch.char_pos.1 + jump_h / 2.0 - win.y).clamp(hang_h / 2.0, win.h - 4.0);
+                        ch.char_pos.0 = match target_side {
+                            Side::Right => win.right() - stand_w,
+                            Side::Left  => win.x,
+                        };
+                        ch.char_pos.1 = win.y + y_local;
+                        ch.facing     = match target_side {
+                            Side::Left  => Dir::Right,
+                            Side::Right => Dir::Left,
+                        };
+                        ch.surface    = Surface::WindowWall { win_id: win.id, side: target_side, y_local };
+                        ch.anim_state = State::WallEntry { elapsed: 0.0 };
+                    }
+                }
+            } else {
+                // Target window disappeared mid-flight — fall freely.
+                ch.anim_state = State::Falling { vx, vy: vy.max(0.0), shocked: 0.5 };
+            }
+        }
     }
 
     // Off-screen safeguard: if the character has fallen more than one
@@ -1553,6 +1630,33 @@ fn tick_char(
                 // (y_local) instead of char_pos, so the character would appear
                 // frozen despite physics updating char_pos.
                 (State::Falling { .. }, _) => Some(Surface::Airborne),
+                // Airborne: fill in physics from JumpRunup state, then go airborne.
+                (State::Airborne { .. }, _) => {
+                    if let State::JumpRunup { target_win_id, target_side, landing_mode, .. } = &ch.anim_state {
+                        if let Some(win) = wm::find_win(*target_win_id, wins) {
+                            let side = *target_side;
+                            let lm   = *landing_mode;
+                            let (target_cx, target_cy) = airborne_snap_target(
+                                &win, side, lm, &ch.assets, ch.char_pos.1,
+                            );
+                            let dx = target_cx - ch.char_pos.0;
+                            let dy = target_cy - ch.char_pos.1;
+                            let g  = cfg.jump.gravity * 60.0;
+                            let t  = dx.abs().max(1.0) / cfg.jump.air_speed;
+                            let vx = dx / t;
+                            let vy = ((dy - 0.5 * g * t * t) / t).min(-cfg.jump.min_jump_vy);
+                            new_state = State::Airborne {
+                                vx, vy,
+                                target_win_id: *target_win_id,
+                                target_side: side,
+                                landing_mode: lm,
+                                target_cx,
+                                target_cy,
+                            };
+                        }
+                    }
+                    Some(Surface::Airborne)
+                }
                 (State::CornerTransitionSide { side, .. }, Surface::WindowTop { win_id, .. }) => {
                     Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
                 }
@@ -1710,11 +1814,18 @@ fn tick_char(
     // Z-order: place the panel just above its host window so windows in front
     // of the host naturally occlude the character.
     unsafe {
-        if let Some(wid) = surface_host_win_id(&ch.surface) {
+        let z_host = surface_host_win_id(&ch.surface).or_else(|| {
+            match &ch.anim_state {
+                State::JumpRunup { target_win_id, .. } |
+                State::Airborne  { target_win_id, .. } => Some(*target_win_id),
+                _ => None,
+            }
+        });
+        if let Some(wid) = z_host {
             // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
             let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
         } else {
-            // Desktop / Airborne: bring to front within the normal level.
+            // Desktop (not jumping): bring to front within the normal level.
             ch.panel.orderFront(None);
         }
     }

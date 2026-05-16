@@ -22,6 +22,7 @@ pub fn advance_anim(
             *shocked = (*shocked - dt).max(0.0);
             0.0
         }
+        State::Airborne { .. } => 0.0,
         State::Grabbed => 0.0,
 
         State::LandingStandUp { elapsed }
