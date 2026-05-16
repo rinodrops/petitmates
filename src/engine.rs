@@ -100,6 +100,7 @@ pub fn advance_anim(
         }
 
         State::OneShot { animation, frame, frame_elapsed, done, .. } => {
+
             if *done { return 0.0; }
             let anim = animations.get(animation.as_str()).cloned().unwrap_or_default();
             *frame_elapsed += dt;
@@ -112,5 +113,26 @@ pub fn advance_anim(
             }
             0.0
         }
+    }
+}
+
+/// Returns Y offset in pixels (positive = up) for Walking/Running oscillation.
+/// Zero for all other states and for animations without `vertical_oscillation`.
+pub fn vertical_offset(state: &State, animations: &HashMap<String, AnimationDef>) -> f64 {
+    match state {
+        State::Walking { frame, .. } => {
+            animations.get("walk")
+                .and_then(|a| a.vertical_oscillation.as_ref())
+                .map(|osc| ((*frame as f64) * osc.phase_per_frame).sin() * osc.amplitude)
+                .unwrap_or(0.0)
+        }
+        State::Running { frame, .. } => {
+            animations.get("run")
+                .or_else(|| animations.get("walk"))
+                .and_then(|a| a.vertical_oscillation.as_ref())
+                .map(|osc| ((*frame as f64) * osc.phase_per_frame).sin() * osc.amplitude)
+                .unwrap_or(0.0)
+        }
+        _ => 0.0,
     }
 }

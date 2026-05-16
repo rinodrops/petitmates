@@ -3,6 +3,7 @@ canonical_width = 512
 [animations.walk]
 frames = 4
 mode   = "loop"
+vertical_oscillation = { amplitude = 4.0, phase_per_frame = 1.571 }
 
 [animations.climb]
 frames = 3
