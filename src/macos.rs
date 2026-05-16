@@ -1773,15 +1773,20 @@ fn tick_char(
                 (State::Walking { dir, .. } | State::Running { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
                     if let Some(win) = wm::find_win(*win_id, wins) {
                         if *y_local >= win.h - 4.0 {
-                            let corner_offset = sprite_sz.0 / 2.0 + 4.0;
-                            let x_local = match side {
-                                Side::Left  => corner_offset,
-                                Side::Right => win.w - corner_offset,
-                            };
-                            ch.char_pos.0 = win.x + x_local;
-                            ch.char_pos.1 = win.bottom();
-                            ch.facing = *dir;
-                            Some(Surface::WindowBottom { win_id: *win_id, x_local })
+                            if ch.assets.surfaces.window_bottom {
+                                let corner_offset = sprite_sz.0 / 2.0 + 4.0;
+                                let x_local = match side {
+                                    Side::Left  => corner_offset,
+                                    Side::Right => win.w - corner_offset,
+                                };
+                                ch.char_pos.0 = win.x + x_local;
+                                ch.char_pos.1 = win.bottom();
+                                ch.facing = *dir;
+                                Some(Surface::WindowBottom { win_id: *win_id, x_local })
+                            } else {
+                                ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+                                Some(Surface::Airborne)
+                            }
                         } else { None }
                     } else { None }
                 }

@@ -1,5 +1,8 @@
 canonical_width = 512
 
+[surfaces]
+window_bottom = false
+
 [animations.walk]
 frames = 4
 mode   = "loop"
