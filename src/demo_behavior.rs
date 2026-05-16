@@ -426,6 +426,15 @@ impl BehaviorScript for DemoBehavior {
             // ── Grabbed ──────────────────────────────────────────────
             State::Grabbed => Transition::Stay,
 
+            // ── Running ──────────────────────────────────────────────
+            State::Running { dir, duration, .. } => {
+                if e >= *duration || ctx.at_edge {
+                    Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 })
+                } else {
+                    Transition::Stay
+                }
+            }
+
             // ── OneShot ──────────────────────────────────────────────
             State::OneShot { done, return_to, .. } => {
                 if *done {

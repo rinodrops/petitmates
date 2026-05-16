@@ -133,6 +133,9 @@ pub enum State {
     Observing { elapsed: f64, duration: f64 },
     /// Walking along the floor or window top.
     Walking { dir: Dir, frame: u8, frame_elapsed: f64 },
+    /// Running (faster variant of Walking). Spontaneously entered from Walking;
+    /// returns to Walking after `duration` seconds or upon reaching an edge.
+    Running { dir: Dir, frame: u8, frame_elapsed: f64, elapsed: f64, duration: f64 },
     /// Turning around (side → front → mirrored side).
     TurningAround { elapsed: f64, to_dir: Dir },
     /// Standing idle; occasionally opens mouth once (`s-stand-close`) then returns to `s-stand`.
