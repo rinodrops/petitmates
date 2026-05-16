@@ -1427,7 +1427,10 @@ fn tick_char(
                         ch.anim_state = State::Observing { elapsed: 0.0, duration: 3.0 };
                     }
                     LandingMode::ClimbFromCurrent | LandingMode::ClimbFromBottom => {
-                        let y_local = (ch.char_pos.1 - win.y).clamp(hang_h / 2.0, win.h - 4.0);
+                        let jump_h = ch.assets.image("s-jump", false)
+                            .map(|img| unsafe { img.size() }.height)
+                            .unwrap_or(hang_h);
+                        let y_local = (ch.char_pos.1 + jump_h / 2.0 - win.y).clamp(hang_h / 2.0, win.h - 4.0);
                         ch.char_pos.0 = match target_side {
                             Side::Right => win.right() - stand_w,
                             Side::Left  => win.x,

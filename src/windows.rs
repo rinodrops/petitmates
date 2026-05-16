@@ -818,7 +818,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                         ch.anim_state = State::Observing { elapsed: 0.0, duration: 3.0 };
                     }
                     LandingMode::ClimbFromCurrent | LandingMode::ClimbFromBottom => {
-                        let y_local = (ch.char_pos.1 - win.y).clamp(hang_h / 2.0, win.h - 4.0);
+                        let jump_h  = assets.size("s-jump", false).1;
+                        let y_local = (ch.char_pos.1 + jump_h / 2.0 - win.y).clamp(hang_h / 2.0, win.h - 4.0);
                         ch.char_pos.0 = match target_side {
                             Side::Right => win.right() - stand_w,
                             Side::Left  => win.x,
