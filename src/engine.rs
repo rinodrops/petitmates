@@ -73,6 +73,20 @@ pub fn advance_anim(
             0.0
         }
 
+        State::Running { frame, frame_elapsed, elapsed, .. } => {
+            let anim = animations.get("run")
+                .or_else(|| animations.get("walk"))
+                .cloned()
+                .unwrap_or_default();
+            *frame_elapsed += dt;
+            while *frame_elapsed >= cfg.floor.run_frame_secs {
+                *frame_elapsed -= cfg.floor.run_frame_secs;
+                *frame = (*frame + 1) % anim.cycle_len();
+            }
+            *elapsed += dt;
+            *elapsed
+        }
+
         State::ClimbingUp { frame, frame_elapsed, wall_frames }
         | State::ClimbingDown { frame, frame_elapsed, wall_frames } => {
             let anim = animations.get("climb").cloned().unwrap_or_default();

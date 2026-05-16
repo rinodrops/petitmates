@@ -1373,9 +1373,13 @@ fn tick_char(
             let (cx, cy) = ch.char_pos;
             ch.char_pos = (cx + vx * dt, cy + vy * dt);
         }
-        State::Walking { dir, .. } => {
+        State::Walking { dir, .. } | State::Running { dir, .. } => {
             // Advance local position within the surface.
-            let speed = cfg.floor.walk_speed;
+            let speed = if matches!(&ch.anim_state, State::Running { .. }) {
+                cfg.floor.run_speed
+            } else {
+                cfg.floor.walk_speed
+            };
             let delta = speed * dt;
             match &mut ch.surface {
                 Surface::Desktop { x } => {
@@ -1689,7 +1693,7 @@ fn tick_char(
                         .unwrap_or(4.0);
                     Some(Surface::WindowWall { win_id: *win_id, side: *side, y_local })
                 }
-                (State::Walking { .. }, Surface::WindowUpperCorner { win_id, side }) => {
+                (State::Walking { .. } | State::Running { .. }, Surface::WindowUpperCorner { win_id, side }) => {
                     let walk_w = ch.assets.image("s-walk-0", false)
                         .map(|img| unsafe { img.size() }.width)
                         .unwrap_or(sprite_sz.0);
@@ -1766,7 +1770,7 @@ fn tick_char(
                     } else { None }
                 }
                 // ClimbingDown reached the wall bottom: step onto WindowBottom.
-                (State::Walking { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
+                (State::Walking { dir, .. } | State::Running { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
                     if let Some(win) = wm::find_win(*win_id, wins) {
                         if *y_local >= win.h - 4.0 {
                             let corner_offset = sprite_sz.0 / 2.0 + 4.0;
@@ -1816,8 +1820,8 @@ fn tick_char(
         }
     }
 
-    // Keep facing in sync with Walking direction.
-    if let State::Walking { dir, .. } = &ch.anim_state {
+    // Keep facing in sync with Walking/Running direction.
+    if let State::Walking { dir, .. } | State::Running { dir, .. } = &ch.anim_state {
         ch.facing = *dir;
     }
 
