@@ -24,7 +24,7 @@ use objc2_foundation::{
 use crate::assets::{make_image_view, Anchor, SpriteAssets};
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, SurfaceEdge, Transition};
 use crate::config::{make_shared, Config, SharedConfig};
-use crate::engine::advance_anim;
+use crate::engine::{advance_anim, vertical_offset};
 use crate::manifest;
 use crate::demo_behavior::DemoBehavior;
 use crate::rust_behavior::RustBehavior;
@@ -1842,7 +1842,8 @@ fn tick_char(
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
     let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
-    unsafe { ch.panel.setFrameOrigin(origin) };
+    let y_offset = vertical_offset(&ch.anim_state, &ch.assets.animations);
+    unsafe { ch.panel.setFrameOrigin(NSPoint::new(origin.x, origin.y + y_offset)) };
 
     // Keep char_pos in sync with the rendered panel position so that when a
     // window surface is lost the character starts falling from the correct

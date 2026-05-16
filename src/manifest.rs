@@ -18,6 +18,12 @@ impl Default for AnimMode {
 
 fn default_frame_secs() -> f64 { 0.12 }
 
+#[derive(serde::Deserialize, Debug, Clone, Default)]
+pub struct VerticalOscillation {
+    pub amplitude: f64,
+    pub phase_per_frame: f64,
+}
+
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AnimationDef {
     pub frames: u8,
@@ -26,10 +32,12 @@ pub struct AnimationDef {
     /// Seconds per frame (used by OneShot and future animations).
     #[serde(default = "default_frame_secs")]
     pub frame_secs: f64,
+    #[serde(default)]
+    pub vertical_oscillation: Option<VerticalOscillation>,
 }
 
 impl Default for AnimationDef {
-    fn default() -> Self { AnimationDef { frames: 3, mode: AnimMode::PingPong, frame_secs: 0.12 } }
+    fn default() -> Self { AnimationDef { frames: 3, mode: AnimMode::PingPong, frame_secs: 0.12, vertical_oscillation: None } }
 }
 
 impl AnimationDef {
