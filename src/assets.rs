@@ -35,7 +35,7 @@ use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{NSImage, NSImageView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-use crate::manifest::{Attachment, Manifest};
+use crate::manifest::{Attachment, AnimationDef, Manifest, SurfaceConfig};
 
 
 
@@ -59,6 +59,8 @@ pub struct SpriteAssets {
     images: HashMap<String, Retained<NSImage>>,
     mirrored: HashMap<String, Retained<NSImage>>,
     anchors: HashMap<String, Anchor>,
+    pub animations: HashMap<String, AnimationDef>,
+    pub surfaces: SurfaceConfig,
 }
 
 impl SpriteAssets {
@@ -93,7 +95,7 @@ impl SpriteAssets {
             anchors.insert(name.clone(), anchor);
         }
 
-        Some(SpriteAssets { images, mirrored, anchors })
+        Some(SpriteAssets { images, mirrored, anchors, animations: manifest.animations.clone(), surfaces: manifest.surfaces.clone() })
     }
 
     /// Returns the (optionally mirrored) NSImage for `name`.

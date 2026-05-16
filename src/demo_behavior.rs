@@ -10,7 +10,7 @@
 //! 2. Edge 0: SitIdle (4 s, head turn → f-sit) → LieIdle (5 s, head turn → f-lie) → walk
 //! 3. Edge 1: CornerTransitionSide(down) → CornerRest lying (5 s) → descend wall
 //! 4. Fall to desktop → walk → jump to window → ClimbingUp → CornerRest sitting (5 s) → walk inward
-//! 5. Edge 2: PeekDown (2 s) → walk back
+//! 5. Edge 2: SurfaceInteract/peek-down (2 s) → walk back
 //! 6. Edge 3: CornerTransitionSide(down) → CornerRest (5 s) → jump to nearby window (or walk inward)
 //! 7. Edge 4: shocked fall
 //! 8. → back to step 1
@@ -41,7 +41,7 @@ fn toward_corner(surface_progress: f64) -> Dir {
 /// Number of distinct window-top edge choices before the cycle repeats.
 ///   0 → SitIdle (→ LieIdle) to show idle + head-turn animations
 ///   1 → CornerTransitionSide(down) to show corner/descent path
-///   2 → PeekDown to show peek animation
+///   2 → SurfaceInteract (peek-down) to show peek animation
 ///   3 → CornerTransitionSide(down) to show corner/jump path
 ///   4 → shocked fall
 const EDGE_CYCLE: u8 = 5;
@@ -129,7 +129,7 @@ impl BehaviorScript for DemoBehavior {
         match ctx.state {
 
             // ── Airborne ─────────────────────────────────────────────
-            State::Falling { .. } => Transition::Stay,
+            State::Falling { .. } | State::Airborne { .. } => Transition::Stay,
 
             // ── Landing ──────────────────────────────────────────────
             State::LandingStandUp { .. } => {
@@ -157,11 +157,10 @@ impl BehaviorScript for DemoBehavior {
                 Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 })
             }
 
-            // ── PeekDown ─────────────────────────────────────────────
-            State::PeekDown { dir, .. } => {
-                // Hold peek for 2 s to make it easy to record.
-                if e < 2.0 { return Transition::Stay; }
-                eprintln!("[demo] peek → walk {:?}", dir);
+            // ── SurfaceInteract ───────────────────────────────────────
+            State::SurfaceInteract { dir, duration, .. } => {
+                if e < *duration { return Transition::Stay; }
+                eprintln!("[demo] surface_interact → walk {:?}", dir);
                 Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 })
             }
 
@@ -196,8 +195,13 @@ impl BehaviorScript for DemoBehavior {
                             }
                             // 2: peek down over the edge
                             2 => {
-                                eprintln!("[demo] edge → peek_down");
-                                Transition::To(State::PeekDown { elapsed: 0.0, dir: *dir })
+                                eprintln!("[demo] edge → surface_interact/peek_down");
+                                Transition::To(State::SurfaceInteract {
+                                    animation: "peek-down".to_string(),
+                                    elapsed: 0.0,
+                                    duration: 2.0,
+                                    dir: *dir,
+                                })
                             }
                             // 4: shocked fall off the edge
                             _ => {
@@ -421,6 +425,25 @@ impl BehaviorScript for DemoBehavior {
 
             // ── Grabbed ──────────────────────────────────────────────
             State::Grabbed => Transition::Stay,
+
+            // ── Running ──────────────────────────────────────────────
+            State::Running { dir, duration, .. } => {
+                if e >= *duration || ctx.at_edge {
+                    Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 })
+                } else {
+                    Transition::Stay
+                }
+            }
+
+            // ── OneShot ──────────────────────────────────────────────
+            State::OneShot { done, return_to, .. } => {
+                if *done {
+                    eprintln!("[demo] oneshot done → return_to");
+                    Transition::To(*return_to.clone())
+                } else {
+                    Transition::Stay
+                }
+            }
         }
     }
 

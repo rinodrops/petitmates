@@ -287,7 +287,8 @@ pub fn surface_still_valid(surface: &Surface, wins: &[WinInfo]) -> bool {
         Surface::Desktop { .. } | Surface::Airborne => true,
         Surface::WindowTop { win_id, .. }
         | Surface::WindowWall { win_id, .. }
-        | Surface::WindowUpperCorner { win_id, .. } => find_win(*win_id, wins).is_some(),
+        | Surface::WindowUpperCorner { win_id, .. }
+        | Surface::WindowBottom { win_id, .. } => find_win(*win_id, wins).is_some(),
     }
 }
 
