@@ -90,6 +90,9 @@ pub enum Surface {
     WindowWall { win_id: u32, side: Side, y_local: f64 },
     /// Upper corner of a window (junction of top edge and side wall).
     WindowUpperCorner { win_id: u32, side: Side },
+    /// Bottom edge of a window. `x_local` is offset from the window's left edge.
+    /// Character stands below the window's bottom edge (hanging from the underside).
+    WindowBottom { win_id: u32, x_local: f64 },
     /// In the air (falling or jumping). Not bound to any surface.
     Airborne,
 }

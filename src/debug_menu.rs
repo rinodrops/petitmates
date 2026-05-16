@@ -24,6 +24,7 @@ pub fn surface_name(surface: &Surface) -> &'static str {
             Side::Left  => "WindowUpperCorner (Left)",
             Side::Right => "WindowUpperCorner (Right)",
         },
+        Surface::WindowBottom { .. }             => "WindowBottom",
         Surface::Airborne => "Airborne",
     }
 }
@@ -102,7 +103,7 @@ pub fn trigger_targets(surface: &Surface, current: &State, facing: Dir, cfg: &Co
     let mut v = Vec::new();
 
     match surface {
-        Surface::Desktop { .. } | Surface::WindowTop { .. } => {
+        Surface::Desktop { .. } | Surface::WindowTop { .. } | Surface::WindowBottom { .. } => {
             if !matches!(current, State::StandIdle { .. }) {
                 v.push(DebugTarget {
                     label: format!("→ StandIdle ({})", fmt_range(cfg.floor.stand_duration)),
