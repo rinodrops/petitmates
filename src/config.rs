@@ -16,6 +16,14 @@ pub struct FloorConfig {
     pub walk_speed: f64,
     /// Duration of one walk animation frame (seconds).
     pub walk_frame_secs: f64,
+    /// Running speed (px/s). Used when in the `Running` state.
+    pub run_speed: f64,
+    /// Duration of one run animation frame (seconds).
+    pub run_frame_secs: f64,
+    /// Duration of a running burst [min, max] s.
+    pub run_duration: [f64; 2],
+    /// Cooldown between running bursts [min, max] s.
+    pub run_interval: [f64; 2],
 
     /// How long the character stands idle before considering a transition [min, max] s.
     pub stand_duration: [f64; 2],
@@ -105,6 +113,10 @@ impl Default for FloorConfig {
         Self {
             walk_speed: 40.0,
             walk_frame_secs: 0.14,
+            run_speed: 90.0,
+            run_frame_secs: 0.07,
+            run_duration: [1.5, 4.0],
+            run_interval: [20.0, 60.0],
             stand_duration: [3.0, 8.0],
             sit_duration: [5.0, 15.0],
             lie_duration: [20.0, 60.0],

@@ -37,6 +37,7 @@ pub fn state_name(state: &State) -> &'static str {
         State::LandingStandUp { .. }        => "LandingStandUp",
         State::Observing { .. }             => "Observing",
         State::Walking { .. }               => "Walking",
+        State::Running { .. }               => "Running",
         State::TurningAround { .. }         => "TurningAround",
         State::StandIdle { .. }             => "StandIdle",
         State::SitIdle { .. }               => "SitIdle",
@@ -67,7 +68,8 @@ pub fn state_elapsed_duration(state: &State) -> Option<(f64, f64)> {
         | State::CornerRest { elapsed, duration, .. }
         | State::Observing  { elapsed, duration, .. }
         | State::WallPause  { elapsed, duration, .. }
-        | State::SurfaceInteract { elapsed, duration, .. } => Some((*elapsed, *duration)),
+        | State::SurfaceInteract { elapsed, duration, .. }
+        | State::Running { elapsed, duration, .. } => Some((*elapsed, *duration)),
         _ => None,
     }
 }
@@ -104,6 +106,21 @@ pub fn trigger_targets(surface: &Surface, current: &State, facing: Dir, cfg: &Co
 
     match surface {
         Surface::Desktop { .. } | Surface::WindowTop { .. } | Surface::WindowBottom { .. } => {
+            if !matches!(current, State::Walking { .. }) {
+                v.push(DebugTarget {
+                    label: "→ Walking".to_string(),
+                    state: State::Walking { dir: facing, frame: 0, frame_elapsed: 0.0 },
+                });
+            }
+            if !matches!(current, State::Running { .. }) {
+                v.push(DebugTarget {
+                    label: format!("→ Running ({})", fmt_range(cfg.floor.run_duration)),
+                    state: State::Running {
+                        dir: facing, frame: 0, frame_elapsed: 0.0,
+                        elapsed: 0.0, duration: mid(cfg.floor.run_duration),
+                    },
+                });
+            }
             if !matches!(current, State::StandIdle { .. }) {
                 v.push(DebugTarget {
                     label: format!("→ StandIdle ({})", fmt_range(cfg.floor.stand_duration)),
