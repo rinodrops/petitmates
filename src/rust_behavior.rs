@@ -166,10 +166,10 @@ impl BehaviorScript for RustBehavior {
         let e = ctx.elapsed_secs;
 
         match ctx.state {
-            // ── Airborne ─────────────────────────────────────────────
+            // ── Falling / Airborne ───────────────────────────────────
             // Physics (vx/vy, position) is updated by the engine.
-            // Transition to a new state is triggered by on_landed().
-            State::Falling { .. } => Transition::Stay,
+            // Transition to a new state is triggered by on_landed() / arrival detection.
+            State::Falling { .. } | State::Airborne { .. } => Transition::Stay,
 
             // ── Landing ──────────────────────────────────────────────
             State::LandingStandUp { .. } => {
@@ -517,11 +517,18 @@ impl BehaviorScript for RustBehavior {
             }
 
             // ── JumpRunup ────────────────────────────────────────────
-            // Shows a "look up" pose (s-stand-up) for runup_duration, then
-            // snaps directly to the target wall (handled in macos.rs transition block).
-            State::JumpRunup { .. } => {
+            // Shows a "look up" pose (s-stand-up) for runup_duration, then launches
+            // a parabolic jump (vx/vy filled by platform code at transition time).
+            State::JumpRunup { target_win_id, target_side, landing_mode, .. } => {
                 if e >= cfg.jump.runup_duration {
-                    Transition::To(State::WallEntry { elapsed: 0.0 })
+                    Transition::To(State::Airborne {
+                        vx: 0.0, vy: 0.0,
+                        target_win_id: *target_win_id,
+                        target_side: *target_side,
+                        landing_mode: *landing_mode,
+                        target_cx: 0.0,
+                        target_cy: 0.0,
+                    })
                 } else {
                     Transition::Stay
                 }

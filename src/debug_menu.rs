@@ -32,6 +32,7 @@ pub fn surface_name(surface: &Surface) -> &'static str {
 pub fn state_name(state: &State) -> &'static str {
     match state {
         State::Falling { .. }               => "Falling",
+        State::Airborne { .. }              => "Airborne",
         State::LandingStandUp { .. }        => "LandingStandUp",
         State::Observing { .. }             => "Observing",
         State::Walking { .. }               => "Walking",
