@@ -3,23 +3,32 @@
 //! Functions here depend only on `behavior` and `config` types and contain
 //! no platform-specific code, so they can be compiled for every target.
 
+use std::collections::HashMap;
+
 use crate::behavior::State;
 use crate::config::Config;
+use crate::manifest::AnimationDef;
 
 /// Advance per-state animation timers and frame counters by `dt` seconds.
 /// Returns the current `elapsed` value for `BehaviorContext::elapsed_secs`.
-pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
+pub fn advance_anim(
+    state: &mut State,
+    dt: f64,
+    cfg: &Config,
+    animations: &HashMap<String, AnimationDef>,
+) -> f64 {
     match state {
         State::Falling { shocked, .. } => {
             *shocked = (*shocked - dt).max(0.0);
             0.0
         }
+        State::Airborne { .. } => 0.0,
         State::Grabbed => 0.0,
 
         State::LandingStandUp { elapsed }
         | State::Observing { elapsed, .. }
         | State::TurningAround { elapsed, .. }
-        | State::PeekDown { elapsed, .. }
+        | State::SurfaceInteract { elapsed, .. }
         | State::JumpRunup { elapsed, .. }
         | State::WallEntry { elapsed }
         | State::WallPause { elapsed, .. }
@@ -55,23 +64,75 @@ pub fn advance_anim(state: &mut State, dt: f64, cfg: &Config) -> f64 {
         }
 
         State::Walking { frame, frame_elapsed, .. } => {
+            let anim = animations.get("walk").cloned().unwrap_or_default();
             *frame_elapsed += dt;
             while *frame_elapsed >= cfg.floor.walk_frame_secs {
                 *frame_elapsed -= cfg.floor.walk_frame_secs;
-                *frame = (*frame + 1) % 4;
+                *frame = (*frame + 1) % anim.cycle_len();
             }
             0.0
         }
 
+        State::Running { frame, frame_elapsed, elapsed, .. } => {
+            let anim = animations.get("run")
+                .or_else(|| animations.get("walk"))
+                .cloned()
+                .unwrap_or_default();
+            *frame_elapsed += dt;
+            while *frame_elapsed >= cfg.floor.run_frame_secs {
+                *frame_elapsed -= cfg.floor.run_frame_secs;
+                *frame = (*frame + 1) % anim.cycle_len();
+            }
+            *elapsed += dt;
+            *elapsed
+        }
+
         State::ClimbingUp { frame, frame_elapsed, wall_frames }
         | State::ClimbingDown { frame, frame_elapsed, wall_frames } => {
+            let anim = animations.get("climb").cloned().unwrap_or_default();
             *frame_elapsed += dt;
             while *frame_elapsed >= cfg.wall.climb_frame_secs {
                 *frame_elapsed -= cfg.wall.climb_frame_secs;
-                *frame = (*frame + 1) % 4;
+                *frame = (*frame + 1) % anim.cycle_len();
                 *wall_frames = wall_frames.saturating_add(1);
             }
             0.0
         }
+
+        State::OneShot { animation, frame, frame_elapsed, done, .. } => {
+
+            if *done { return 0.0; }
+            let anim = animations.get(animation.as_str()).cloned().unwrap_or_default();
+            *frame_elapsed += dt;
+            while *frame_elapsed >= anim.frame_secs && !*done {
+                *frame_elapsed -= anim.frame_secs;
+                *frame += 1;
+                if *frame >= anim.frames.max(1) {
+                    *done = true;
+                }
+            }
+            0.0
+        }
+    }
+}
+
+/// Returns Y offset in pixels (positive = up) for Walking/Running oscillation.
+/// Zero for all other states and for animations without `vertical_oscillation`.
+pub fn vertical_offset(state: &State, animations: &HashMap<String, AnimationDef>) -> f64 {
+    match state {
+        State::Walking { frame, .. } => {
+            animations.get("walk")
+                .and_then(|a| a.vertical_oscillation.as_ref())
+                .map(|osc| ((*frame as f64) * osc.phase_per_frame).sin() * osc.amplitude)
+                .unwrap_or(0.0)
+        }
+        State::Running { frame, .. } => {
+            animations.get("run")
+                .or_else(|| animations.get("walk"))
+                .and_then(|a| a.vertical_oscillation.as_ref())
+                .map(|osc| ((*frame as f64) * osc.phase_per_frame).sin() * osc.amplitude)
+                .unwrap_or(0.0)
+        }
+        _ => 0.0,
     }
 }

@@ -31,6 +31,10 @@ pub struct RustBehavior {
     last_outing: Mutex<Instant>,
     /// Next forced-outing deadline in seconds (randomised on each jump).
     next_outing_secs: Mutex<f64>,
+    /// Instant when the last running burst ended (or app start).
+    last_run_end: Mutex<Instant>,
+    /// Seconds until the next spontaneous running burst.
+    next_run_secs: Mutex<f64>,
 }
 
 impl RustBehavior {
@@ -39,6 +43,8 @@ impl RustBehavior {
             rng: Mutex::new(SmallRng::from_os_rng()),
             last_outing: Mutex::new(Instant::now()),
             next_outing_secs: Mutex::new(f64::MAX), // filled on first config read
+            last_run_end: Mutex::new(Instant::now()),
+            next_run_secs: Mutex::new(f64::MAX),    // filled on first Walking tick
         }
     }
 
@@ -76,6 +82,22 @@ impl RustBehavior {
 
     fn rnd_bool(&self, prob: f64) -> bool {
         self.rnd() < prob
+    }
+
+    /// Returns true when the run cooldown has elapsed; initialises on first call.
+    fn run_due(&self, cfg: &crate::config::Config) -> bool {
+        let interval = cfg.floor.run_interval;
+        let deadline = *self.next_run_secs.lock().unwrap();
+        if deadline == f64::MAX {
+            *self.next_run_secs.lock().unwrap() = self.rnd_range(interval);
+            return false;
+        }
+        self.last_run_end.lock().unwrap().elapsed().as_secs_f64() >= deadline
+    }
+
+    fn record_run_end(&self, cfg: &crate::config::Config) {
+        *self.last_run_end.lock().unwrap() = Instant::now();
+        *self.next_run_secs.lock().unwrap() = self.rnd_range(cfg.floor.run_interval);
     }
 
     /// Direction toward the nearer corner (used when choosing where to walk).
@@ -166,10 +188,10 @@ impl BehaviorScript for RustBehavior {
         let e = ctx.elapsed_secs;
 
         match ctx.state {
-            // ── Airborne ─────────────────────────────────────────────
+            // ── Falling / Airborne ───────────────────────────────────
             // Physics (vx/vy, position) is updated by the engine.
-            // Transition to a new state is triggered by on_landed().
-            State::Falling { .. } => Transition::Stay,
+            // Transition to a new state is triggered by on_landed() / arrival detection.
+            State::Falling { .. } | State::Airborne { .. } => Transition::Stay,
 
             // ── Landing ──────────────────────────────────────────────
             State::LandingStandUp { .. } => {
@@ -200,15 +222,20 @@ impl BehaviorScript for RustBehavior {
                 }
                 let dir = Self::toward_corner(ctx.surface_progress);
                 if self.rnd_bool(cfg.floor.peek_prob) {
-                    Transition::To(State::PeekDown { elapsed: 0.0, dir })
+                    Transition::To(State::SurfaceInteract {
+                        animation: "peek-down".to_string(),
+                        elapsed: 0.0,
+                        duration: cfg.floor.peek_duration,
+                        dir,
+                    })
                 } else {
                     Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 })
                 }
             }
 
-            // ── PeekDown ─────────────────────────────────────────────
-            State::PeekDown { dir, .. } => {
-                if e < cfg.floor.peek_duration { return Transition::Stay; }
+            // ── SurfaceInteract ───────────────────────────────────────
+            State::SurfaceInteract { dir, duration, .. } => {
+                if e < *duration { return Transition::Stay; }
                 if self.rnd_bool(cfg.floor.peek_walk_prob) {
                     Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 })
                 } else {
@@ -235,10 +262,19 @@ impl BehaviorScript for RustBehavior {
                         });
                     }
                 }
-                if !ctx.at_edge { return Transition::Stay; }
+                if !ctx.at_edge {
+                    // Spontaneous run burst.
+                    if self.run_due(cfg) {
+                        let duration = self.rnd_range(cfg.floor.run_duration);
+                        return Transition::To(State::Running {
+                            dir: *dir, frame: 0, frame_elapsed: 0.0,
+                            elapsed: 0.0, duration,
+                        });
+                    }
+                    return Transition::Stay;
+                }
                 match ctx.surface {
                     Surface::WindowTop { .. } => {
-                        // edge_idle_prob is checked first so its value is the exact
                         // idle rate (90% → idle 90% of the time, period).
                         if self.rnd_bool(cfg.floor.edge_idle_prob) {
                             let r = self.rnd();
@@ -283,8 +319,33 @@ impl BehaviorScript for RustBehavior {
                             Transition::To(self.make_stand_idle(ctx))
                         }
                     }
+                    Surface::WindowBottom { .. } => {
+                        Transition::To(State::TurningAround { elapsed: 0.0, to_dir: dir.opposite() })
+                    }
                     _ => Transition::Stay,
                 }
+            }
+
+            // ── Running ───────────────────────────────────────────────
+            State::Running { dir, duration, .. } => {
+                // Duration elapsed or edge reached → return to Walking.
+                if e >= *duration || ctx.at_edge {
+                    self.record_run_end(cfg);
+                    return Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 });
+                }
+                // Same jump-target check as Walking.
+                if matches!(ctx.surface, Surface::Desktop { .. }) {
+                    if let Some((win_id, side)) = &ctx.jump_target {
+                        self.record_run_end(cfg);
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: *win_id,
+                            target_side: *side,
+                            landing_mode: LandingMode::ClimbFromBottom,
+                        });
+                    }
+                }
+                Transition::Stay
             }
 
             // ── TurningAround ─────────────────────────────────────────
@@ -329,9 +390,9 @@ impl BehaviorScript for RustBehavior {
                             })
                         };
                     }
-                    // Desktop screen edge: walk inward.  Skip the attract_target
+                    // Desktop / WindowBottom edge: walk inward.  Skip the attract_target
                     // check below to avoid re-triggering toward the same unreachable window.
-                    if let Surface::Desktop { .. } = ctx.surface {
+                    if matches!(ctx.surface, Surface::Desktop { .. } | Surface::WindowBottom { .. }) {
                         let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
@@ -360,7 +421,12 @@ impl BehaviorScript for RustBehavior {
                         to_dir: ctx.facing.opposite(),
                     })
                 } else {
-                    Transition::To(State::PeekDown { elapsed: 0.0, dir: ctx.facing })
+                    Transition::To(State::SurfaceInteract {
+                        animation: "peek-down".to_string(),
+                        elapsed: 0.0,
+                        duration: cfg.floor.peek_duration,
+                        dir: ctx.facing,
+                    })
                 }
             }
 
@@ -394,8 +460,8 @@ impl BehaviorScript for RustBehavior {
                             Transition::To(self.make_stand_idle(ctx))
                         };
                     }
-                    // Desktop screen edge: walk inward.
-                    if let Surface::Desktop { .. } = ctx.surface {
+                    // Desktop / WindowBottom edge: walk inward.
+                    if matches!(ctx.surface, Surface::Desktop { .. } | Surface::WindowBottom { .. }) {
                         let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
@@ -453,8 +519,8 @@ impl BehaviorScript for RustBehavior {
                             Transition::To(self.make_sit_idle(ctx))
                         };
                     }
-                    // Desktop screen edge: walk inward.
-                    if let Surface::Desktop { .. } = ctx.surface {
+                    // Desktop / WindowBottom edge: walk inward.
+                    if matches!(ctx.surface, Surface::Desktop { .. } | Surface::WindowBottom { .. }) {
                         let dir = if ctx.surface_progress < 0.5 { Dir::Right } else { Dir::Left };
                         return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                     }
@@ -507,11 +573,18 @@ impl BehaviorScript for RustBehavior {
             }
 
             // ── JumpRunup ────────────────────────────────────────────
-            // Shows a "look up" pose (s-stand-up) for runup_duration, then
-            // snaps directly to the target wall (handled in macos.rs transition block).
-            State::JumpRunup { .. } => {
+            // Shows a "look up" pose (s-stand-up) for runup_duration, then launches
+            // a parabolic jump (vx/vy filled by platform code at transition time).
+            State::JumpRunup { target_win_id, target_side, landing_mode, .. } => {
                 if e >= cfg.jump.runup_duration {
-                    Transition::To(State::WallEntry { elapsed: 0.0 })
+                    Transition::To(State::Airborne {
+                        vx: 0.0, vy: 0.0,
+                        target_win_id: *target_win_id,
+                        target_side: *target_side,
+                        landing_mode: *landing_mode,
+                        target_cx: 0.0,
+                        target_cy: 0.0,
+                    })
                 } else {
                     Transition::Stay
                 }
@@ -552,10 +625,12 @@ impl BehaviorScript for RustBehavior {
             // ── Climbing Down ────────────────────────────────────────
             State::ClimbingDown { wall_frames, .. } => {
                 if ctx.at_edge {
-                    // Reached the bottom of the wall — drop off.
-                    // (Only fires when descending from the top; jumps from the
-                    //  desktop climb *up* and never reach this branch.)
-                    return Transition::To(State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 });
+                    // Reached the bottom of the wall — step onto WindowBottom.
+                    let dir = match ctx.surface {
+                        Surface::WindowWall { side: Side::Left, .. } => Dir::Right,
+                        _ => Dir::Left,
+                    };
+                    return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                 }
                 if *wall_frames > 0 && wall_frames % 3 == 0 && self.rnd_bool(cfg.wall.pause_prob) {
                     let dur = self.rnd_range(cfg.wall.pause_duration);
@@ -656,6 +731,17 @@ impl BehaviorScript for RustBehavior {
 
             // ── Grabbed ──────────────────────────────────────────────
             State::Grabbed => Transition::Stay,
+
+            // ── OneShot ──────────────────────────────────────────────
+            // The engine drives frame advancement and sets `done`.
+            // When done, return to `return_to`.
+            State::OneShot { done, return_to, .. } => {
+                if *done {
+                    Transition::To(*return_to.clone())
+                } else {
+                    Transition::Stay
+                }
+            }
         }
     }
 

@@ -1,5 +1,24 @@
 canonical_width = 512
 
+[surfaces]
+window_bottom = false
+
+[animations.walk]
+frames = 4
+mode   = "loop"
+vertical_oscillation = { amplitude = 4.0, phase_per_frame = 1.571 }
+
+[animations.climb]
+frames = 3
+mode   = "ping-pong"
+
+# Example OneShot animation (mode = "once" plays the frames in order, then holds last frame).
+# Uncomment and add s-standup-0.png etc. to use as a landing stand-up animation.
+# [animations.standup]
+# frames     = 2
+# mode       = "once"
+# frame_secs = 0.15
+
 [sprites."f-hang-corner"]
 attachment = "point"
 x = 368
@@ -76,12 +95,16 @@ y = 283
 
 [sprites."s-walk-0"]
 attachment = "line_y"
-y = 264
+y = 254
 
 [sprites."s-walk-1"]
 attachment = "line_y"
-y = 268
+y = 250
 
 [sprites."s-walk-2"]
 attachment = "line_y"
-y = 269
+y = 255
+
+[sprites."s-walk-3"]
+attachment = "line_y"
+y = 254

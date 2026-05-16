@@ -24,6 +24,7 @@ pub fn surface_name(surface: &Surface) -> &'static str {
             Side::Left  => "WindowUpperCorner (Left)",
             Side::Right => "WindowUpperCorner (Right)",
         },
+        Surface::WindowBottom { .. }             => "WindowBottom",
         Surface::Airborne => "Airborne",
     }
 }
@@ -32,15 +33,17 @@ pub fn surface_name(surface: &Surface) -> &'static str {
 pub fn state_name(state: &State) -> &'static str {
     match state {
         State::Falling { .. }               => "Falling",
+        State::Airborne { .. }              => "Airborne",
         State::LandingStandUp { .. }        => "LandingStandUp",
         State::Observing { .. }             => "Observing",
         State::Walking { .. }               => "Walking",
+        State::Running { .. }               => "Running",
         State::TurningAround { .. }         => "TurningAround",
         State::StandIdle { .. }             => "StandIdle",
         State::SitIdle { .. }               => "SitIdle",
         State::LieIdle { .. }               => "LieIdle",
         State::Sleeping { .. }              => "Sleeping",
-        State::PeekDown { .. }              => "PeekDown",
+        State::SurfaceInteract { .. }           => "SurfaceInteract",
         State::JumpRunup { .. }             => "JumpRunup",
         State::ClimbingUp { .. }            => "ClimbingUp",
         State::ClimbingDown { .. }          => "ClimbingDown",
@@ -49,6 +52,7 @@ pub fn state_name(state: &State) -> &'static str {
         State::CornerTransitionSide { .. }  => "CornerTransitionSide",
         State::CornerTransitionFront { .. } => "CornerTransitionFront",
         State::CornerRest { .. }            => "CornerRest",
+        State::OneShot { .. }               => "OneShot",
         State::Grabbed                      => "Grabbed",
     }
 }
@@ -63,7 +67,9 @@ pub fn state_elapsed_duration(state: &State) -> Option<(f64, f64)> {
         | State::Sleeping { elapsed, duration, .. }
         | State::CornerRest { elapsed, duration, .. }
         | State::Observing  { elapsed, duration, .. }
-        | State::WallPause  { elapsed, duration, .. } => Some((*elapsed, *duration)),
+        | State::WallPause  { elapsed, duration, .. }
+        | State::SurfaceInteract { elapsed, duration, .. }
+        | State::Running { elapsed, duration, .. } => Some((*elapsed, *duration)),
         _ => None,
     }
 }
@@ -99,7 +105,22 @@ pub fn trigger_targets(surface: &Surface, current: &State, facing: Dir, cfg: &Co
     let mut v = Vec::new();
 
     match surface {
-        Surface::Desktop { .. } | Surface::WindowTop { .. } => {
+        Surface::Desktop { .. } | Surface::WindowTop { .. } | Surface::WindowBottom { .. } => {
+            if !matches!(current, State::Walking { .. }) {
+                v.push(DebugTarget {
+                    label: "→ Walking".to_string(),
+                    state: State::Walking { dir: facing, frame: 0, frame_elapsed: 0.0 },
+                });
+            }
+            if !matches!(current, State::Running { .. }) {
+                v.push(DebugTarget {
+                    label: format!("→ Running ({})", fmt_range(cfg.floor.run_duration)),
+                    state: State::Running {
+                        dir: facing, frame: 0, frame_elapsed: 0.0,
+                        elapsed: 0.0, duration: mid(cfg.floor.run_duration),
+                    },
+                });
+            }
             if !matches!(current, State::StandIdle { .. }) {
                 v.push(DebugTarget {
                     label: format!("→ StandIdle ({})", fmt_range(cfg.floor.stand_duration)),
@@ -136,13 +157,18 @@ pub fn trigger_targets(surface: &Surface, current: &State, facing: Dir, cfg: &Co
                     },
                 });
             }
-            // PeekDown only available on WindowTop.
+            // SurfaceInteract (peek-down) only available on WindowTop.
             if matches!(surface, Surface::WindowTop { .. })
-                && !matches!(current, State::PeekDown { .. })
+                && !matches!(current, State::SurfaceInteract { .. })
             {
                 v.push(DebugTarget {
-                    label: format!("→ PeekDown ({:.1}s)", cfg.floor.peek_duration),
-                    state: State::PeekDown { elapsed: 0.0, dir: facing },
+                    label: format!("→ SurfaceInteract/peek-down ({:.1}s)", cfg.floor.peek_duration),
+                    state: State::SurfaceInteract {
+                        animation: "peek-down".to_string(),
+                        elapsed: 0.0,
+                        duration: cfg.floor.peek_duration,
+                        dir: facing,
+                    },
                 });
             }
         }

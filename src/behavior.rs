@@ -42,7 +42,39 @@ pub enum LandingMode {
     TopLanding,
 }
 
-// ---- Surface ----
+// ---- SurfaceEdge ----
+
+/// Describes the type of surface boundary the character is currently at.
+/// Computed from `Surface`, `at_edge`, and `surface_progress` each tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceEdge {
+    /// Not at any boundary.
+    None,
+    /// At the front edge of a window top (character reached the edge it was walking toward).
+    WindowTopFront,
+    /// At the top of a window wall (reached by climbing up).
+    WallTop,
+    /// At the bottom of a window wall (reached by climbing down).
+    WallBottom,
+    /// At the screen boundary on the desktop.
+    DesktopEdge,
+}
+
+impl SurfaceEdge {
+    /// Derive the surface edge from context fields.
+    pub fn compute(surface: &Surface, at_edge: bool, surface_progress: f64) -> Self {
+        if !at_edge { return Self::None; }
+        match surface {
+            Surface::WindowTop { .. }         => Self::WindowTopFront,
+            Surface::WindowWall { .. } => {
+                if surface_progress < 0.5 { Self::WallTop } else { Self::WallBottom }
+            }
+            Surface::Desktop { .. }           => Self::DesktopEdge,
+            _                                 => Self::None,
+        }
+    }
+}
+
 
 /// Where the character currently resides.
 /// Positions are in CG coordinates (origin = screen top-left, Y down).
@@ -58,6 +90,9 @@ pub enum Surface {
     WindowWall { win_id: u32, side: Side, y_local: f64 },
     /// Upper corner of a window (junction of top edge and side wall).
     WindowUpperCorner { win_id: u32, side: Side },
+    /// Bottom edge of a window. `x_local` is offset from the window's left edge.
+    /// Character stands below the window's bottom edge (hanging from the underside).
+    WindowBottom { win_id: u32, x_local: f64 },
     /// In the air (falling or jumping). Not bound to any surface.
     Airborne,
 }
@@ -76,6 +111,20 @@ pub enum State {
     /// `shocked > 0` means the character just fell off a ledge; shows `f-shocked`
     /// sprite until it counts down to zero.
     Falling { vx: f64, vy: f64, shocked: f64 },
+    /// Controlled parabolic jump toward a target wall (replaces the instant snap
+    /// from `JumpRunup`). Physics are the same as `Falling`; arrival is detected
+    /// when `char_pos.0` reaches `target_cx` (from the correct direction).
+    Airborne {
+        vx: f64,
+        vy: f64,
+        target_win_id: u32,
+        target_side: Side,
+        landing_mode: LandingMode,
+        /// Precomputed horizontal snap X; arrival triggers when char_pos.0 crosses this.
+        target_cx: f64,
+        /// Approximate target Y (used only for initial vx/vy calculation).
+        target_cy: f64,
+    },
 
     // -- Floor / WindowTop --
     /// Playing `s-stand-up` after landing.
@@ -84,6 +133,9 @@ pub enum State {
     Observing { elapsed: f64, duration: f64 },
     /// Walking along the floor or window top.
     Walking { dir: Dir, frame: u8, frame_elapsed: f64 },
+    /// Running (faster variant of Walking). Spontaneously entered from Walking;
+    /// returns to Walking after `duration` seconds or upon reaching an edge.
+    Running { dir: Dir, frame: u8, frame_elapsed: f64, elapsed: f64, duration: f64 },
     /// Turning around (side → front → mirrored side).
     TurningAround { elapsed: f64, to_dir: Dir },
     /// Standing idle; occasionally opens mouth once (`s-stand-close`) then returns to `s-stand`.
@@ -96,8 +148,10 @@ pub enum State {
     LieIdle { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
     /// Sleeping.
     Sleeping { elapsed: f64, duration: f64, head_front: bool, head_timer: f64 },
-    /// Peeking down over the edge.
-    PeekDown { elapsed: f64, dir: Dir },
+    /// Playing a named edge animation (generalised `PeekDown`).
+    /// `animation` names a sprite `s-{animation}`; when elapsed ≥ duration the
+    /// behavior script decides the next state.
+    SurfaceInteract { animation: String, elapsed: f64, duration: f64, dir: Dir },
     /// Short run-up before jumping to a wall.
     JumpRunup { elapsed: f64, target_win_id: u32, target_side: Side, landing_mode: LandingMode },
 
@@ -118,6 +172,18 @@ pub enum State {
     CornerTransitionFront { elapsed: f64, going_up: bool, side: Side },
     /// Resting at the upper corner (`f-sit` or `f-lie`).
     CornerRest { elapsed: f64, duration: f64, lying: bool },
+
+    // -- One-shot animation --
+    /// Plays `animation` once from the manifest, then transitions to `return_to`.
+    /// The engine advances `frame` and sets `done = true` after the last frame.
+    #[allow(dead_code)]
+    OneShot {
+        animation: String,
+        frame: u8,
+        frame_elapsed: f64,
+        done: bool,
+        return_to: Box<State>,
+    },
 
     // -- User interaction --
     /// Character is being dragged by the user (⌘+drag on macOS).
@@ -157,6 +223,10 @@ pub struct BehaviorContext<'a> {
     /// True when the character has reached the boundary of the surface in
     /// the direction it is heading (edge of window-top, top/bottom of wall, etc.).
     pub at_edge: bool,
+    /// Semantic description of the current surface boundary (derived from
+    /// `surface`, `at_edge`, and `surface_progress`).
+    #[allow(dead_code)]
+    pub surface_edge_info: SurfaceEdge,
     /// Nearest window and side eligible for a wall-jump (Desktop surface only).
     /// Restricted to the current walking direction and `wall_jump_max_dist`.
     pub jump_target: Option<(u32, Side)>,
