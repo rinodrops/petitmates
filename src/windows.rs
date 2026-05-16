@@ -779,8 +779,12 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             let (cx, cy) = ch.char_pos;
             ch.char_pos = (cx + vx * dt, cy + vy * dt);
         }
-        State::Walking { dir, .. } => {
-            let speed = cfg.floor.walk_speed;
+        State::Walking { dir, .. } | State::Running { dir, .. } => {
+            let speed = if matches!(&ch.anim_state, State::Running { .. }) {
+                cfg.floor.run_speed
+            } else {
+                cfg.floor.walk_speed
+            };
             let delta = speed * dt;
             match &mut ch.surface {
                 Surface::Desktop { x } => {
@@ -1034,7 +1038,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                     let y_local = assets.size("s-hang-wall-0", false).1 / 2.0;
                     Some(Surface::WindowWall { win_id: *win_id, side: *side, y_local })
                 }
-                (State::Walking { .. }, Surface::WindowUpperCorner { win_id, side }) => {
+                (State::Walking { .. } | State::Running { .. }, Surface::WindowUpperCorner { win_id, side }) => {
                     let walk_w   = assets.size("s-walk-0", false).0;
                     let x_offset = walk_w / 2.0 + 3.0;
                     let x = match side {
@@ -1100,7 +1104,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                     } else { None }
                 }
                 // ClimbingDown reached the wall bottom: step onto WindowBottom.
-                (State::Walking { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
+                (State::Walking { dir, .. } | State::Running { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
                     if let Some(win) = windows_wm::find_win(*win_id, wins) {
                         if *y_local >= win.h - 4.0 {
                             let corner_offset = sprite_w / 2.0 + 4.0;
@@ -1150,8 +1154,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         }
     }
 
-    // Keep facing in sync with Walking direction.
-    if let State::Walking { dir, .. } = &ch.anim_state {
+    // Keep facing in sync with Walking/Running direction.
+    if let State::Walking { dir, .. } | State::Running { dir, .. } = &ch.anim_state {
         ch.facing = *dir;
     }
 

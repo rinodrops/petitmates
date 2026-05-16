@@ -48,6 +48,12 @@ static WALK_FRAME_NAMES: &[&str] = &[
     "s-walk-4", "s-walk-5", "s-walk-6", "s-walk-7",
 ];
 
+/// Run animation frame names indexed by sprite index (0-based).
+static RUN_FRAME_NAMES: &[&str] = &[
+    "s-run-0", "s-run-1", "s-run-2", "s-run-3",
+    "s-run-4", "s-run-5", "s-run-6", "s-run-7",
+];
+
 /// Climb animation frame names indexed by sprite index (0-based).
 static CLIMB_FRAME_NAMES: &[&str] = &[
     "s-hang-wall-0", "s-hang-wall-1", "s-hang-wall-2", "s-hang-wall-3",
@@ -57,6 +63,11 @@ static CLIMB_FRAME_NAMES: &[&str] = &[
 fn walk_frame_name(tick: u8, anim: &AnimationDef) -> &'static str {
     let idx = anim.sprite_index(tick) as usize;
     WALK_FRAME_NAMES.get(idx).copied().unwrap_or("s-walk-0")
+}
+
+fn run_frame_name(tick: u8, anim: &AnimationDef) -> &'static str {
+    let idx = anim.sprite_index(tick) as usize;
+    RUN_FRAME_NAMES.get(idx).copied().unwrap_or("s-run-0")
 }
 
 fn climb_frame_name(tick: u8, anim: &AnimationDef) -> &'static str {
@@ -89,6 +100,16 @@ pub fn sprite_for_state(
         State::Walking { dir, frame, .. } => {
             let anim = animations.get("walk").cloned().unwrap_or_default();
             SpriteRef::side(walk_frame_name(*frame, &anim), *dir)
+        }
+
+        State::Running { dir, frame, .. } => {
+            if let Some(anim) = animations.get("run").cloned() {
+                SpriteRef::side(run_frame_name(*frame, &anim), *dir)
+            } else {
+                // No run sprites defined — reuse walk sprites at run speed.
+                let anim = animations.get("walk").cloned().unwrap_or_default();
+                SpriteRef::side(walk_frame_name(*frame, &anim), *dir)
+            }
         }
 
         // Turn-around: three-phase animation driven by elapsed vs turn_duration.

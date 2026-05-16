@@ -31,6 +31,10 @@ pub struct RustBehavior {
     last_outing: Mutex<Instant>,
     /// Next forced-outing deadline in seconds (randomised on each jump).
     next_outing_secs: Mutex<f64>,
+    /// Instant when the last running burst ended (or app start).
+    last_run_end: Mutex<Instant>,
+    /// Seconds until the next spontaneous running burst.
+    next_run_secs: Mutex<f64>,
 }
 
 impl RustBehavior {
@@ -39,6 +43,8 @@ impl RustBehavior {
             rng: Mutex::new(SmallRng::from_os_rng()),
             last_outing: Mutex::new(Instant::now()),
             next_outing_secs: Mutex::new(f64::MAX), // filled on first config read
+            last_run_end: Mutex::new(Instant::now()),
+            next_run_secs: Mutex::new(f64::MAX),    // filled on first Walking tick
         }
     }
 
@@ -76,6 +82,22 @@ impl RustBehavior {
 
     fn rnd_bool(&self, prob: f64) -> bool {
         self.rnd() < prob
+    }
+
+    /// Returns true when the run cooldown has elapsed; initialises on first call.
+    fn run_due(&self, cfg: &crate::config::Config) -> bool {
+        let interval = cfg.floor.run_interval;
+        let deadline = *self.next_run_secs.lock().unwrap();
+        if deadline == f64::MAX {
+            *self.next_run_secs.lock().unwrap() = self.rnd_range(interval);
+            return false;
+        }
+        self.last_run_end.lock().unwrap().elapsed().as_secs_f64() >= deadline
+    }
+
+    fn record_run_end(&self, cfg: &crate::config::Config) {
+        *self.last_run_end.lock().unwrap() = Instant::now();
+        *self.next_run_secs.lock().unwrap() = self.rnd_range(cfg.floor.run_interval);
     }
 
     /// Direction toward the nearer corner (used when choosing where to walk).
@@ -240,7 +262,17 @@ impl BehaviorScript for RustBehavior {
                         });
                     }
                 }
-                if !ctx.at_edge { return Transition::Stay; }
+                if !ctx.at_edge {
+                    // Spontaneous run burst.
+                    if self.run_due(cfg) {
+                        let duration = self.rnd_range(cfg.floor.run_duration);
+                        return Transition::To(State::Running {
+                            dir: *dir, frame: 0, frame_elapsed: 0.0,
+                            elapsed: 0.0, duration,
+                        });
+                    }
+                    return Transition::Stay;
+                }
                 match ctx.surface {
                     Surface::WindowTop { .. } => {
                         // idle rate (90% → idle 90% of the time, period).
@@ -292,6 +324,28 @@ impl BehaviorScript for RustBehavior {
                     }
                     _ => Transition::Stay,
                 }
+            }
+
+            // ── Running ───────────────────────────────────────────────
+            State::Running { dir, duration, .. } => {
+                // Duration elapsed or edge reached → return to Walking.
+                if e >= *duration || ctx.at_edge {
+                    self.record_run_end(cfg);
+                    return Transition::To(State::Walking { dir: *dir, frame: 0, frame_elapsed: 0.0 });
+                }
+                // Same jump-target check as Walking.
+                if matches!(ctx.surface, Surface::Desktop { .. }) {
+                    if let Some((win_id, side)) = &ctx.jump_target {
+                        self.record_run_end(cfg);
+                        return Transition::To(State::JumpRunup {
+                            elapsed: 0.0,
+                            target_win_id: *win_id,
+                            target_side: *side,
+                            landing_mode: LandingMode::ClimbFromBottom,
+                        });
+                    }
+                }
+                Transition::Stay
             }
 
             // ── TurningAround ─────────────────────────────────────────
