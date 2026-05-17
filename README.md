@@ -161,6 +161,11 @@ If no override file is present, built-in defaults are used.
 
 ## Release Notes
 
+### v0.3.1
+- Fix: menu bar icon now reliably appears on macOS 26 — status item is registered before heavy initialization
+- Fix: `autosaveName` set to a stable string, preventing duplicate Control Center entries on each launch
+- Fix: geocoding (Open-Meteo) moved to background thread, eliminating startup stall on slow networks
+
 ### v0.3.0
 - Characters walk with a natural bouncy gait (vertical oscillation)
 - Characters occasionally break into a run when hurrying between locations
