@@ -47,19 +47,19 @@
 
 Both characters live system-wide — on top of your app windows and the desktop, not inside any one application.
 
-| Animation                                          | Preview                                            |
-| -------------------------------------------------- | -------------------------------------------------- |
-| Drop in from above, stand up, look around          | ![fall-land](docs/screenshots/fall-land.gif)       |
-| Walk along window edges with a natural bouncy gait | ![walk-top](docs/screenshots/walk-top.gif)         |
-| Peek down over the edge                            | ![peek-down](docs/screenshots/peek-down.gif)       |
-| Climb up the wall                                  | ![climb-wall](docs/screenshots/climb-wall.gif)     |
-| Jump between windows in a physical arc             | ![window-jump](docs/screenshots/window-jump.gif)   |
-| Fall off the edge in surprise                      | ![shocked-fall](docs/screenshots/shocked-fall.gif) |
-| Stroll along the desktop floor                     | ![floor-walk](docs/screenshots/floor-walk.gif)     |
-| Fade when your cursor hovers                       | ![hover-fade](docs/screenshots/hover-fade.gif)     |
-| Grab and drop onto any surface                     | ![drag-drop](docs/screenshots/drag-drop.gif)       |
+| Animation                                 | Preview                                            |
+| ----------------------------------------- | -------------------------------------------------- |
+| Drop in from above, stand up, look around | ![fall-land](docs/screenshots/fall-land.gif)       |
+| Walk along window edges                   | ![walk-top](docs/screenshots/walk-top.gif)         |
+| Peek down over the edge                   | ![peek-down](docs/screenshots/peek-down.gif)       |
+| Climb up the wall                         | ![climb-wall](docs/screenshots/climb-wall.gif)     |
+| Jump between windows                      | ![window-jump](docs/screenshots/window-jump.gif)   |
+| Fall off the edge in surprise             | ![shocked-fall](docs/screenshots/shocked-fall.gif) |
+| Stroll along the desktop floor            | ![floor-walk](docs/screenshots/floor-walk.gif)     |
+| Fade when your cursor hovers              | ![hover-fade](docs/screenshots/hover-fade.gif)     |
+| Grab and drop onto any surface            | ![drag-drop](docs/screenshots/drag-drop.gif)       |
 
-They sit, lie down, fall asleep, turn their heads, open their mouths — and occasionally break into a run or decide to visit a different window on their own.
+They sit, lie down, fall asleep, turn their heads, open their mouths — and occasionally decide to visit a different window on their own.
 
 ## Speech
 
@@ -160,6 +160,10 @@ pond_turtle_config.toml      ← optional override
 If no override file is present, built-in defaults are used.
 
 ## Release Notes
+
+### v0.3.2
+
+- The macOS menu bar menu and Windows system-tray menu now show non-interactive items for the current location (📍 city name with geocoding status: ✓ / resolving... / not found / unavailable) and weather (e.g. ☀️ Sunny, 22.5°C). Hidden when weather is disabled in `user.toml`.
 
 ### v0.3.1
 - Fix: menu bar icon now reliably appears on macOS 26 — status item is registered before heavy initialization
