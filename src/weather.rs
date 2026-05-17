@@ -51,23 +51,58 @@ pub struct WeatherInfo {
     pub temp_c: f64,
 }
 
+/// Geocoding resolution status exposed via [`WeatherHandle::geo_status`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GeoStatus {
+    /// Geocoding request is in flight.
+    Resolving,
+    /// Coordinates were successfully resolved (or supplied directly).
+    Ok,
+    /// The city name returned no matching results.
+    NotFound,
+    /// A network or parse error occurred during geocoding.
+    Unavailable,
+}
+
+/// Combined internal state of the weather handle.
+struct WeatherState {
+    weather: Option<WeatherInfo>,
+    geo: GeoStatus,
+}
+
 /// Shared, cheaply-cloneable handle to the latest weather snapshot.
 #[derive(Clone)]
-pub struct WeatherHandle(Arc<Mutex<Option<WeatherInfo>>>);
+pub struct WeatherHandle(Arc<Mutex<WeatherState>>);
 
 impl WeatherHandle {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(None)))
+        Self(Arc::new(Mutex::new(WeatherState {
+            weather: None,
+            geo: GeoStatus::Resolving,
+        })))
     }
 
     /// Returns the latest weather, or `None` if not yet fetched.
     pub fn get(&self) -> Option<WeatherInfo> {
-        self.0.lock().ok()?.clone()
+        self.0.lock().ok()?.weather.clone()
     }
 
-    fn set(&self, info: WeatherInfo) {
+    /// Returns the current geocoding resolution status.
+    pub fn geo_status(&self) -> GeoStatus {
+        self.0.lock().ok()
+            .map(|g| g.geo.clone())
+            .unwrap_or(GeoStatus::Unavailable)
+    }
+
+    fn set_weather(&self, info: WeatherInfo) {
         if let Ok(mut guard) = self.0.lock() {
-            *guard = Some(info);
+            guard.weather = Some(info);
+        }
+    }
+
+    fn set_geo(&self, status: GeoStatus) {
+        if let Ok(mut guard) = self.0.lock() {
+            guard.geo = status;
         }
     }
 }
@@ -77,12 +112,20 @@ impl WeatherHandle {
 /// Spawn the weather background thread and return the shared handle.
 ///
 /// If `cfg.enabled` is `false`, or if no location can be resolved, the handle
-/// will remain `None` forever (weather triggers are silently suppressed).
+/// will have `geo_status() == GeoStatus::Unavailable` and `get()` returns `None`
+/// forever (weather triggers are silently suppressed).
 pub fn spawn(cfg: &crate::user_config::WeatherConfig) -> WeatherHandle {
     let handle = WeatherHandle::new();
 
     if !cfg.enabled {
+        handle.set_geo(GeoStatus::Unavailable);
         return handle;
+    }
+
+    // If lat/lon are supplied directly, mark geo as resolved immediately so
+    // the status menu can show "✓" without waiting for the background thread.
+    if cfg.latitude.is_some() && cfg.longitude.is_some() {
+        handle.set_geo(GeoStatus::Ok);
     }
 
     // Resolve coordinates and start the fetch loop inside a background thread
@@ -93,15 +136,37 @@ pub fn spawn(cfg: &crate::user_config::WeatherConfig) -> WeatherHandle {
         .name("weather-fetch".into())
         .spawn(move || {
             let lat_lon: Option<(f64, f64)> = match (cfg_bg.latitude, cfg_bg.longitude) {
-                (Some(lat), Some(lon)) => Some((lat, lon)),
-                _ => cfg_bg.city.as_deref().and_then(geocode),
+                (Some(lat), Some(lon)) => {
+                    // Already marked Ok before the thread started.
+                    Some((lat, lon))
+                }
+                _ => match cfg_bg.city.as_deref() {
+                    Some(city) => match geocode_detailed(city) {
+                        GeoResult::Ok(lat, lon) => {
+                            handle_bg.set_geo(GeoStatus::Ok);
+                            Some((lat, lon))
+                        }
+                        GeoResult::NotFound => {
+                            eprintln!("[weather] city '{}' not found", city);
+                            handle_bg.set_geo(GeoStatus::NotFound);
+                            None
+                        }
+                        GeoResult::Unavailable => {
+                            eprintln!("[weather] geocoding unavailable");
+                            handle_bg.set_geo(GeoStatus::Unavailable);
+                            None
+                        }
+                    },
+                    None => {
+                        eprintln!("[weather] no location configured; weather triggers disabled");
+                        handle_bg.set_geo(GeoStatus::Unavailable);
+                        None
+                    }
+                },
             };
             let (lat, lon) = match lat_lon {
                 Some(v) => v,
-                None => {
-                    eprintln!("[weather] no location configured; weather triggers disabled");
-                    return;
-                }
+                None    => return,
             };
             run_loop(handle_bg, lat, lon);
         })
@@ -116,7 +181,7 @@ fn run_loop(handle: WeatherHandle, lat: f64, lon: f64) {
     loop {
         let tick_start = Instant::now();
         match fetch_weather(lat, lon) {
-            Ok(info) => handle.set(info),
+            Ok(info) => handle.set_weather(info),
             Err(e)   => eprintln!("[weather] fetch failed: {e}"),
         }
         let elapsed = tick_start.elapsed();
@@ -128,21 +193,39 @@ fn run_loop(handle: WeatherHandle, lat: f64, lon: f64) {
 
 // ---- Geocoding ----
 
-fn geocode(city: &str) -> Option<(f64, f64)> {
+/// Detailed geocoding result distinguishing failure modes.
+enum GeoResult {
+    Ok(f64, f64),
+    NotFound,
+    Unavailable,
+}
+
+fn geocode_detailed(city: &str) -> GeoResult {
     let url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
         urlencoded(city)
     );
-    let body: serde_json::Value = ureq::get(&url)
-        .call()
-        .ok()?
-        .body_mut()
-        .read_json()
-        .ok()?;
-    let result = body.get("results")?.get(0)?;
-    let lat = result.get("latitude")?.as_f64()?;
-    let lon = result.get("longitude")?.as_f64()?;
-    Some((lat, lon))
+    let body: serde_json::Value = match ureq::get(&url).call() {
+        Ok(mut resp) => match resp.body_mut().read_json() {
+            Ok(v)  => v,
+            Err(_) => return GeoResult::Unavailable,
+        },
+        Err(_) => return GeoResult::Unavailable,
+    };
+    let results = match body.get("results").and_then(|r| r.as_array()) {
+        Some(r) if !r.is_empty() => r,
+        _ => return GeoResult::NotFound,
+    };
+    let result = &results[0];
+    let lat = match result.get("latitude").and_then(|v| v.as_f64()) {
+        Some(v) => v,
+        None    => return GeoResult::Unavailable,
+    };
+    let lon = match result.get("longitude").and_then(|v| v.as_f64()) {
+        Some(v) => v,
+        None    => return GeoResult::Unavailable,
+    };
+    GeoResult::Ok(lat, lon)
 }
 
 // ---- Weather fetch ----

@@ -133,6 +133,8 @@ struct AppState {
     lang: String,
     /// Shared weather cache updated by the background weather thread.
     weather: crate::weather::WeatherHandle,
+    /// Weather configuration from user.toml (city/coordinates for menu display).
+    weather_cfg: crate::user_config::WeatherConfig,
 }
 
 thread_local! {
@@ -1576,10 +1578,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             WM_TRAY => {
                 if (lp as u32) & 0xFFFF == WM_RBUTTONUP {
-                    let (char_count, ja) = APP.with(|cell| {
+                    let (char_count, ja, weather_info, weather_geo, weather_cfg) = APP.with(|cell| {
                         cell.borrow().as_ref()
-                            .map(|app| (app.chars.len(), app.lang == "ja"))
-                            .unwrap_or((1, false))
+                            .map(|app| (
+                                app.chars.len(),
+                                app.lang == "ja",
+                                app.weather.get(),
+                                app.weather.geo_status(),
+                                app.weather_cfg.clone(),
+                            ))
+                            .unwrap_or((1, false, None, crate::weather::GeoStatus::Unavailable, Default::default()))
                     });
                     let menu       = CreatePopupMenu();
                     let add_bd_str  = to_wide(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" });
@@ -1594,6 +1602,43 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
                     AppendMenuW(menu, MF_STRING,    IDM_SETTINGS, settings_str.as_ptr());
+                    // Non-interactive info items: location + weather.
+                    if weather_cfg.enabled {
+                        use crate::weather::GeoStatus;
+                        let loc_text = if let Some(city) = &weather_cfg.city {
+                            let suffix = match &weather_geo {
+                                GeoStatus::Ok          => " \u{2713}",
+                                GeoStatus::Resolving   => if ja { " 解決中..." } else { " resolving..." },
+                                GeoStatus::NotFound    => if ja { " 見つかりません" } else { " not found" },
+                                GeoStatus::Unavailable => if ja { " 利用不可" } else { " unavailable" },
+                            };
+                            format!("\u{1f4cd} {}{}", city, suffix)
+                        } else if let (Some(lat), Some(lon)) = (weather_cfg.latitude, weather_cfg.longitude) {
+                            format!("\u{1f4cd} {:.2}\u{00b0}, {:.2}\u{00b0}", lat, lon)
+                        } else {
+                            format!("\u{1f4cd} {}", if ja { "未設定" } else { "not configured" })
+                        };
+                        let wx_text = if let Some(info) = weather_info {
+                            let (emoji, cat) = match info.category {
+                                crate::weather::WeatherCategory::Sunny  =>
+                                    ("\u{2600}\u{fe0f}",  if ja { "晴れ" } else { "Sunny" }),
+                                crate::weather::WeatherCategory::Cloudy =>
+                                    ("\u{26c5}",           if ja { "曇り" } else { "Cloudy" }),
+                                crate::weather::WeatherCategory::Rainy  =>
+                                    ("\u{1f327}\u{fe0f}", if ja { "雨"   } else { "Rainy" }),
+                                crate::weather::WeatherCategory::Snowy  =>
+                                    ("\u{1f328}\u{fe0f}", if ja { "雪"   } else { "Snowy" }),
+                            };
+                            format!("{} {}, {:.1}\u{00b0}C", emoji, cat, info.temp_c)
+                        } else {
+                            "\u{2500}".to_string()
+                        };
+                        let loc_str = to_wide(&loc_text);
+                        let wx_str  = to_wide(&wx_text);
+                        AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+                        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, loc_str.as_ptr());
+                        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, wx_str.as_ptr());
+                    }
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
                     AppendMenuW(menu, MF_STRING,    IDM_ABOUT, about_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -1906,6 +1951,7 @@ pub fn run() {
                 lang: user_cfg.display.language.clone()
                     .unwrap_or_else(detect_system_language),
                 weather: weather_handle,
+                weather_cfg: user_cfg.weather,
             });
         });
 

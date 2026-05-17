@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/rinodrops/petitmates/releases/latest">
-    <img src="https://img.shields.io/github/v/release/rinodrops/petitmates?color=orange&label=Download" alt="Latest Release">
+    <img src="https://img.shields.io/github/v/release/rinodrops/petitmates?color=orange&label=ダウンロード" alt="最新リリース">
   </a>
   <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
   <img src="https://img.shields.io/badge/Windows-11-blue" alt="Windows 11">
@@ -50,16 +50,16 @@
 | アニメーション                              | プレビュー                                         |
 | ------------------------------------------- | -------------------------------------------------- |
 | 画面外上から落下 → 着地してキョロキョロ観察 | ![fall-land](docs/screenshots/fall-land.gif)       |
-| 跳ねるような歩き方でウィンドウ上端を歩く    | ![walk-top](docs/screenshots/walk-top.gif)         |
+| ウィンドウ上端を端から端へ歩く              | ![walk-top](docs/screenshots/walk-top.gif)         |
 | 端からのぞき込む                            | ![peek-down](docs/screenshots/peek-down.gif)       |
 | 壁を登る                                    | ![climb-wall](docs/screenshots/climb-wall.gif)     |
-| 放物線を描いて別ウィンドウへジャンプ        | ![window-jump](docs/screenshots/window-jump.gif)   |
+| コーナーから別ウィンドウへジャンプ移動      | ![window-jump](docs/screenshots/window-jump.gif)   |
 | 端から驚いて落下                            | ![shocked-fall](docs/screenshots/shocked-fall.gif) |
 | デスクトップの床をのんびり歩く              | ![floor-walk](docs/screenshots/floor-walk.gif)     |
 | カーソルをかざすと半透明になる              | ![hover-fade](docs/screenshots/hover-fade.gif)     |
 | ⌘+ドラッグでつかんで別の場所へ移動          | ![drag-drop](docs/screenshots/drag-drop.gif)       |
 
-座ったり，横になったり，眠ったり，首を傾けたり，口を開けたり——急いでいるときは走り出すことも。気が向いたら自分で別のウィンドウへ移動します。
+座ったり，横になったり，眠ったり，首を傾けたり，口を開けたり——そして気が向いたら自分で別のウィンドウへ移動します。
 
 ## 発話
 
@@ -160,6 +160,10 @@ pond_turtle_config.toml      ← オプション（上書き用）
 ファイルがない場合は内蔵のデフォルト値が使用されます。
 
 ## リリースノート
+
+### v0.3.2
+
+- macOS メニューバーメニューおよび Windows トレイメニューに，現在地（📍 都市名 + ジオコーディング状態: ✓ / resolving... / not found / unavailable）と天気（例: ☀️ Sunny, 22.5°C）を選択不能項目として表示するようになりました。`user.toml` で天気が無効の場合は非表示です。
 
 ### v0.3.1
 - 修正: macOS 26 でメニューバーアイコンが確実に表示されるよう，起動シーケンスの早い段階で status item を登録するように変更
