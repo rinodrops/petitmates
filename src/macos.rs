@@ -102,6 +102,8 @@ struct AppState {
     lang: String,
     /// Shared weather cache updated by the background weather thread.
     weather: crate::weather::WeatherHandle,
+    /// Weather configuration from user.toml (city/coordinates for menu display).
+    weather_cfg: crate::user_config::WeatherConfig,
 }
 
 thread_local! {
@@ -396,10 +398,34 @@ fn show_bubble(
 
 // ---- Status item ----
 
+/// Returns a human-readable location string for the status menu info item.
+fn status_location_label(
+    cfg: &crate::user_config::WeatherConfig,
+    geo: &crate::weather::GeoStatus,
+    ja: bool,
+) -> String {
+    use crate::weather::GeoStatus;
+    let body = if let Some(city) = &cfg.city {
+        let suffix = match geo {
+            GeoStatus::Ok          => " \u{2713}",  // ✓
+            GeoStatus::Resolving   => if ja { " 解決中..." } else { " resolving..." },
+            GeoStatus::NotFound    => if ja { " 見つかりません" } else { " not found" },
+            GeoStatus::Unavailable => if ja { " 利用不可" } else { " unavailable" },
+        };
+        format!("{}{}", city, suffix)
+    } else if let (Some(lat), Some(lon)) = (cfg.latitude, cfg.longitude) {
+        format!("{:.2}\u{00b0}, {:.2}\u{00b0}", lat, lon)
+    } else {
+        (if ja { "未設定" } else { "not configured" }).to_string()
+    };
+    format!("\u{1f4cd} {}", body)  // 📍
+}
+
 fn make_status_item(
     handler: &MenuDelegate,
     mt: MainThreadMarker,
     lang: &str,
+    weather_cfg: &crate::user_config::WeatherConfig,
 ) -> Retained<objc2_app_kit::NSStatusItem> {
     let ja = lang == "ja";
     unsafe {
@@ -464,6 +490,38 @@ fn make_status_item(
         menu.addItem(&settings);
 
         menu.addItem(&NSMenuItem::separatorItem(mt));
+
+        // Non-interactive info items: location and weather (shown only when
+        // weather fetching is enabled). Titles are refreshed in menuWillOpen:.
+        if weather_cfg.enabled {
+            let initial_geo = if weather_cfg.latitude.is_some() && weather_cfg.longitude.is_some() {
+                crate::weather::GeoStatus::Ok
+            } else {
+                crate::weather::GeoStatus::Resolving
+            };
+            let loc_str = status_location_label(weather_cfg, &initial_geo, ja);
+            let location_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mt),
+                &NSString::from_str(&loc_str),
+                None,
+                &NSString::from_str(""),
+            );
+            let (): () = unsafe { objc2::msg_send![&*location_item, setEnabled: false] };
+            let (): () = unsafe { objc2::msg_send![&*location_item, setTag: 10_isize] };
+            menu.addItem(&location_item);
+
+            let weather_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mt),
+                &NSString::from_str("\u{2500}"),  // ─ placeholder, updated in menuWillOpen:
+                None,
+                &NSString::from_str(""),
+            );
+            let (): () = unsafe { objc2::msg_send![&*weather_item, setEnabled: false] };
+            let (): () = unsafe { objc2::msg_send![&*weather_item, setTag: 11_isize] };
+            menu.addItem(&weather_item);
+
+            menu.addItem(&NSMenuItem::separatorItem(mt));
+        }
 
         let about = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
@@ -610,18 +668,48 @@ define_class!(
     unsafe impl NSMenuDelegate for MenuDelegate {}
 
     impl MenuDelegate {
-        /// Gray out "Remove" when only one character remains.
+        /// Gray out "Remove" when only one character remains, and refresh
+        /// the location / weather info items with the latest data.
         #[unsafe(method(menuWillOpen:))]
         fn menu_will_open(&self, menu: &NSMenu) {
             APP.with(|cell| {
                 let b = cell.borrow();
                 let Some(app) = b.as_ref() else { return };
                 let enabled = app.chars.len() > 1;
+                let ja = app.lang == "ja";
                 unsafe {
                     // Tag 1 is set on the Remove item in make_status_item.
                     let item: Option<&NSMenuItem> = msg_send![menu, itemWithTag: 1_isize];
                     if let Some(item) = item {
                         let (): () = msg_send![item, setEnabled: enabled];
+                    }
+
+                    // Tags 10 (location) and 11 (weather) are the info items.
+                    let loc_item: Option<&NSMenuItem> = msg_send![menu, itemWithTag: 10_isize];
+                    if let Some(item) = loc_item {
+                        let geo = app.weather.geo_status();
+                        let title = status_location_label(&app.weather_cfg, &geo, ja);
+                        let (): () = msg_send![item, setTitle: &*NSString::from_str(&title)];
+                    }
+
+                    let wx_item: Option<&NSMenuItem> = msg_send![menu, itemWithTag: 11_isize];
+                    if let Some(item) = wx_item {
+                        let title = if let Some(info) = app.weather.get() {
+                            let (emoji, cat) = match info.category {
+                                crate::weather::WeatherCategory::Sunny  =>
+                                    ("\u{2600}\u{fe0f}",  if ja { "晴れ" } else { "Sunny" }),
+                                crate::weather::WeatherCategory::Cloudy =>
+                                    ("\u{26c5}",           if ja { "曇り" } else { "Cloudy" }),
+                                crate::weather::WeatherCategory::Rainy  =>
+                                    ("\u{1f327}\u{fe0f}", if ja { "雨" }  else { "Rainy" }),
+                                crate::weather::WeatherCategory::Snowy  =>
+                                    ("\u{1f328}\u{fe0f}", if ja { "雪" }  else { "Snowy" }),
+                            };
+                            format!("{} {}, {:.1}\u{00b0}C", emoji, cat, info.temp_c)
+                        } else {
+                            "\u{2500}".to_string()  // ─
+                        };
+                        let (): () = msg_send![item, setTitle: &*NSString::from_str(&title)];
                     }
                 }
             });
@@ -2052,7 +2140,7 @@ pub fn run() {
     let lang = user_cfg.display.language.clone()
         .unwrap_or_else(detect_system_language);
     let menu_handler = MenuDelegate::new(mt);
-    let status_item = make_status_item(&menu_handler, mt, &lang);
+    let status_item = make_status_item(&menu_handler, mt, &lang, &user_cfg.weather);
 
     let bd_cdir = char_dir_for("bearded_dragon").expect("bearded_dragon asset directory not found");
     let pt_cdir = char_dir_for("pond_turtle").expect("pond_turtle asset directory not found");
@@ -2113,6 +2201,7 @@ pub fn run() {
             font_size: user_cfg.display.font_size as f64,
             lang: lang,
             weather: weather_handle,
+            weather_cfg: user_cfg.weather,
         });
     });
 
