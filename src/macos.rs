@@ -405,6 +405,10 @@ fn make_status_item(
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(-2.0); // NSSquareStatusItemLength
+        // Fix autosave name to a stable string so Control Center does not
+        // create a new entry on every launch (PID-based auto-generated names).
+        let autosave_name = NSString::from_str("PetitMates");
+        let (): () = objc2::msg_send![&*item, setAutosaveName: &*autosave_name];
         if let Some(btn) = item.button(mt) {
             if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str("lizard.fill"),
@@ -2041,13 +2045,21 @@ pub fn run() {
     let app = NSApplication::sharedApplication(mt);
     unsafe { app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) };
 
+    // Create the status item as early as possible so that macOS (26+) registers
+    // it with Control Center before the app's heavy initialization begins.
+    // All menu action handlers guard against AppState not yet being initialized.
+    let user_cfg = crate::user_config::load();
+    let lang = user_cfg.display.language.clone()
+        .unwrap_or_else(detect_system_language);
+    let menu_handler = MenuDelegate::new(mt);
+    let status_item = make_status_item(&menu_handler, mt, &lang);
+
     let bd_cdir = char_dir_for("bearded_dragon").expect("bearded_dragon asset directory not found");
     let pt_cdir = char_dir_for("pond_turtle").expect("pond_turtle asset directory not found");
     let bd_mf = manifest::load(&bd_cdir).expect("bearded_dragon manifest.toml missing or invalid");
     let pt_mf = manifest::load(&pt_cdir).expect("pond_turtle manifest.toml missing or invalid");
     let bd_config = make_shared(&bd_cdir);
     let pt_config = make_shared(&pt_cdir);
-    let user_cfg = crate::user_config::load();
     let sprite_size = user_cfg.display.sprite_size as f64;
     let bd_display_w = sprite_size;
     let pt_display_w = sprite_size;
@@ -2069,11 +2081,6 @@ pub fn run() {
     };
 
     let weather_handle = crate::weather::spawn(&user_cfg.weather);
-
-    let menu_handler = MenuDelegate::new(mt);
-    let lang = user_cfg.display.language.clone()
-        .unwrap_or_else(detect_system_language);
-    let status_item = make_status_item(&menu_handler, mt, &lang);
 
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();

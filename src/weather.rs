@@ -85,24 +85,26 @@ pub fn spawn(cfg: &crate::user_config::WeatherConfig) -> WeatherHandle {
         return handle;
     }
 
-    // Resolve coordinates: prefer explicit lat/lon, then geocode city.
-    let lat_lon: Option<(f64, f64)> = match (cfg.latitude, cfg.longitude) {
-        (Some(lat), Some(lon)) => Some((lat, lon)),
-        _ => cfg.city.as_deref().and_then(geocode),
-    };
-
-    let (lat, lon) = match lat_lon {
-        Some(v) => v,
-        None => {
-            eprintln!("[weather] no location configured; weather triggers disabled");
-            return handle;
-        }
-    };
-
+    // Resolve coordinates and start the fetch loop inside a background thread
+    // so the main thread is not blocked by the geocoding HTTP request.
+    let cfg_bg = cfg.clone();
     let handle_bg = handle.clone();
     std::thread::Builder::new()
         .name("weather-fetch".into())
-        .spawn(move || run_loop(handle_bg, lat, lon))
+        .spawn(move || {
+            let lat_lon: Option<(f64, f64)> = match (cfg_bg.latitude, cfg_bg.longitude) {
+                (Some(lat), Some(lon)) => Some((lat, lon)),
+                _ => cfg_bg.city.as_deref().and_then(geocode),
+            };
+            let (lat, lon) = match lat_lon {
+                Some(v) => v,
+                None => {
+                    eprintln!("[weather] no location configured; weather triggers disabled");
+                    return;
+                }
+            };
+            run_loop(handle_bg, lat, lon);
+        })
         .expect("failed to spawn weather thread");
 
     handle
