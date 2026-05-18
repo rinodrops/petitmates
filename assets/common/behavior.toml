@@ -1,0 +1,13 @@
+# Common behavior triggers shared by all characters.
+# These [[behavior]] entries fire OneShot animations defined in each character's manifest.toml.
+# Entries whose animation name does not exist in the manifest are silently ignored.
+
+# Example: add a yawn animation for all characters when sitting/lying idle.
+# Uncomment and add the corresponding sprite frames to use.
+#
+# [[behavior]]
+# animation    = "yawn"
+# trigger      = "random"
+# interval_min = 120.0
+# interval_max = 600.0
+# states       = ["SitIdle", "LieIdle", "Sleeping"]

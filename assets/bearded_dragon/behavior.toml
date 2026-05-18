@@ -1,0 +1,17 @@
+# Bearded dragon behavior triggers.
+#
+# Add [[behavior]] entries here to trigger OneShot animations defined in manifest.toml.
+# Add [[reaction]] entries to respond to user interactions (grabbed, dropped, hovered).
+#
+# Example (requires s-tongue-flick-0.png etc. in sprite/ and [animations.tongue-flick] in manifest.toml):
+#
+# [[behavior]]
+# animation    = "tongue-flick"
+# trigger      = "random"
+# interval_min = 60.0
+# interval_max = 300.0
+# states       = ["SitIdle", "LieIdle", "StandIdle", "CornerRest"]
+#
+# [[reaction]]
+# trigger   = "dropped"
+# animation = "surprised"
