@@ -1,0 +1,13 @@
+# Pond turtle behavior triggers.
+#
+# Add [[behavior]] entries here to trigger OneShot animations defined in manifest.toml.
+# Add [[reaction]] entries to respond to user interactions (grabbed, dropped, hovered).
+#
+# Example (requires s-head-retract-0.png etc. in sprite/ and [animations.head-retract] in manifest.toml):
+#
+# [[behavior]]
+# animation    = "head-retract"
+# trigger      = "random"
+# interval_min = 90.0
+# interval_max = 400.0
+# states       = ["SitIdle", "LieIdle", "StandIdle", "CornerRest"]
