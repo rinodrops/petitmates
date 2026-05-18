@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod anim_trigger;
 mod behavior;
 mod config;
 mod debug_menu;

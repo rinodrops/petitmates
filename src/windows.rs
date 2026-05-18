@@ -107,6 +107,7 @@ struct CharState {
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
     speech_engine: crate::speech::SpeechEngine,
+    behavior_engine: crate::anim_trigger::BehaviorEngine,
     /// Active speech bubble state; None when no bubble is shown.
     bubble_state: Option<crate::speech::BubbleState>,
     /// HWND for the speech bubble layered window; null when not created yet.
@@ -714,6 +715,11 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
     if let Some(init) = assets.sprite("s-stand", false) {
         unsafe { set_layered_content(hwnd, &init.bgra, init.w, init.h, -4096, -4096, 255) };
     }
+    let behavior_engine = crate::anim_trigger::BehaviorEngine::new(
+        crate::anim_trigger::load(char_name),
+        &assets.animations,
+    );
+    let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         hwnd,
         assets,
@@ -728,7 +734,8 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         drag_offset:     None,
         last_screen_pos: (-4096, -4096),
         debug_trigger:   None,
-        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        speech_engine,
+        behavior_engine,
         bubble_state: None,
         bubble_hwnd: ptr::null_mut(),
     }
@@ -1359,7 +1366,42 @@ fn tick_all() {
                         }
                         app.chars[i].bubble_state = Some(bs);
                     }
+                    // Fire OneShot animation alongside speech if specified.
+                    if let Some(anim_name) = line.oneshot {
+                        let ch = &mut app.chars[i];
+                        if ch.assets.animations.contains_key(&anim_name) {
+                            let return_to = Box::new(ch.anim_state.clone());
+                            ch.anim_state = crate::behavior::State::OneShot {
+                                animation: anim_name,
+                                frame: 0,
+                                frame_elapsed: 0.0,
+                                done: false,
+                                return_to,
+                            };
+                        }
+                    }
                     break;
+                }
+            }
+        }
+
+        // Behavior animation triggers.
+        {
+            let weather_info = app.weather.get();
+            for i in 0..app.chars.len() {
+                let has_bubble = app.chars[i].bubble_state.is_some();
+                let state      = app.chars[i].anim_state.clone();
+                if let Some(anim_name) = app.chars[i].behavior_engine.tick(
+                    &state, has_bubble, weather_info.as_ref(),
+                ) {
+                    let return_to = Box::new(state);
+                    app.chars[i].anim_state = crate::behavior::State::OneShot {
+                        animation: anim_name,
+                        frame: 0,
+                        frame_elapsed: 0.0,
+                        done: false,
+                        return_to,
+                    };
                 }
             }
         }
