@@ -715,7 +715,15 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
     if let Some(init) = assets.sprite("s-stand", false) {
         unsafe { set_layered_content(hwnd, &init.bgra, init.w, init.h, -4096, -4096, 255) };
     }
-    let behavior_engine = {\n        let behavior_data = crate::anim_trigger::load(char_name);\n        // On Windows with embedded assets there is no file to watch for personality\n        // hot-reload; the exe-adjacent {char_name}_behavior.toml is used if present.\n        let exe_dir = std::env::current_exe().ok()\n            .and_then(|e| e.parent().map(|p| p.to_path_buf()));\n        let watch_path = exe_dir.map(|d| d.join(format!(\"{char_name}_behavior.toml\")));\n        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);\n        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }\n    };
+    let behavior_engine = {
+        let behavior_data = crate::anim_trigger::load(char_name);
+        // On Windows assets are embedded; watch the exe-adjacent {char}_behavior.toml if present.
+        let exe_dir = std::env::current_exe().ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()));
+        let watch_path = exe_dir.map(|d| d.join(format!("{char_name}_behavior.toml")));
+        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);
+        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
+    };
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         hwnd,
