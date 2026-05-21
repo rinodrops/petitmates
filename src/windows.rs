@@ -884,7 +884,10 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     }
 
     // Off-screen safeguard.
-    {
+    // Only applies to free-flying states (Airborne / Desktop).  Window-anchored
+    // surfaces use local coordinates for rendering, so char_pos may be stale;
+    // surface_still_valid already handles window disappearance for those.
+    if matches!(&ch.surface, Surface::Airborne | Surface::Desktop { .. }) {
         let (fw, fh) = assets.size("s-stand", false);
         let (cx, cy) = ch.char_pos;
         let below = cy > si.height + fh;
