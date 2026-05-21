@@ -1898,7 +1898,20 @@ fn tick_char(
                                 ch.facing = *dir;
                                 Some(Surface::WindowBottom { win_id: *win_id, x_local })
                             } else {
-                                ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+                                // window_bottom is false: drop off the wall.
+                                // Assign to `new_state` (not ch.anim_state directly) so
+                                // the final `ch.anim_state = new_state` line uses Falling.
+                                // Seed char_pos from the wall position now, before the
+                                // surface is overwritten with Airborne.
+                                let (sw, sh) = ch.assets.image("s-jump", false)
+                                    .or_else(|| ch.assets.image("s-stand", false))
+                                    .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+                                    .unwrap_or((sprite_sz.0, sprite_sz.1));
+                                ch.char_pos = (
+                                    match side { Side::Left => win.x, Side::Right => win.right() - sw },
+                                    win.y + *y_local - sh / 2.0,
+                                );
+                                new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
                                 Some(Surface::Airborne)
                             }
                         } else { None }
