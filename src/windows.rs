@@ -45,6 +45,7 @@ const IDM_ADD_BD: usize = 3;
 const IDM_REMOVE_CHAR: usize = 4;
 const IDM_ADD_PT: usize = 5;
 const IDM_SETTINGS: usize = 6;
+const IDM_ADD_LG: usize = 7;
 const TIMER_TICK: usize = 1;
 /// Base command ID for debug trigger menu items (reserves 100–199).
 const IDM_DEBUG_BASE: usize = 100;
@@ -118,8 +119,10 @@ struct AppState {
     chars: Vec<CharState>,
     bd_assets: Rc<SpriteAssets>,
     pt_assets: Rc<SpriteAssets>,
+    lg_assets: Rc<SpriteAssets>,
     bd_config: SharedConfig,
     pt_config: SharedConfig,
+    lg_config: SharedConfig,
     /// Character index whose debug menu is currently being shown.
     debug_menu_char: usize,
     /// Target states stored between menu construction and WM_COMMAND dispatch.
@@ -1651,14 +1654,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             .unwrap_or((1, false, None, crate::weather::GeoStatus::Unavailable, Default::default()))
                     });
                     let menu       = CreatePopupMenu();
-                    let add_bd_str  = to_wide(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" });
+                    let add_bd_str  = to_wide(if ja { "フトアゴを追加" } else { "Add Bearded Dragon" });
                     let add_pt_str  = to_wide(if ja { "クサガメを追加" } else { "Add Pond Turtle" });
+                    let add_lg_str  = to_wide(if ja { "レオパを追加" } else { "Add Leopard Gecko" });
                     let remove_str  = to_wide(if ja { "最後のキャラクターを削除" } else { "Remove Last" });
                     let about_str    = to_wide(if ja { "Petit Mates について" } else { "About Petit Mates" });
                     let settings_str = to_wide(if ja { "設定ファイルを開く" } else { "Open Settings File" });
                     let exit_str     = to_wide(if ja { "終了" } else { "Quit" });
                     AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
                     AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_ADD_LG, add_lg_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -1752,6 +1757,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let assets = Rc::clone(&app.pt_assets);
                         let config = app.pt_config.clone();
                         let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
+                        app.chars.push(ch);
+                    }
+                });
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_LG => {
+                APP.with(|cell| {
+                    if let Some(app) = cell.borrow_mut().as_mut() {
+                        let si     = windows_wm::screen_info();
+                        let assets = Rc::clone(&app.lg_assets);
+                        let config = app.lg_config.clone();
+                        let ch     = spawn_char_hwnd(&si, assets, config, "leopard_gecko");
                         app.chars.push(ch);
                     }
                 });
@@ -1972,14 +1989,18 @@ pub fn run() {
         // Load shared assets from embedded bytes.
         let bd_config = make_shared_win_for("bearded_dragon");
         let pt_config = make_shared_win_for("pond_turtle");
+        let lg_config = make_shared_win_for("leopard_gecko");
         let user_cfg = crate::user_config::load();
         let sprite_size = user_cfg.display.sprite_size as f64;
         let bd_display_w = sprite_size;
         let pt_display_w = sprite_size;
+        let lg_display_w = sprite_size;
         let bd_mf = manifest::load_from_bytes(windows_assets::embedded::bearded_dragon::MANIFEST_TOML)
             .expect("embedded bearded_dragon manifest.toml is invalid");
         let pt_mf = manifest::load_from_bytes(windows_assets::embedded::pond_turtle::MANIFEST_TOML)
             .expect("embedded pond_turtle manifest.toml is invalid");
+        let lg_mf = manifest::load_from_bytes(windows_assets::embedded::leopard_gecko::MANIFEST_TOML)
+            .expect("embedded leopard_gecko manifest.toml is invalid");
         let bd_assets = Rc::new(
             SpriteAssets::load_embedded(windows_assets::embedded::bearded_dragon::SPRITES, &bd_mf, bd_display_w)
                 .expect("failed to decode embedded bearded_dragon sprites"),
@@ -1988,21 +2009,28 @@ pub fn run() {
             SpriteAssets::load_embedded(windows_assets::embedded::pond_turtle::SPRITES, &pt_mf, pt_display_w)
                 .expect("failed to decode embedded pond_turtle sprites"),
         );
+        let lg_assets = Rc::new(
+            SpriteAssets::load_embedded(windows_assets::embedded::leopard_gecko::SPRITES, &lg_mf, lg_display_w)
+                .expect("failed to decode embedded leopard_gecko sprites"),
+        );
 
         // Create both character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
         let weather_handle = crate::weather::spawn(&user_cfg.weather);
         let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone(), "bearded_dragon");
         let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone(), "pond_turtle");
+        let lg_char    = spawn_char_hwnd(&si, Rc::clone(&lg_assets), lg_config.clone(), "leopard_gecko");
         let host_hwnd  = bd_char.hwnd;
 
         APP.with(|cell| {
             *cell.borrow_mut() = Some(AppState {
-                chars:     vec![bd_char, pt_char],
+                chars:     vec![bd_char, pt_char, lg_char],
                 bd_assets,
                 pt_assets,
+                lg_assets,
                 bd_config,
                 pt_config,
+                lg_config,
                 debug_menu_char:    0,
                 debug_menu_targets: Vec::new(),
                 speech_lock_remaining: 0.0,

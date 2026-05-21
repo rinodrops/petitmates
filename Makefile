@@ -32,6 +32,7 @@ RES_DIR_T   := $(subst $(space),\ ,$(RES_DIR))
 
 BD_SRC    := assets/bearded_dragon
 PT_SRC    := assets/pond_turtle
+LG_SRC    := assets/leopard_gecko
 ICON_SRC  := assets/appicon.png
 ICONSET   := $(BUILD_DIR)/AppIcon.iconset
 ICNS      := $(RES_DIR)/AppIcon.icns
@@ -58,6 +59,9 @@ dev: | $(MACOS_DIR_T) $(RES_DIR_T)
 	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
 	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
 	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
+	mkdir -p "$(RES_DIR)/assets/leopard_gecko/sprite"
+	cp $(LG_SRC)/manifest.toml   "$(RES_DIR)/assets/leopard_gecko/"
+	cp $(LG_SRC)/sprite/*.png    "$(RES_DIR)/assets/leopard_gecko/sprite/"
 	mkdir -p "$(RES_DIR)/assets/common"
 	cp assets/common/params.toml "$(RES_DIR)/assets/common/"
 	$(MAKE) _plist _icns_if_present
@@ -79,6 +83,9 @@ app: | $(MACOS_DIR_T) $(RES_DIR_T)
 	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
 	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
 	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
+	mkdir -p "$(RES_DIR)/assets/leopard_gecko/sprite"
+	cp $(LG_SRC)/manifest.toml   "$(RES_DIR)/assets/leopard_gecko/"
+	cp $(LG_SRC)/sprite/*.png    "$(RES_DIR)/assets/leopard_gecko/sprite/"
 	mkdir -p "$(RES_DIR)/assets/common"
 	cp assets/common/params.toml "$(RES_DIR)/assets/common/"
 	$(MAKE) _plist _icns_if_present

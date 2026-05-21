@@ -1,0 +1,99 @@
+canonical_width = 512
+
+[surfaces]
+window_bottom = false
+
+[animations.walk]
+frames = 3
+mode   = "ping-pong"
+vertical_oscillation = { amplitude = 3.0, phase_per_frame = 1.571 }
+
+[animations.climb]
+frames = 3
+mode   = "ping-pong"
+
+[sprites."f-hang-corner"]
+attachment = "point"
+x = 225
+y = 148
+
+[sprites."f-lie"]
+attachment = "line_y"
+y = 128
+
+[sprites."f-lie-sleep"]
+attachment = "line_y"
+y = 115
+
+[sprites."f-shocked"]
+attachment = "line_y"
+y = 313
+
+[sprites."f-sit"]
+attachment = "line_y"
+y = 269
+
+[sprites."f-stand"]
+attachment = "line_y"
+y = 201
+
+[sprites."s-hang-corner"]
+attachment = "point"
+x = 283
+y = 96
+
+[sprites."s-hang-wall-0"]
+attachment = "line_x"
+x = 181
+
+[sprites."s-hang-wall-1"]
+attachment = "line_x"
+x = 147
+
+[sprites."s-hang-wall-2"]
+attachment = "line_x"
+x = 164
+
+[sprites."s-jump"]
+attachment = "line_y"
+y = 206
+
+[sprites."s-lie"]
+attachment = "line_y"
+y = 123
+
+[sprites."s-lie-sleep"]
+attachment = "line_y"
+y = 116
+
+[sprites."s-peek-down"]
+attachment = "line_y"
+y = 249
+
+[sprites."s-sit"]
+attachment = "line_y"
+y = 264
+
+[sprites."s-stand"]
+attachment = "line_y"
+y = 225
+
+[sprites."s-stand-close"]
+attachment = "line_y"
+y = 208
+
+[sprites."s-stand-up"]
+attachment = "line_y"
+y = 305
+
+[sprites."s-walk-0"]
+attachment = "line_y"
+y = 242
+
+[sprites."s-walk-1"]
+attachment = "line_y"
+y = 228
+
+[sprites."s-walk-2"]
+attachment = "line_y"
+y = 230
