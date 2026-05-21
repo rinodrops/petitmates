@@ -1654,9 +1654,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             .unwrap_or((1, false, None, crate::weather::GeoStatus::Unavailable, Default::default()))
                     });
                     let menu       = CreatePopupMenu();
-                    let add_bd_str  = to_wide(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" });
+                    let add_bd_str  = to_wide(if ja { "フトアゴを追加" } else { "Add Bearded Dragon" });
                     let add_pt_str  = to_wide(if ja { "クサガメを追加" } else { "Add Pond Turtle" });
-                    let add_lg_str  = to_wide(if ja { "ヒョウモントカゲモドキを追加" } else { "Add Leopard Gecko" });
+                    let add_lg_str  = to_wide(if ja { "レオパを追加" } else { "Add Leopard Gecko" });
                     let remove_str  = to_wide(if ja { "最後のキャラクターを削除" } else { "Remove Last" });
                     let about_str    = to_wide(if ja { "Petit Mates について" } else { "About Petit Mates" });
                     let settings_str = to_wide(if ja { "設定ファイルを開く" } else { "Open Settings File" });

@@ -454,7 +454,7 @@ fn make_status_item(
         // Character management items.
         let add_bd = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" }),
+            &NSString::from_str(if ja { "フトアゴを追加" } else { "Add Bearded Dragon" }),
             Some(objc2::sel!(addBeardedDragon:)),
             &NSString::from_str(""),
         );
@@ -472,7 +472,7 @@ fn make_status_item(
 
         let add_lg = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str(if ja { "ヒョウモントカゲモドキを追加" } else { "Add Leopard Gecko" }),
+            &NSString::from_str(if ja { "レオパを追加" } else { "Add Leopard Gecko" }),
             Some(objc2::sel!(addLeopardGecko:)),
             &NSString::from_str(""),
         );
