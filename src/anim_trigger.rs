@@ -12,6 +12,7 @@
 const BUILTIN_COMMON: &[u8] = include_bytes!("../assets/common/behavior.toml");
 const BUILTIN_BD:     &[u8] = include_bytes!("../assets/bearded_dragon/behavior.toml");
 const BUILTIN_PT:     &[u8] = include_bytes!("../assets/pond_turtle/behavior.toml");
+const BUILTIN_LG:     &[u8] = include_bytes!("../assets/leopard_gecko/behavior.toml");
 
 // ---- Data model ----
 
@@ -109,6 +110,7 @@ pub fn load(char_name: &str) -> BehaviorData {
     let builtin_char: &[u8] = match char_name {
         "bearded_dragon" => BUILTIN_BD,
         "pond_turtle"    => BUILTIN_PT,
+        "leopard_gecko"  => BUILTIN_LG,
         _                => b"",
     };
 

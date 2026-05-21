@@ -1,0 +1,12 @@
+# Leopard gecko behavior triggers.
+#
+# Add [[behavior]] entries here to trigger OneShot animations defined in manifest.toml.
+# Add [[reaction]] entries to respond to user interactions (grabbed, dropped, hovered).
+
+# ---- Personality ----
+# All values are in [0.0, 1.0].  0.5 = neutral baseline (same as Rust defaults).
+[personality]
+restlessness = 0.70   # restless explorer; frequently moves between windows
+curiosity    = 0.75   # highly curious; often peeks over edges
+sleepiness   = 0.30   # alert and active; rarely sleeps for long
+agility      = 0.60   # slightly faster than average

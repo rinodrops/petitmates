@@ -11,6 +11,7 @@
 const BUILTIN_COMMON: &[u8] = include_bytes!("../assets/common/speech.toml");
 const BUILTIN_BD:     &[u8] = include_bytes!("../assets/bearded_dragon/speech.toml");
 const BUILTIN_PT:     &[u8] = include_bytes!("../assets/pond_turtle/speech.toml");
+const BUILTIN_LG:     &[u8] = include_bytes!("../assets/leopard_gecko/speech.toml");
 
 // ---- Data model ----
 
@@ -128,6 +129,7 @@ pub fn load(char_name: &str) -> SpeechData {
     let builtin_char: &[u8] = match char_name {
         "bearded_dragon" => BUILTIN_BD,
         "pond_turtle"    => BUILTIN_PT,
+        "leopard_gecko"  => BUILTIN_LG,
         _                => b"",
     };
 

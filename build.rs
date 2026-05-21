@@ -7,7 +7,7 @@ fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let base = std::path::Path::new(&manifest_dir).join("assets");
 
-    let chars = ["bearded_dragon", "pond_turtle"];
+    let chars = ["bearded_dragon", "pond_turtle", "leopard_gecko"];
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", base.join("appicon.ico").display());
