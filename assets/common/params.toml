@@ -1,0 +1,77 @@
+# Petit Mates — Common baseline parameters
+#
+# This file is a reference for the engine defaults.
+# Character-specific params.toml files override only the values that differ
+# from these defaults.  Any value omitted from a character file falls back to
+# the personality-derived value (from [personality] in behavior.toml), which
+# in turn falls back to these defaults when personality is at 0.5.
+#
+# All values may be edited at runtime; the app hot-reloads on save.
+
+# ---- Floor / Window-top ----
+[floor]
+# walk_speed and walk_frame_secs are controlled by personality.agility:
+#   walk_speed      ∈ [16, 64] px/s  (default 40 at agility=0.5)
+#   walk_frame_secs ∈ [0.10, 0.22] s (default 0.14 at agility=0.5)
+
+stand_duration    = [3.0,  8.0]   # [min, max] s standing idle
+sit_duration      = [5.0, 15.0]   # [min, max] s sitting idle
+# lie_duration and sleep_duration are also controlled by personality.sleepiness.
+
+headbob_period         = [30.0, 90.0]  # [min, max] s between headbob events
+headbob_open_duration  = [0.3, 0.5]    # [min, max] s mouth open per event
+
+peek_duration     = 0.5           # s to hold peek pose
+
+standup_duration  = 0.8           # s for stand-up animation after landing
+turn_duration     = 0.7           # s for turn-around animation
+
+observe_duration  = [3.0, 8.0]    # [min, max] s observation phase after landing
+
+head_side_duration  = [10.0, 25.0] # [min, max] s looking sideways
+head_front_duration = [ 2.0,  6.0] # [min, max] s looking forward
+
+turn_walk_prob    = 0.70  # probability of walking after TurningAround
+
+edge_arrive_stand_prob = 0.40
+edge_arrive_sit_prob   = 0.70
+edge_arrive_lie_prob   = 0.90
+
+edge_stand_to_sit_prob = 0.50
+edge_sit_to_lie_prob   = 0.50
+
+edge_fall_prob        = 0.10
+shocked_duration      = 0.6
+
+# ---- Wall (vertical climb) ----
+[wall]
+# climb_speed and climb_frame_secs are controlled by personality.agility.
+pause_prob       = 0.15
+pause_duration   = [2.0, 5.0]
+entry_hold       = 0.5
+
+# ---- Corner ----
+[corner]
+side_corner_secs    = 0.3
+front_corner_secs   = 0.5
+rest_prob           = 0.30
+rest_duration       = [3.0, 8.0]
+lower_rest_duration = [1.0, 3.0]
+rest_lying_prob     = 0.5
+rest_descend_prob   = 0.5
+corner_jump_dist    = 300.0
+
+# ---- Jump (desktop floor → wall) ----
+[jump]
+gravity               = 0.6
+runup_duration        = 0.3
+wall_jump_max_dist    = 80.0
+wall_jump_floor_margin = 150.0
+climb_attract_dist    = 600.0
+air_speed             = 350.0
+min_jump_vy           = 200.0
+
+# ---- Display ----
+[display]
+display_width = 150.0
+hover_alpha   = 0.25

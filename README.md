@@ -134,15 +134,15 @@ Move your cursor over a character and it fades to 25% opacity, letting you inter
 
 ## Customization
 
-Each character reads a `config.toml` file at launch and **hot-reloads it while running** — save the file and changes apply within a second, no restart needed.
+Each character reads a `params.toml` file at launch and **hot-reloads it while running** — save the file and changes apply within a second, no restart needed.
 
 ### macOS
 
 The config files are inside the app bundle:
 
 ```
-Petit Mates.app/Contents/Resources/assets/bearded_dragon/config.toml
-Petit Mates.app/Contents/Resources/assets/pond_turtle/config.toml
+Petit Mates.app/Contents/Resources/assets/bearded_dragon/params.toml
+Petit Mates.app/Contents/Resources/assets/pond_turtle/params.toml
 ```
 
 Right-click the app → **Show Package Contents** to browse inside.
@@ -153,8 +153,8 @@ Place config files next to the executable:
 
 ```
 Petit Mates.exe
-bearded_dragon_config.toml   ← optional override
-pond_turtle_config.toml      ← optional override
+bearded_dragon_params.toml   ← optional override
+pond_turtle_params.toml      ← optional override
 ```
 
 If no override file is present, built-in defaults are used.

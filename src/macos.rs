@@ -631,10 +631,12 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
         panel.orderFront(None);
     }
-    let behavior_engine = crate::anim_trigger::BehaviorEngine::new(
-        crate::anim_trigger::load(char_name),
-        &assets.animations,
-    );
+    let behavior_engine = {
+        let behavior_data = crate::anim_trigger::load(char_name);
+        let watch_path = char_dir_for(char_name).map(|d| d.join("behavior.toml"));
+        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);
+        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
+    };
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         panel,
@@ -2034,7 +2036,9 @@ fn tick() {
 
         for ch in &mut app.chars {
             ch.config.lock().unwrap().reload_if_changed();
-            let cfg = ch.config.lock().unwrap().current.clone();
+            ch.behavior_engine.reload_personality_if_changed();
+            let mut cfg = ch.config.lock().unwrap().current.clone();
+            crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
             tick_char(ch, &cfg, &si, &wins, mt);
         }
 

@@ -134,15 +134,15 @@
 
 ## カスタマイズ
 
-各キャラクターは起動時に `config.toml` を読み込み，**実行中でもホットリロード**されます。ファイルを保存すると約 1 秒で反映され，再起動は不要です。
+各キャラクターは起動時に `params.toml` を読み込み，**実行中でもホットリロード**されます。ファイルを保存すると約 1 秒で反映され，再起動は不要です。
 
 ### macOS
 
 設定ファイルはアプリバンドル内にあります：
 
 ```
-Petit Mates.app/Contents/Resources/assets/bearded_dragon/config.toml
-Petit Mates.app/Contents/Resources/assets/pond_turtle/config.toml
+Petit Mates.app/Contents/Resources/assets/bearded_dragon/params.toml
+Petit Mates.app/Contents/Resources/assets/pond_turtle/params.toml
 ```
 
 アプリを右クリック → **「パッケージの内容を表示」** で参照できます。
@@ -153,8 +153,8 @@ exe と同じフォルダに設定ファイルを置くと上書き適用され�
 
 ```
 Petit Mates.exe
-bearded_dragon_config.toml   ← オプション（上書き用）
-pond_turtle_config.toml      ← オプション（上書き用）
+bearded_dragon_params.toml   ← オプション（上書き用）
+pond_turtle_params.toml      ← オプション（上書き用）
 ```
 
 ファイルがない場合は内蔵のデフォルト値が使用されます。
