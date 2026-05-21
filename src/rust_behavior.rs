@@ -271,6 +271,19 @@ impl BehaviorScript for RustBehavior {
                             elapsed: 0.0, duration,
                         });
                     }
+                    // WindowUpperCorner always reports at_edge=false, so a
+                    // character that arrives here in Walking state would loop
+                    // forever on Transition::Stay.  Re-issue the transition so
+                    // the platform code can snap the surface to WindowTop.
+                    if let Surface::WindowUpperCorner { side, .. } = ctx.surface {
+                        let inward = match side {
+                            Side::Left  => Dir::Right,
+                            Side::Right => Dir::Left,
+                        };
+                        return Transition::To(State::Walking {
+                            dir: inward, frame: 0, frame_elapsed: 0.0,
+                        });
+                    }
                     return Transition::Stay;
                 }
                 match ctx.surface {
@@ -321,6 +334,14 @@ impl BehaviorScript for RustBehavior {
                     }
                     Surface::WindowBottom { .. } => {
                         Transition::To(State::TurningAround { elapsed: 0.0, to_dir: dir.opposite() })
+                    }
+                    Surface::WindowUpperCorner { side, .. } => {
+                        // Same recovery as in the !at_edge branch above.
+                        let inward = match side {
+                            Side::Left  => Dir::Right,
+                            Side::Right => Dir::Left,
+                        };
+                        Transition::To(State::Walking { dir: inward, frame: 0, frame_elapsed: 0.0 })
                     }
                     _ => Transition::Stay,
                 }
