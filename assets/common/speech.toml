@@ -140,7 +140,7 @@ trigger = "random"
 weight  = 1.0
 
 [[speech]]
-text_ja = "静かだな"
+text_ja = "静かだ"
 text_en = "It's quiet."
 trigger = "random"
 weight  = 0.9
@@ -186,13 +186,6 @@ text_ja = "どこか遠くに行ってみたい気もするけど、ここでい
 text_en = "Part of me wants to go somewhere far away, but here is good."
 trigger = "random"
 weight  = 0.7
-
-[[speech]]
-text_ja = "夜ふかしはよくないよ"
-text_en = "Staying up this late isn't good for you."
-trigger = "time"
-hours   = [0, 1, 2, 3]
-weight  = 0.8
 
 [[speech]]
 text_ja = "体がだんだん動き出してきた感じ"
@@ -246,7 +239,7 @@ state   = "hour_change"
 hours   = [1]
 
 [[speech]]
-text_ja = "深夜2時…静かだな"
+text_ja = "深夜2時…静かだ"
 text_en = "2 in the morning... so quiet."
 trigger = "state"
 state   = "hour_change"
@@ -267,7 +260,7 @@ state   = "hour_change"
 hours   = [4]
 
 [[speech]]
-text_ja = "夜明け前の空だな"
+text_ja = "夜明け前の空だ"
 text_en = "The sky just before dawn."
 trigger = "state"
 state   = "hour_change"
@@ -309,7 +302,7 @@ state   = "hour_change"
 hours   = [10]
 
 [[speech]]
-text_ja = "もうすぐ昼だな"
+text_ja = "もうすぐ昼だ"
 text_en = "Almost noon."
 trigger = "state"
 state   = "hour_change"
@@ -351,7 +344,7 @@ state   = "hour_change"
 hours   = [16]
 
 [[speech]]
-text_ja = "夕方5時だな"
+text_ja = "夕方5時だ"
 text_en = "5 in the evening."
 trigger = "state"
 state   = "hour_change"
@@ -393,7 +386,7 @@ state   = "hour_change"
 hours   = [22]
 
 [[speech]]
-text_ja = "もうすぐ日付が変わるな"
+text_ja = "もうすぐ日付が変わる"
 text_en = "Almost midnight."
 trigger = "state"
 state   = "hour_change"
@@ -444,7 +437,7 @@ weather = ["rainy"]
 weight  = 1.0
 
 [[speech]]
-text_ja = "土が濡れてそうだな"
+text_ja = "土が濡れてそうだ"
 text_en = "The ground must be wet out there."
 trigger = "weather"
 weather = ["rainy"]

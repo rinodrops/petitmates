@@ -69,6 +69,7 @@ struct CharState {
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
     speech_engine: crate::speech::SpeechEngine,
+    behavior_engine: crate::anim_trigger::BehaviorEngine,
     /// Active speech bubble state; None when no bubble is shown.
     bubble_state: Option<crate::speech::BubbleState>,
     /// The transparent NSPanel that renders the speech bubble; None when hidden.
@@ -81,8 +82,10 @@ struct AppState {
     chars: Vec<CharState>,
     bd_assets: Rc<SpriteAssets>,
     pt_assets: Rc<SpriteAssets>,
+    lg_assets: Rc<SpriteAssets>,
     bd_config: SharedConfig,
     pt_config: SharedConfig,
+    lg_config: SharedConfig,
     _menu_handler: Retained<MenuDelegate>,
     _status_item: Retained<objc2_app_kit::NSStatusItem>,
     _timer: Retained<NSTimer>,
@@ -451,7 +454,7 @@ fn make_status_item(
         // Character management items.
         let add_bd = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" }),
+            &NSString::from_str(if ja { "フトアゴを追加" } else { "Add Bearded Dragon" }),
             Some(objc2::sel!(addBeardedDragon:)),
             &NSString::from_str(""),
         );
@@ -466,6 +469,15 @@ fn make_status_item(
         );
         let (): () = unsafe { objc2::msg_send![&*add_pt, setTarget: handler] };
         menu.addItem(&add_pt);
+
+        let add_lg = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "レオパを追加" } else { "Add Leopard Gecko" }),
+            Some(objc2::sel!(addLeopardGecko:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*add_lg, setTarget: handler] };
+        menu.addItem(&add_lg);
 
         let remove_item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
@@ -630,6 +642,13 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
         panel.orderFront(None);
     }
+    let behavior_engine = {
+        let behavior_data = crate::anim_trigger::load(char_name);
+        let watch_path = char_dir_for(char_name).map(|d| d.join("behavior.toml"));
+        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);
+        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
+    };
+    let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         panel,
         assets,
@@ -646,7 +665,8 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_tick: Instant::now(),
         drag_offset: None,
         debug_trigger: None,
-        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        speech_engine,
+        behavior_engine,
         bubble_state: None,
         bubble_panel: None,
     }
@@ -744,6 +764,22 @@ define_class!(
                 let assets = Rc::clone(&app.pt_assets);
                 let config = app.pt_config.clone();
                 app.chars.push(spawn_char(assets, config, &si, mt, false, "pond_turtle"));
+            });
+        }
+
+        /// Spawn one additional leopard gecko.
+        #[unsafe(method(addLeopardGecko:))]
+        fn add_leopard_gecko(&self, _sender: &AnyObject) {
+            let mt = self.mtm();
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                    width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
+                });
+                let assets = Rc::clone(&app.lg_assets);
+                let config = app.lg_config.clone();
+                app.chars.push(spawn_char(assets, config, &si, mt, false, "leopard_gecko"));
             });
         }
 
@@ -980,7 +1016,20 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                         ch.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
                     }
                     ch.surface = surf;
-                    ch.anim_state = new_anim;
+                    // Wrap landing animation in a OneShot reaction if one is defined.
+                    if let Some(react_anim) = ch.behavior_engine.on_interaction(
+                        crate::anim_trigger::ReactionTrigger::Dropped,
+                    ) {
+                        ch.anim_state = crate::behavior::State::OneShot {
+                            animation: react_anim,
+                            frame: 0,
+                            frame_elapsed: 0.0,
+                            done: false,
+                            return_to: Box::new(new_anim),
+                        };
+                    } else {
+                        ch.anim_state = new_anim;
+                    }
                 }
                 None => {
                     ch.surface = Surface::Airborne;
@@ -1876,7 +1925,20 @@ fn tick_char(
                                 ch.facing = *dir;
                                 Some(Surface::WindowBottom { win_id: *win_id, x_local })
                             } else {
-                                ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+                                // window_bottom is false: drop off the wall.
+                                // Assign to `new_state` (not ch.anim_state directly) so
+                                // the final `ch.anim_state = new_state` line uses Falling.
+                                // Seed char_pos from the wall position now, before the
+                                // surface is overwritten with Airborne.
+                                let (sw, sh) = ch.assets.image("s-jump", false)
+                                    .or_else(|| ch.assets.image("s-stand", false))
+                                    .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+                                    .unwrap_or((sprite_sz.0, sprite_sz.1));
+                                ch.char_pos = (
+                                    match side { Side::Left => win.x, Side::Right => win.right() - sw },
+                                    win.y + *y_local - sh / 2.0,
+                                );
+                                new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
                                 Some(Surface::Airborne)
                             }
                         } else { None }
@@ -2014,7 +2076,9 @@ fn tick() {
 
         for ch in &mut app.chars {
             ch.config.lock().unwrap().reload_if_changed();
-            let cfg = ch.config.lock().unwrap().current.clone();
+            ch.behavior_engine.reload_personality_if_changed();
+            let mut cfg = ch.config.lock().unwrap().current.clone();
+            crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
             tick_char(ch, &cfg, &si, &wins, mt);
         }
 
@@ -2062,7 +2126,42 @@ fn tick() {
                         app.chars[i].bubble_panel = Some(panel);
                         app.chars[i].bubble_state = Some(bs);
                     }
+                    // Fire OneShot animation alongside speech if specified.
+                    if let Some(anim_name) = line.oneshot {
+                        let ch = &mut app.chars[i];
+                        if ch.assets.animations.contains_key(&anim_name) {
+                            let return_to = Box::new(ch.anim_state.clone());
+                            ch.anim_state = crate::behavior::State::OneShot {
+                                animation: anim_name,
+                                frame: 0,
+                                frame_elapsed: 0.0,
+                                done: false,
+                                return_to,
+                            };
+                        }
+                    }
                     break;
+                }
+            }
+        }
+
+        // Behavior animation triggers.
+        {
+            let weather_info = app.weather.get();
+            for i in 0..app.chars.len() {
+                let has_bubble = app.chars[i].bubble_state.is_some();
+                let state      = app.chars[i].anim_state.clone();
+                if let Some(anim_name) = app.chars[i].behavior_engine.tick(
+                    &state, has_bubble, weather_info.as_ref(),
+                ) {
+                    let return_to = Box::new(state);
+                    app.chars[i].anim_state = crate::behavior::State::OneShot {
+                        animation: anim_name,
+                        frame: 0,
+                        frame_elapsed: 0.0,
+                        done: false,
+                        return_to,
+                    };
                 }
             }
         }
@@ -2144,15 +2243,20 @@ pub fn run() {
 
     let bd_cdir = char_dir_for("bearded_dragon").expect("bearded_dragon asset directory not found");
     let pt_cdir = char_dir_for("pond_turtle").expect("pond_turtle asset directory not found");
+    let lg_cdir = char_dir_for("leopard_gecko").expect("leopard_gecko asset directory not found");
     let bd_mf = manifest::load(&bd_cdir).expect("bearded_dragon manifest.toml missing or invalid");
     let pt_mf = manifest::load(&pt_cdir).expect("pond_turtle manifest.toml missing or invalid");
+    let lg_mf = manifest::load(&lg_cdir).expect("leopard_gecko manifest.toml missing or invalid");
     let bd_config = make_shared(&bd_cdir);
     let pt_config = make_shared(&pt_cdir);
+    let lg_config = make_shared(&lg_cdir);
     let sprite_size = user_cfg.display.sprite_size as f64;
     let bd_display_w = sprite_size;
     let pt_display_w = sprite_size;
+    let lg_display_w = sprite_size;
     let bd_assets = Rc::new(SpriteAssets::load(&bd_cdir, &bd_mf, bd_display_w).expect("failed to load bearded_dragon sprites"));
     let pt_assets = Rc::new(SpriteAssets::load(&pt_cdir, &pt_mf, pt_display_w).expect("failed to load pond_turtle sprites"));
+    let lg_assets = Rc::new(SpriteAssets::load(&lg_cdir, &lg_mf, lg_display_w).expect("failed to load leopard_gecko sprites"));
 
     let si = wm::screen_info(mt)
         .unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
@@ -2165,6 +2269,7 @@ pub fn run() {
         vec![
             spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false, "bearded_dragon"),
             spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false, "pond_turtle"),
+            spawn_char(Rc::clone(&lg_assets), lg_config.clone(), &si, mt, false, "leopard_gecko"),
         ]
     };
 
@@ -2187,8 +2292,10 @@ pub fn run() {
             chars: initial_chars,
             bd_assets,
             pt_assets,
+            lg_assets,
             bd_config,
             pt_config,
+            lg_config,
             _menu_handler: menu_handler,
             _status_item: status_item,
             _timer: timer,

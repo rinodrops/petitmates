@@ -30,22 +30,27 @@
 
 <table>
 <tr>
-<td align="center" width="50%">
+<td align="center" width="33%">
   <img src="docs/screenshots/char-bearded-dragon.png" alt="フトアゴヒゲトカゲ" width="180"><br>
   <strong>フトアゴヒゲトカゲ</strong><br>
   <em>好奇心旺盛な探検家。動きが速く，隅々まで調べずにはいられない。</em>
 </td>
-<td align="center" width="50%">
+<td align="center" width="33%">
   <img src="docs/screenshots/char-pond-turtle.png" alt="クサガメ" width="180"><br>
   <strong>クサガメ</strong><br>
-  <em>のんびり屋の旅人。急がないけれど，ちゃんと目的地にたどり着く。</em>
+  <em>用心深くて元気な若者。ちょっとびっくりしやすいが，確認したらすぐ動き出す。</em>
+</td>
+<td align="center" width="33%">
+  <img src="docs/screenshots/char-leopard-gecko.png" alt="レオパードゲッコー" width="180"><br>
+  <strong>レオパードゲッコー</strong><br>
+  <em>夢見がちな夜型。ぼんやりしていて急がず，いつも何となくあやふや。</em>
 </td>
 </tr>
 </table>
 
 ## できること
 
-2体のキャラクターはシステムワイドに動作します。特定のアプリの中ではなく，アプリウィンドウの上やデスクトップ全体を舞台に活動します。
+3体のキャラクターはシステムワイドに動作します。特定のアプリの中ではなく，アプリウィンドウの上やデスクトップ全体を舞台に活動します。
 
 | アニメーション                              | プレビュー                                         |
 | ------------------------------------------- | -------------------------------------------------- |
@@ -116,7 +121,7 @@
 </tr>
 </table>
 
-- **キャラクターの追加 / 削除** — フトアゴヒゲトカゲまたはクサガメをスポーン・削除します。
+- **キャラクターの追加 / 削除** — 3体のキャラクターをそれぞれ個別にスポーン・削除できます。
 - **About** — バージョン情報。
 - **終了** — アプリを終了します。
 
@@ -134,32 +139,29 @@
 
 ## カスタマイズ
 
-各キャラクターは起動時に `config.toml` を読み込み，**実行中でもホットリロード**されます。ファイルを保存すると約 1 秒で反映され，再起動は不要です。
+キャラクターの動作は，各キャラクターの `behavior.toml`（アプリバンドルに内蔵）の `[personality]` セクションで制御されています。速度・活動量・好奇心・睡眠傾向はいずれも `[0.0, 1.0]` の 4 つの値から算出されます。
 
-### macOS
+### Windows — パラメーター上書き
 
-設定ファイルはアプリバンドル内にあります：
-
-```
-Petit Mates.app/Contents/Resources/assets/bearded_dragon/config.toml
-Petit Mates.app/Contents/Resources/assets/pond_turtle/config.toml
-```
-
-アプリを右クリック → **「パッケージの内容を表示」** で参照できます。
-
-### Windows
-
-exe と同じフォルダに設定ファイルを置くと上書き適用されます：
+上級ユーザーは exe と同じフォルダにパラメーターファイルを置くことで任意の値を上書きできます。ファイルはアプリ実行中にホットリロードされます。
 
 ```
 Petit Mates.exe
-bearded_dragon_config.toml   ← オプション（上書き用）
-pond_turtle_config.toml      ← オプション（上書き用）
+bearded_dragon_params.toml   ← オプション（上書き用）
+pond_turtle_params.toml      ← オプション（上書き用）
+leopard_gecko_params.toml    ← オプション（上書き用）
 ```
 
-ファイルがない場合は内蔵のデフォルト値が使用されます。
+ファイルがない場合は personality から算出された内蔵デフォルト値が使用されます。
 
 ## リリースノート
+
+### v0.4.0
+
+- レオパードゲッコーを3体目のキャラクターとして追加 — ぼんやり夢見がちで夜行性，何事もあやふや
+- `behavior.toml` システム: アニメーショントリガー（`[[behavior]]`）と操作リアクション（`[[reaction]]`）をキャラクターごとに設定可能に
+- 性格システム（`behavior.toml` の `[personality]`）: 各キャラクターの速度・好奇心・睡眠傾向を生のパラメーターではなく 4 つの値から導出するように
+- 各キャラクターに個性的な口調を付与 — フトアゴは明朗・決断的，クサガメは用心深くて元気，レオパはぼんやりゆったり
 
 ### v0.3.2
 

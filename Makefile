@@ -32,6 +32,7 @@ RES_DIR_T   := $(subst $(space),\ ,$(RES_DIR))
 
 BD_SRC    := assets/bearded_dragon
 PT_SRC    := assets/pond_turtle
+LG_SRC    := assets/leopard_gecko
 ICON_SRC  := assets/appicon.png
 ICONSET   := $(BUILD_DIR)/AppIcon.iconset
 ICNS      := $(RES_DIR)/AppIcon.icns
@@ -54,12 +55,15 @@ dev: | $(MACOS_DIR_T) $(RES_DIR_T)
 	cp target/release/$(EXE_NAME) "$(EXE)"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
 	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(BD_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
 	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
 	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
 	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
-	cp $(PT_SRC)/config.toml     "$(RES_DIR)/assets/pond_turtle/"
 	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
+	mkdir -p "$(RES_DIR)/assets/leopard_gecko/sprite"
+	cp $(LG_SRC)/manifest.toml   "$(RES_DIR)/assets/leopard_gecko/"
+	cp $(LG_SRC)/sprite/*.png    "$(RES_DIR)/assets/leopard_gecko/sprite/"
+	mkdir -p "$(RES_DIR)/assets/common"
+	cp assets/common/params.toml "$(RES_DIR)/assets/common/"
 	$(MAKE) _plist _icns_if_present
 	@echo "Dev build: $(APP)"
 
@@ -75,12 +79,15 @@ app: | $(MACOS_DIR_T) $(RES_DIR_T)
 		target/x86_64-apple-darwin/release/$(EXE_NAME)
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
 	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
-	cp $(BD_SRC)/config.toml     "$(RES_DIR)/assets/bearded_dragon/"
 	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
 	mkdir -p "$(RES_DIR)/assets/pond_turtle/sprite"
 	cp $(PT_SRC)/manifest.toml   "$(RES_DIR)/assets/pond_turtle/"
-	cp $(PT_SRC)/config.toml     "$(RES_DIR)/assets/pond_turtle/"
 	cp $(PT_SRC)/sprite/*.png    "$(RES_DIR)/assets/pond_turtle/sprite/"
+	mkdir -p "$(RES_DIR)/assets/leopard_gecko/sprite"
+	cp $(LG_SRC)/manifest.toml   "$(RES_DIR)/assets/leopard_gecko/"
+	cp $(LG_SRC)/sprite/*.png    "$(RES_DIR)/assets/leopard_gecko/sprite/"
+	mkdir -p "$(RES_DIR)/assets/common"
+	cp assets/common/params.toml "$(RES_DIR)/assets/common/"
 	$(MAKE) _plist _icns_if_present
 	@echo "App bundle: $(APP)"
 

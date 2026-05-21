@@ -30,22 +30,27 @@
 
 <table>
 <tr>
-<td align="center" width="50%">
+<td align="center" width="33%">
   <img src="docs/screenshots/char-bearded-dragon.png" alt="Bearded Dragon" width="180"><br>
   <strong>Bearded Dragon</strong><br>
   <em>Energetic explorer. Quick to move, keen to investigate every corner.</em>
 </td>
-<td align="center" width="50%">
+<td align="center" width="33%">
   <img src="docs/screenshots/char-pond-turtle.png" alt="Japanese Pond Turtle" width="180"><br>
   <strong>Japanese Pond Turtle</strong><br>
-  <em>Easygoing wanderer. Unhurried, but gets where it needs to go.</em>
+  <em>Alert and active. Quick to move once it's checked the surroundings — easily startled, but brave.</em>
+</td>
+<td align="center" width="33%">
+  <img src="docs/screenshots/char-leopard-gecko.png" alt="Leopard Gecko" width="180"><br>
+  <strong>Leopard Gecko</strong><br>
+  <em>Dreamy night owl. Vague and unhurried, perpetually a little uncertain about everything.</em>
 </td>
 </tr>
 </table>
 
 ## What They Do
 
-Both characters live system-wide — on top of your app windows and the desktop, not inside any one application.
+All three characters live system-wide — on top of your app windows and the desktop, not inside any one application.
 
 | Animation                                 | Preview                                            |
 | ----------------------------------------- | -------------------------------------------------- |
@@ -116,7 +121,7 @@ No installer needed — the executable is fully self-contained.
 </tr>
 </table>
 
-- **Add / Remove character** — Spawn or dismiss a Bearded Dragon or Pond Turtle.
+- **Add / Remove character** — Spawn or dismiss each of the three characters independently.
 - **About** — Version info.
 - **Quit** — Exit the app.
 
@@ -134,32 +139,29 @@ Move your cursor over a character and it fades to 25% opacity, letting you inter
 
 ## Customization
 
-Each character reads a `config.toml` file at launch and **hot-reloads it while running** — save the file and changes apply within a second, no restart needed.
+Character behavior is controlled by the `[personality]` section in each character's `behavior.toml` (included in the app bundle). Speed, activity level, curiosity, and sleep patterns are all derived from four values in `[0.0, 1.0]`.
 
-### macOS
+### Windows — parameter overrides
 
-The config files are inside the app bundle:
-
-```
-Petit Mates.app/Contents/Resources/assets/bearded_dragon/config.toml
-Petit Mates.app/Contents/Resources/assets/pond_turtle/config.toml
-```
-
-Right-click the app → **Show Package Contents** to browse inside.
-
-### Windows
-
-Place config files next to the executable:
+Advanced users can place a params file next to the executable to override any behavior parameter. The file is hot-reloaded while the app is running.
 
 ```
 Petit Mates.exe
-bearded_dragon_config.toml   ← optional override
-pond_turtle_config.toml      ← optional override
+bearded_dragon_params.toml   ← optional override
+pond_turtle_params.toml      ← optional override
+leopard_gecko_params.toml    ← optional override
 ```
 
-If no override file is present, built-in defaults are used.
+If no override file is present, built-in defaults derived from personality are used.
 
 ## Release Notes
+
+### v0.4.0
+
+- Leopard Gecko added as a third built-in character — dreamy, nocturnal, and perpetually a little uncertain
+- `behavior.toml` system: per-character animation triggers (`[[behavior]]`) and interaction reactions (`[[reaction]]`)
+- Personality system (`[personality]` in `behavior.toml`): each character's speed, curiosity, and sleep tendencies are defined by four values rather than raw parameters
+- Each character now has a distinct voice — Bearded Dragon is direct and upbeat, Pond Turtle is alert and energetic, Leopard Gecko is dreamy and vague
 
 ### v0.3.2
 

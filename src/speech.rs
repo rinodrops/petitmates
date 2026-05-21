@@ -11,6 +11,7 @@
 const BUILTIN_COMMON: &[u8] = include_bytes!("../assets/common/speech.toml");
 const BUILTIN_BD:     &[u8] = include_bytes!("../assets/bearded_dragon/speech.toml");
 const BUILTIN_PT:     &[u8] = include_bytes!("../assets/pond_turtle/speech.toml");
+const BUILTIN_LG:     &[u8] = include_bytes!("../assets/leopard_gecko/speech.toml");
 
 // ---- Data model ----
 
@@ -52,10 +53,8 @@ pub struct SpeechEntry {
     // --- per-entry display override ---
     pub duration_sec: Option<f64>,
 
-    // --- future: oneshot animation ---
-    #[allow(dead_code)]
+    // --- oneshot animation to play alongside speech ---
     pub oneshot:      Option<String>,
-    #[allow(dead_code)]
     pub oneshot_sync: Option<String>,
 }
 
@@ -130,6 +129,7 @@ pub fn load(char_name: &str) -> SpeechData {
     let builtin_char: &[u8] = match char_name {
         "bearded_dragon" => BUILTIN_BD,
         "pond_turtle"    => BUILTIN_PT,
+        "leopard_gecko"  => BUILTIN_LG,
         _                => b"",
     };
 
@@ -170,6 +170,11 @@ pub struct SpeechLine {
     pub text_en: Option<String>,
     pub duration_sec: f64,
     pub fade_out_sec: f64,
+    /// Optional OneShot animation to play alongside this speech line.
+    pub oneshot: Option<String>,
+    /// When to fire the OneShot relative to speech: `"with_speech"` (default) fires immediately.
+    #[allow(dead_code)]
+    pub oneshot_sync: Option<String>,
 }
 
 /// Live state of a speech bubble being displayed for one character.
@@ -379,10 +384,12 @@ impl SpeechEngine {
 
     fn make_line(&self, entry: &SpeechEntry) -> SpeechLine {
         SpeechLine {
-            text_ja: entry.text_ja.clone(),
-            text_en: entry.text_en.clone(),
+            text_ja:      entry.text_ja.clone(),
+            text_en:      entry.text_en.clone(),
             duration_sec: entry.duration_sec.unwrap_or(self.data.display.duration_sec),
             fade_out_sec: self.data.display.fade_out_sec,
+            oneshot:      entry.oneshot.clone(),
+            oneshot_sync: entry.oneshot_sync.clone(),
         }
     }
 }

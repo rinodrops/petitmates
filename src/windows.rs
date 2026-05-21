@@ -45,6 +45,7 @@ const IDM_ADD_BD: usize = 3;
 const IDM_REMOVE_CHAR: usize = 4;
 const IDM_ADD_PT: usize = 5;
 const IDM_SETTINGS: usize = 6;
+const IDM_ADD_LG: usize = 7;
 const TIMER_TICK: usize = 1;
 /// Base command ID for debug trigger menu items (reserves 100–199).
 const IDM_DEBUG_BASE: usize = 100;
@@ -107,6 +108,7 @@ struct CharState {
     /// Pending debug forced transition: (target_state, remaining_countdown_secs).
     debug_trigger: Option<(State, f64)>,
     speech_engine: crate::speech::SpeechEngine,
+    behavior_engine: crate::anim_trigger::BehaviorEngine,
     /// Active speech bubble state; None when no bubble is shown.
     bubble_state: Option<crate::speech::BubbleState>,
     /// HWND for the speech bubble layered window; null when not created yet.
@@ -117,8 +119,10 @@ struct AppState {
     chars: Vec<CharState>,
     bd_assets: Rc<SpriteAssets>,
     pt_assets: Rc<SpriteAssets>,
+    lg_assets: Rc<SpriteAssets>,
     bd_config: SharedConfig,
     pt_config: SharedConfig,
+    lg_config: SharedConfig,
     /// Character index whose debug menu is currently being shown.
     debug_menu_char: usize,
     /// Target states stored between menu construction and WM_COMMAND dispatch.
@@ -714,6 +718,16 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
     if let Some(init) = assets.sprite("s-stand", false) {
         unsafe { set_layered_content(hwnd, &init.bgra, init.w, init.h, -4096, -4096, 255) };
     }
+    let behavior_engine = {
+        let behavior_data = crate::anim_trigger::load(char_name);
+        // On Windows assets are embedded; watch the exe-adjacent {char}_behavior.toml if present.
+        let exe_dir = std::env::current_exe().ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()));
+        let watch_path = exe_dir.map(|d| d.join(format!("{char_name}_behavior.toml")));
+        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);
+        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
+    };
+    let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         hwnd,
         assets,
@@ -728,7 +742,8 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         drag_offset:     None,
         last_screen_pos: (-4096, -4096),
         debug_trigger:   None,
-        speech_engine: crate::speech::SpeechEngine::new(crate::speech::load(char_name)),
+        speech_engine,
+        behavior_engine,
         bubble_state: None,
         bubble_hwnd: ptr::null_mut(),
     }
@@ -872,7 +887,10 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     }
 
     // Off-screen safeguard.
-    {
+    // Only applies to free-flying states (Airborne / Desktop).  Window-anchored
+    // surfaces use local coordinates for rendering, so char_pos may be stale;
+    // surface_still_valid already handles window disappearance for those.
+    if matches!(&ch.surface, Surface::Airborne | Surface::Desktop { .. }) {
         let (fw, fh) = assets.size("s-stand", false);
         let (cx, cy) = ch.char_pos;
         let below = cy > si.height + fh;
@@ -1120,7 +1138,16 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                                 ch.facing = *dir;
                                 Some(Surface::WindowBottom { win_id: *win_id, x_local })
                             } else {
-                                ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+                                // window_bottom is false: drop off the wall.
+                                // Assign to `new_state` so the final ch.anim_state = new_state
+                                // uses Falling (direct ch.anim_state assignment would be
+                                // overwritten).  Seed char_pos from the wall bottom now.
+                                let (sw, sh) = assets.size("s-jump", false);
+                                ch.char_pos = (
+                                    match side { Side::Left => win.x, Side::Right => win.right() - sw },
+                                    win.y + *y_local - sh / 2.0,
+                                );
+                                new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
                                 Some(Surface::Airborne)
                             }
                         } else { None }
@@ -1287,7 +1314,9 @@ fn tick_all() {
         let n = app.chars.len();
         for i in 0..n {
             app.chars[i].config.lock().unwrap().reload_if_changed();
-            let cfg = app.chars[i].config.lock().unwrap().current.clone();
+            app.chars[i].behavior_engine.reload_personality_if_changed();
+            let mut cfg = app.chars[i].config.lock().unwrap().current.clone();
+            crate::config::apply_personality(&mut cfg, app.chars[i].behavior_engine.personality());
             tick_char(&mut app.chars[i], &cfg, &si, &wins);
         }
 
@@ -1359,7 +1388,42 @@ fn tick_all() {
                         }
                         app.chars[i].bubble_state = Some(bs);
                     }
+                    // Fire OneShot animation alongside speech if specified.
+                    if let Some(anim_name) = line.oneshot {
+                        let ch = &mut app.chars[i];
+                        if ch.assets.animations.contains_key(&anim_name) {
+                            let return_to = Box::new(ch.anim_state.clone());
+                            ch.anim_state = crate::behavior::State::OneShot {
+                                animation: anim_name,
+                                frame: 0,
+                                frame_elapsed: 0.0,
+                                done: false,
+                                return_to,
+                            };
+                        }
+                    }
                     break;
+                }
+            }
+        }
+
+        // Behavior animation triggers.
+        {
+            let weather_info = app.weather.get();
+            for i in 0..app.chars.len() {
+                let has_bubble = app.chars[i].bubble_state.is_some();
+                let state      = app.chars[i].anim_state.clone();
+                if let Some(anim_name) = app.chars[i].behavior_engine.tick(
+                    &state, has_bubble, weather_info.as_ref(),
+                ) {
+                    let return_to = Box::new(state);
+                    app.chars[i].anim_state = crate::behavior::State::OneShot {
+                        animation: anim_name,
+                        frame: 0,
+                        frame_elapsed: 0.0,
+                        done: false,
+                        return_to,
+                    };
                 }
             }
         }
@@ -1590,14 +1654,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             .unwrap_or((1, false, None, crate::weather::GeoStatus::Unavailable, Default::default()))
                     });
                     let menu       = CreatePopupMenu();
-                    let add_bd_str  = to_wide(if ja { "フトアゴヒゲトカゲを追加" } else { "Add Bearded Dragon" });
+                    let add_bd_str  = to_wide(if ja { "フトアゴを追加" } else { "Add Bearded Dragon" });
                     let add_pt_str  = to_wide(if ja { "クサガメを追加" } else { "Add Pond Turtle" });
+                    let add_lg_str  = to_wide(if ja { "レオパを追加" } else { "Add Leopard Gecko" });
                     let remove_str  = to_wide(if ja { "最後のキャラクターを削除" } else { "Remove Last" });
                     let about_str    = to_wide(if ja { "Petit Mates について" } else { "About Petit Mates" });
                     let settings_str = to_wide(if ja { "設定ファイルを開く" } else { "Open Settings File" });
                     let exit_str     = to_wide(if ja { "終了" } else { "Quit" });
                     AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
                     AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_ADD_LG, add_lg_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -1691,6 +1757,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let assets = Rc::clone(&app.pt_assets);
                         let config = app.pt_config.clone();
                         let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
+                        app.chars.push(ch);
+                    }
+                });
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_LG => {
+                APP.with(|cell| {
+                    if let Some(app) = cell.borrow_mut().as_mut() {
+                        let si     = windows_wm::screen_info();
+                        let assets = Rc::clone(&app.lg_assets);
+                        let config = app.lg_config.clone();
+                        let ch     = spawn_char_hwnd(&si, assets, config, "leopard_gecko");
                         app.chars.push(ch);
                     }
                 });
@@ -1911,14 +1989,18 @@ pub fn run() {
         // Load shared assets from embedded bytes.
         let bd_config = make_shared_win_for("bearded_dragon");
         let pt_config = make_shared_win_for("pond_turtle");
+        let lg_config = make_shared_win_for("leopard_gecko");
         let user_cfg = crate::user_config::load();
         let sprite_size = user_cfg.display.sprite_size as f64;
         let bd_display_w = sprite_size;
         let pt_display_w = sprite_size;
+        let lg_display_w = sprite_size;
         let bd_mf = manifest::load_from_bytes(windows_assets::embedded::bearded_dragon::MANIFEST_TOML)
             .expect("embedded bearded_dragon manifest.toml is invalid");
         let pt_mf = manifest::load_from_bytes(windows_assets::embedded::pond_turtle::MANIFEST_TOML)
             .expect("embedded pond_turtle manifest.toml is invalid");
+        let lg_mf = manifest::load_from_bytes(windows_assets::embedded::leopard_gecko::MANIFEST_TOML)
+            .expect("embedded leopard_gecko manifest.toml is invalid");
         let bd_assets = Rc::new(
             SpriteAssets::load_embedded(windows_assets::embedded::bearded_dragon::SPRITES, &bd_mf, bd_display_w)
                 .expect("failed to decode embedded bearded_dragon sprites"),
@@ -1927,21 +2009,28 @@ pub fn run() {
             SpriteAssets::load_embedded(windows_assets::embedded::pond_turtle::SPRITES, &pt_mf, pt_display_w)
                 .expect("failed to decode embedded pond_turtle sprites"),
         );
+        let lg_assets = Rc::new(
+            SpriteAssets::load_embedded(windows_assets::embedded::leopard_gecko::SPRITES, &lg_mf, lg_display_w)
+                .expect("failed to decode embedded leopard_gecko sprites"),
+        );
 
         // Create both character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
         let weather_handle = crate::weather::spawn(&user_cfg.weather);
         let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone(), "bearded_dragon");
         let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone(), "pond_turtle");
+        let lg_char    = spawn_char_hwnd(&si, Rc::clone(&lg_assets), lg_config.clone(), "leopard_gecko");
         let host_hwnd  = bd_char.hwnd;
 
         APP.with(|cell| {
             *cell.borrow_mut() = Some(AppState {
-                chars:     vec![bd_char, pt_char],
+                chars:     vec![bd_char, pt_char, lg_char],
                 bd_assets,
                 pt_assets,
+                lg_assets,
                 bd_config,
                 pt_config,
+                lg_config,
                 debug_menu_char:    0,
                 debug_menu_targets: Vec::new(),
                 speech_lock_remaining: 0.0,
