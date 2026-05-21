@@ -2,6 +2,15 @@
 #
 # Add [[behavior]] entries here to trigger OneShot animations defined in manifest.toml.
 # Add [[reaction]] entries to respond to user interactions (grabbed, dropped, hovered).
+
+# ---- Personality ----
+# All values are in [0.0, 1.0].  0.5 = neutral baseline (same as Rust defaults).
+# These influence params.toml values that are NOT explicitly set there.
+[personality]
+restlessness = 0.15   # very sedentary; rarely ventures far
+curiosity    = 0.25   # somewhat incurious; cautious
+sleepiness   = 0.65   # frequently sleeps and takes long rests
+agility      = 0.35   # slow and deliberate
 #
 # Example (requires s-head-retract-0.png etc. in sprite/ and [animations.head-retract] in manifest.toml):
 #

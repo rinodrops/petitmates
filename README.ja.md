@@ -134,30 +134,19 @@
 
 ## カスタマイズ
 
-各キャラクターは起動時に `config.toml` を読み込み，**実行中でもホットリロード**されます。ファイルを保存すると約 1 秒で反映され，再起動は不要です。
+キャラクターの動作は，各キャラクターの `behavior.toml`（アプリバンドルに内蔵）の `[personality]` セクションで制御されています。速度・活動量・好奇心・睡眠傾向はいずれも `[0.0, 1.0]` の 4 つの値から算出されます。
 
-### macOS
+### Windows — パラメーター上書き
 
-設定ファイルはアプリバンドル内にあります：
-
-```
-Petit Mates.app/Contents/Resources/assets/bearded_dragon/config.toml
-Petit Mates.app/Contents/Resources/assets/pond_turtle/config.toml
-```
-
-アプリを右クリック → **「パッケージの内容を表示」** で参照できます。
-
-### Windows
-
-exe と同じフォルダに設定ファイルを置くと上書き適用されます：
+上級ユーザーは exe と同じフォルダにパラメーターファイルを置くことで任意の値を上書きできます。ファイルはアプリ実行中にホットリロードされます。
 
 ```
 Petit Mates.exe
-bearded_dragon_config.toml   ← オプション（上書き用）
-pond_turtle_config.toml      ← オプション（上書き用）
+bearded_dragon_params.toml   ← オプション（上書き用）
+pond_turtle_params.toml      ← オプション（上書き用）
 ```
 
-ファイルがない場合は内蔵のデフォルト値が使用されます。
+ファイルがない場合は personality から算出された内蔵デフォルト値が使用されます。
 
 ## リリースノート
 

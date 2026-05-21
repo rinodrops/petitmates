@@ -70,8 +70,10 @@ pub struct ReactionEntry {
 
 /// Merged behavior data for one character, ready for the trigger engine.
 pub struct BehaviorData {
-    pub entries:   Vec<BehaviorEntry>,
-    pub reactions: Vec<ReactionEntry>,
+    pub entries:     Vec<BehaviorEntry>,
+    pub reactions:   Vec<ReactionEntry>,
+    /// Personality from the last `[personality]` section found across all layers.
+    pub personality: crate::config::PersonalityConfig,
 }
 
 // ---- Internal TOML file structure ----
@@ -82,6 +84,8 @@ struct BehaviorFile {
     entries: Vec<BehaviorEntry>,
     #[serde(default, rename = "reaction")]
     reactions: Vec<ReactionEntry>,
+    /// Optional `[personality]` section; last non-None layer wins.
+    personality: Option<crate::config::PersonalityConfig>,
 }
 
 // ---- Parsing helpers ----
@@ -108,13 +112,15 @@ pub fn load(char_name: &str) -> BehaviorData {
         _                => b"",
     };
 
-    let mut entries:   Vec<BehaviorEntry>  = Vec::new();
-    let mut reactions: Vec<ReactionEntry> = Vec::new();
+    let mut entries:     Vec<BehaviorEntry>  = Vec::new();
+    let mut reactions:   Vec<ReactionEntry>  = Vec::new();
+    let mut personality: crate::config::PersonalityConfig = Default::default();
 
     for bytes in [BUILTIN_COMMON, builtin_char] {
         if let Some(file) = parse_bytes(bytes) {
             entries.extend(file.entries);
             reactions.extend(file.reactions);
+            if let Some(p) = file.personality { personality = p; }
         }
     }
 
@@ -125,11 +131,12 @@ pub fn load(char_name: &str) -> BehaviorData {
             if let Some(file) = parse_path(path) {
                 entries.extend(file.entries);
                 reactions.extend(file.reactions);
+                if let Some(p) = file.personality { personality = p; }
             }
         }
     }
 
-    BehaviorData { entries, reactions }
+    BehaviorData { entries, reactions, personality }
 }
 
 // ---- Trigger evaluation helpers ----
@@ -226,6 +233,12 @@ pub struct BehaviorEngine {
     elapsed:  Vec<f64>,
     /// Post-fire cooldown: prevents two animations from firing in rapid succession.
     cooldown: f64,
+    /// Current personality (may change on hot-reload).
+    personality: crate::config::PersonalityConfig,
+    /// Path watched for personality hot-reload (typically `{char_dir}/behavior.toml`).
+    personality_path: Option<std::path::PathBuf>,
+    /// mtime of `personality_path` at last successful read.
+    personality_mtime: Option<std::time::SystemTime>,
 }
 
 impl BehaviorEngine {
@@ -234,13 +247,14 @@ impl BehaviorEngine {
         data: BehaviorData,
         animations: &std::collections::HashMap<String, crate::manifest::AnimationDef>,
     ) -> Self {
+        let personality = data.personality.clone();
         let entries: Vec<BehaviorEntry> = data.entries.into_iter()
             .filter(|e| animations.contains_key(&e.animation))
             .collect();
         let reactions: Vec<ReactionEntry> = data.reactions.into_iter()
             .filter(|r| animations.contains_key(&r.animation))
             .collect();
-        let filtered = BehaviorData { entries, reactions };
+        let filtered = BehaviorData { entries, reactions, personality: Default::default() };
 
         let mut rng = SmallRng::from_os_rng();
         // Randomize initial elapsed so multiple characters don't sync up.
@@ -256,7 +270,40 @@ impl BehaviorEngine {
             last_tick: Instant::now(),
             elapsed,
             cooldown,
+            personality,
+            personality_path: None,
+            personality_mtime: None,
         }
+    }
+
+    /// Set the file path to watch for personality hot-reload.
+    /// Returns `self` for chaining.
+    pub fn with_personality_path(mut self, path: std::path::PathBuf) -> Self {
+        self.personality_path = Some(path);
+        self
+    }
+
+    /// Current personality parameters.
+    pub fn personality(&self) -> &crate::config::PersonalityConfig {
+        &self.personality
+    }
+
+    /// Re-read personality from `personality_path` if the file has changed.
+    /// Returns `true` if the personality was updated.
+    pub fn reload_personality_if_changed(&mut self) -> bool {
+        let Some(path) = self.personality_path.clone() else { return false; };
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if mtime == self.personality_mtime { return false; }
+        self.personality_mtime = mtime;
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(file) = toml::from_str::<BehaviorFile>(&text) {
+                if let Some(p) = file.personality {
+                    self.personality = p;
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Called every tick. Returns an animation name to play as `State::OneShot`, or `None`.

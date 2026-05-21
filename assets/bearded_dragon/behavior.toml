@@ -8,6 +8,15 @@
 # [[behavior]]
 # animation    = "tongue-flick"
 # trigger      = "random"
+
+# ---- Personality ----
+# All values are in [0.0, 1.0].  0.5 = neutral baseline (same as Rust defaults).
+# These influence params.toml values that are NOT explicitly set there.
+[personality]
+restlessness = 0.60   # fairly active; explores windows regularly
+curiosity    = 0.50   # average curiosity
+sleepiness   = 0.25   # alert; rarely sleeps for long
+agility      = 0.65   # moves faster than average
 # interval_min = 60.0
 # interval_max = 300.0
 # states       = ["SitIdle", "LieIdle", "StandIdle", "CornerRest"]

@@ -715,10 +715,15 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
     if let Some(init) = assets.sprite("s-stand", false) {
         unsafe { set_layered_content(hwnd, &init.bgra, init.w, init.h, -4096, -4096, 255) };
     }
-    let behavior_engine = crate::anim_trigger::BehaviorEngine::new(
-        crate::anim_trigger::load(char_name),
-        &assets.animations,
-    );
+    let behavior_engine = {
+        let behavior_data = crate::anim_trigger::load(char_name);
+        // On Windows assets are embedded; watch the exe-adjacent {char}_behavior.toml if present.
+        let exe_dir = std::env::current_exe().ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()));
+        let watch_path = exe_dir.map(|d| d.join(format!("{char_name}_behavior.toml")));
+        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);
+        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
+    };
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         hwnd,
@@ -879,7 +884,10 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     }
 
     // Off-screen safeguard.
-    {
+    // Only applies to free-flying states (Airborne / Desktop).  Window-anchored
+    // surfaces use local coordinates for rendering, so char_pos may be stale;
+    // surface_still_valid already handles window disappearance for those.
+    if matches!(&ch.surface, Surface::Airborne | Surface::Desktop { .. }) {
         let (fw, fh) = assets.size("s-stand", false);
         let (cx, cy) = ch.char_pos;
         let below = cy > si.height + fh;
@@ -1127,7 +1135,16 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                                 ch.facing = *dir;
                                 Some(Surface::WindowBottom { win_id: *win_id, x_local })
                             } else {
-                                ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+                                // window_bottom is false: drop off the wall.
+                                // Assign to `new_state` so the final ch.anim_state = new_state
+                                // uses Falling (direct ch.anim_state assignment would be
+                                // overwritten).  Seed char_pos from the wall bottom now.
+                                let (sw, sh) = assets.size("s-jump", false);
+                                ch.char_pos = (
+                                    match side { Side::Left => win.x, Side::Right => win.right() - sw },
+                                    win.y + *y_local - sh / 2.0,
+                                );
+                                new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
                                 Some(Surface::Airborne)
                             }
                         } else { None }
@@ -1294,7 +1311,9 @@ fn tick_all() {
         let n = app.chars.len();
         for i in 0..n {
             app.chars[i].config.lock().unwrap().reload_if_changed();
-            let cfg = app.chars[i].config.lock().unwrap().current.clone();
+            app.chars[i].behavior_engine.reload_personality_if_changed();
+            let mut cfg = app.chars[i].config.lock().unwrap().current.clone();
+            crate::config::apply_personality(&mut cfg, app.chars[i].behavior_engine.personality());
             tick_char(&mut app.chars[i], &cfg, &si, &wins);
         }
 

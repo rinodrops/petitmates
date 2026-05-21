@@ -631,10 +631,12 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
         panel.orderFront(None);
     }
-    let behavior_engine = crate::anim_trigger::BehaviorEngine::new(
-        crate::anim_trigger::load(char_name),
-        &assets.animations,
-    );
+    let behavior_engine = {
+        let behavior_data = crate::anim_trigger::load(char_name);
+        let watch_path = char_dir_for(char_name).map(|d| d.join("behavior.toml"));
+        let engine = crate::anim_trigger::BehaviorEngine::new(behavior_data, &assets.animations);
+        if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
+    };
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         panel,
@@ -1896,7 +1898,20 @@ fn tick_char(
                                 ch.facing = *dir;
                                 Some(Surface::WindowBottom { win_id: *win_id, x_local })
                             } else {
-                                ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+                                // window_bottom is false: drop off the wall.
+                                // Assign to `new_state` (not ch.anim_state directly) so
+                                // the final `ch.anim_state = new_state` line uses Falling.
+                                // Seed char_pos from the wall position now, before the
+                                // surface is overwritten with Airborne.
+                                let (sw, sh) = ch.assets.image("s-jump", false)
+                                    .or_else(|| ch.assets.image("s-stand", false))
+                                    .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+                                    .unwrap_or((sprite_sz.0, sprite_sz.1));
+                                ch.char_pos = (
+                                    match side { Side::Left => win.x, Side::Right => win.right() - sw },
+                                    win.y + *y_local - sh / 2.0,
+                                );
+                                new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
                                 Some(Surface::Airborne)
                             }
                         } else { None }
@@ -2034,7 +2049,9 @@ fn tick() {
 
         for ch in &mut app.chars {
             ch.config.lock().unwrap().reload_if_changed();
-            let cfg = ch.config.lock().unwrap().current.clone();
+            ch.behavior_engine.reload_personality_if_changed();
+            let mut cfg = ch.config.lock().unwrap().current.clone();
+            crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
             tick_char(ch, &cfg, &si, &wins, mt);
         }
 

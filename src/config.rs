@@ -1,5 +1,5 @@
 /// Runtime-tunable behavior parameters.
-/// Loaded from `config.toml` in the character directory.
+/// Loaded from `params.toml` in the character directory.
 /// The file is re-read on every change (hot-reload) so values take effect
 /// without rebuilding or restarting.
 
@@ -306,11 +306,11 @@ pub struct ConfigLoader {
 }
 
 impl ConfigLoader {
-    /// Create a loader that watches `char_dir/config.toml`.
+    /// Create a loader that watches `char_dir/params.toml`.
     /// If the file does not exist, defaults are used.
     #[allow(dead_code)]
     pub fn new(char_dir: &Path) -> Self {
-        Self::new_with_path(char_dir.join("config.toml"))
+        Self::new_with_path(char_dir.join("params.toml"))
     }
 
     /// Create a loader that watches a specific path.
@@ -349,21 +349,21 @@ impl ConfigLoader {
 /// Thread-safe shared handle to a `ConfigLoader`.
 pub type SharedConfig = Arc<Mutex<ConfigLoader>>;
 
-/// macOS / Windows-with-file: watch `char_dir/config.toml`, hot-reload on change.
+/// macOS / Windows-with-file: watch `char_dir/params.toml`, hot-reload on change.
 #[allow(dead_code)]
 pub fn make_shared(char_dir: &Path) -> SharedConfig {
     Arc::new(Mutex::new(ConfigLoader::new(char_dir)))
 }
 
-/// Windows standalone (embedded assets): watch for a `{char_name}_config.toml`
+/// Windows standalone (embedded assets): watch for a `{char_name}_params.toml`
 /// placed next to `petitmates.exe`.  Falls back to built-in defaults if the
 /// file is absent, allowing the exe to run with no external files at all.
 ///
 /// Example: `make_shared_win_for("bearded_dragon")` watches
-/// `bearded_dragon_config.toml` in the same directory as the executable.
+/// `bearded_dragon_params.toml` in the same directory as the executable.
 #[cfg(target_os = "windows")]
 pub fn make_shared_win_for(char_name: &str) -> SharedConfig {
-    let filename = format!("{char_name}_config.toml");
+    let filename = format!("{char_name}_params.toml");
     let path = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.join(&filename)))
@@ -371,10 +371,96 @@ pub fn make_shared_win_for(char_name: &str) -> SharedConfig {
     Arc::new(Mutex::new(ConfigLoader::new_with_path(path)))
 }
 
-/// Convenience alias: watch for a single `config.toml` next to the exe.
-/// Kept for compatibility; prefer `make_shared_win_for` for per-character use.
-#[cfg(target_os = "windows")]
-#[allow(dead_code)]
-pub fn make_shared_win() -> SharedConfig {
-    make_shared_win_for("config")
+// ---- Personality system ----
+
+/// Per-character personality parameters read from `[personality]` in `behavior.toml`.
+/// Each value is in `[0.0, 1.0]` where `0.5` is the neutral baseline.
+#[derive(serde::Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct PersonalityConfig {
+    /// How often the character moves around (0 = very sedentary, 1 = hyperactive).
+    pub restlessness: f64,
+    /// How likely the character is to peek over edges and explore (0 = incurious, 1 = very curious).
+    pub curiosity: f64,
+    /// How prone the character is to long rests and sleep (0 = restless, 1 = very sleepy).
+    pub sleepiness: f64,
+    /// How fast the character moves and animates (0 = very slow, 1 = very fast).
+    pub agility: f64,
+}
+
+impl Default for PersonalityConfig {
+    fn default() -> Self {
+        Self {
+            restlessness: 0.5,
+            curiosity:    0.5,
+            sleepiness:   0.5,
+            agility:      0.5,
+        }
+    }
+}
+
+#[inline]
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + t * (b - a)
+}
+
+/// Apply personality adjustments to `config` in-place.
+///
+/// Call this **before** applying character-specific `params.toml` so that
+/// explicit TOML values override the personality-derived baseline.
+/// Each parameter range is chosen so that `t = 0.5` produces the same
+/// value as the `Default` implementation.
+pub fn apply_personality(config: &mut Config, p: &PersonalityConfig) {
+    let r = p.restlessness.clamp(0.0, 1.0);
+    let c = p.curiosity.clamp(0.0, 1.0);
+    let s = p.sleepiness.clamp(0.0, 1.0);
+    let a = p.agility.clamp(0.0, 1.0);
+
+    // --- Restlessness: movement tendency and outing frequency ---
+    // corner_jump_prob: 0.5→0.20
+    config.corner.corner_jump_prob   = lerp(0.04, 0.36, r);
+    // outing_interval: 0.5→[300,900]
+    config.corner.outing_interval    = [lerp(900.0, 90.0, r), lerp(1800.0, 180.0, r)];
+    // climb_attract_prob: 0.5→0.35
+    config.jump.climb_attract_prob   = lerp(0.14, 0.56, r);
+    // edge_idle_prob: 0.5→0.40 (less restless = more likely to idle at edges)
+    config.floor.edge_idle_prob      = lerp(0.75, 0.15, r);
+    // stand_idle_sit_prob: 0.5→0.40 (restless → sit less)
+    config.floor.stand_idle_sit_prob  = lerp(0.70, 0.20, r);
+    // stand_idle_walk_prob: must stay ≥ stand_idle_sit_prob
+    config.floor.stand_idle_walk_prob = lerp(0.82, 0.42, r);
+
+    // --- Curiosity: peeking and exploration ---
+    // peek_prob: 0.5→0.20
+    config.floor.peek_prob      = lerp(0.05, 0.35, c);
+    // peek_walk_prob: 0.5→0.50
+    config.floor.peek_walk_prob = lerp(0.25, 0.75, c);
+
+    // --- Sleepiness: rest and sleep duration/likelihood ---
+    // lie_idle_sleep_prob: 0.5→0.15 (sleepier → more likely to sleep while lying)
+    let sleep_p = lerp(0.03, 0.58, s);
+    config.floor.lie_idle_sleep_prob = sleep_p;
+    // lie_idle_sit_prob: must stay ≥ sleep_p; sleepier → narrower sit window
+    let sit_w = lerp(0.50, 0.08, s);
+    config.floor.lie_idle_sit_prob   = (sleep_p + sit_w).min(0.98);
+    // sit_idle_lie_prob: 0.5→0.30 (sleepier → more likely to lie down)
+    config.floor.sit_idle_lie_prob   = lerp(0.10, 0.58, s);
+    // sit_idle_stand_prob: must stay ≥ sit_idle_lie_prob
+    config.floor.sit_idle_stand_prob = (lerp(0.10, 0.58, s) + lerp(0.45, 0.12, s)).min(0.97);
+    // edge_lie_to_sleep_prob: 0.5→0.30
+    config.floor.edge_lie_to_sleep_prob = lerp(0.08, 0.72, s);
+    // lie_duration: 0.5→[20,60]
+    config.floor.lie_duration   = [lerp(8.0, 50.0, s), lerp(25.0, 130.0, s)];
+    // sleep_duration: 0.5→[60,180]
+    config.floor.sleep_duration = [lerp(20.0, 110.0, s), lerp(55.0, 330.0, s)];
+
+    // --- Agility: movement and animation speed ---
+    // walk_speed: 0.5→40.0
+    config.floor.walk_speed      = lerp(16.0, 64.0, a);
+    // walk_frame_secs: 0.5→0.14 (faster → shorter frame; inverted)
+    config.floor.walk_frame_secs = lerp(0.22, 0.10, a);
+    // climb_speed: 0.5→60.0
+    config.wall.climb_speed      = lerp(28.0, 92.0, a);
+    // climb_frame_secs: 0.5→0.22
+    config.wall.climb_frame_secs = lerp(0.30, 0.10, a);
 }
