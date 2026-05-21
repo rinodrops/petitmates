@@ -1,109 +1,336 @@
 # Builtin speech lines for the Leopard Gecko character.
 # Layer 2 of 4 in the merge order.
 
+# --- eye and body (species trait) ---
+
 [[speech]]
-text_ja = "あ、目のあたりがかゆい"
-text_en = "Hmm, my eye feels a bit itchy."
+text_ja = "あ、目のあたりがかゆいかも"
+text_en = "My eye feels a bit itchy, maybe."
 trigger = "random"
 weight  = 1.2
 
 [[speech]]
-text_ja = "目をなめると気持ちいいんだよね"
-text_en = "Licking my eye feels pretty good, actually."
+text_ja = "目なめると気持ちいいんだよね"
+text_en = "Licking my eye just feels right somehow."
 trigger = "random"
 weight  = 1.0
 
 [[speech]]
-text_ja = "夜のほうが活動しやすいんだけどな"
-text_en = "I'm more of a night owl, honestly."
+text_ja = "しっぽ、ぷりぷりしてる気がする"
+text_en = "My tail feels kind of plump, I think."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんか体がまるまりたい感じ"
+text_en = "I kind of feel like curling up."
+trigger = "random"
+weight  = 1.0
+
+# --- nocturnal / time of day ---
+
+[[speech]]
+text_ja = "夜のほうが、なんかテンション上がるかも"
+text_en = "Nighttime just feels more alive somehow, maybe."
 trigger = "random"
 weight  = 1.0
 
 [[speech]]
-text_ja = "なんか気になるものがあった気がする"
-text_en = "I thought I spotted something interesting."
+text_ja = "夜って、なんかいい感じ"
+text_en = "There's something nice about the night."
 trigger = "random"
 weight  = 1.0
+
+[[speech]]
+text_ja = "昼間ってちょっと眩しいかも"
+text_en = "Daytime might be a little bright for me."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "暗いところのほうが落ち着く気がする"
+text_en = "Dark places feel calmer somehow, I think."
+trigger = "random"
+weight  = 1.0
+
+# --- dreamy / vague ---
+
+[[speech]]
+text_ja = "なんか気になるんだよね、あそこ"
+text_en = "Something over there is kind of on my mind."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "なんかここにいていいのかも"
+text_en = "I might be okay just being here."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか今日はいい感じかも"
+text_en = "Today feels kind of good, maybe."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか変わった気がするけど、なんだろう"
+text_en = "Something feels different, but I'm not sure what."
+trigger = "random"
+weight  = 0.9
 
 [[speech]]
 text_ja = "このあたり、探検してみようかな"
-text_en = "Maybe I'll explore around here a bit."
+text_en = "Maybe I'll wander around here a bit."
 trigger = "random"
 weight  = 1.1
+
+[[speech]]
+text_ja = "なんか気になるものがあった気がする"
+text_en = "I feel like there was something interesting around here."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんかよく分からないけど、まあいいかも"
+text_en = "Not sure what's going on, but maybe it's fine."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "あっちのほうがよかったかも…まあ、いっか"
+text_en = "Maybe that way was better... oh well."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "なんとなく移動したい感じ"
+text_en = "I kind of feel like moving somewhere."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか眠いけど、眠くないかも"
+text_en = "I feel kind of sleepy, but maybe not."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "ここ、なんかいい場所かも"
+text_en = "This might be a pretty good spot."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか今日はぼーっとしてる気がする"
+text_en = "I feel like I'm kind of spacing out today."
+trigger = "random"
+weight  = 0.9
+
+# --- food ---
+
+[[speech]]
+text_ja = "コオロギ、なんか食べたいかも"
+text_en = "I might kind of want a cricket."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "虫って、なんか気になるんだよね"
+text_en = "Bugs are just kind of fascinating to me."
+trigger = "random"
+weight  = 0.9
+
+[[speech]]
+text_ja = "おなか空いてるかも…空いてないかも"
+text_en = "I might be hungry... or maybe not."
+trigger = "random"
+weight  = 1.0
+
+# --- warmth ---
+
+[[speech]]
+text_ja = "あったかいところ、なんか好きかも"
+text_en = "Warm places are kind of nice, I think."
+trigger = "random"
+weight  = 1.1
+
+[[speech]]
+text_ja = "ひなたぼっこって、なんか気持ちいいかも"
+text_en = "Basking might feel kind of good."
+trigger = "random"
+weight  = 1.0
+
+[[speech]]
+text_ja = "なんか体がぽかぽかしてきた気がする"
+text_en = "I think I feel a little warmer somehow."
+trigger = "random"
+weight  = 1.0
 
 # --- seasons (random) ---
 
 [[speech]]
-text_ja = "暖かくなってきた。動きやすい"
-text_en = "Getting warmer. Good time to move around."
+text_ja = "暖かくなってきた気がする。動きやすいかも"
+text_en = "It might be getting warmer. Easier to move, maybe."
 trigger = "random"
 seasons = ["spring"]
 weight  = 1.2
 
 [[speech]]
-text_ja = "日差しが気持ちいい季節"
-text_en = "The sun feels just right this season."
+text_ja = "なんか春っぽい感じがする"
+text_en = "There's something spring-like about this."
+trigger = "random"
+seasons = ["spring"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "この季節、なんか悪くないかも"
+text_en = "This season might not be bad."
 trigger = "random"
 seasons = ["summer"]
 weight  = 1.3
 
 [[speech]]
-text_ja = "ちょっと涼しくなってきたかな"
-text_en = "It's getting a little cool."
+text_ja = "ちょっと涼しくなってきたかも"
+text_en = "It's getting a little cool, maybe."
 trigger = "random"
 seasons = ["autumn"]
 weight  = 1.0
 
 [[speech]]
-text_ja = "寒いのはちょっと苦手なんだよね"
-text_en = "I'm not great with the cold."
+text_ja = "なんか秋っぽくなってきた気がする"
+text_en = "Feels kind of autumny, I think."
+trigger = "random"
+seasons = ["autumn"]
+weight  = 0.9
+
+[[speech]]
+text_ja = "寒いのはちょっと苦手かも"
+text_en = "I'm not great with the cold, maybe."
 trigger = "random"
 seasons = ["winter"]
 weight  = 1.2
 
+[[speech]]
+text_ja = "冬って、なんかじっとしたくなる感じ"
+text_en = "Something about winter makes me want to stay still."
+trigger = "random"
+seasons = ["winter"]
+weight  = 1.0
+
+# --- state ---
+
+[[speech]]
+text_ja = "なんか今日もはじまってるみたい"
+text_en = "Seems like today is starting again somehow."
+trigger = "state"
+state   = "startup"
+
+[[speech]]
+text_ja = "よっと…かも"
+text_en = "Here we go... maybe."
+trigger = "state"
+state   = "landing"
+duration_sec = 3.0
+
+# --- time ---
+
+[[speech]]
+text_ja = "だんだん明るくなってきた…なんか眠いかも"
+text_en = "Getting brighter out... I might be getting sleepy."
+trigger = "time"
+hours   = [6, 7, 8, 9]
+weight  = 1.3
+
+# --- hour_change ---
+
+[[speech]]
+text_ja = "もうそんな時間かも"
+text_en = "Is it already that time, maybe."
+trigger = "state"
+state   = "hour_change"
+hours   = [7, 8, 9]
+weight  = 1.0
+
+[[speech]]
+text_ja = "夕方になってきた感じ。なんかテンション上がるかも"
+text_en = "Evening's here somehow. I might be getting excited."
+trigger = "state"
+state   = "hour_change"
+hours   = [17, 18, 19]
+weight  = 1.2
+
+[[speech]]
+text_ja = "夜中は静かでいいかも"
+text_en = "The middle of the night might be nice."
+trigger = "state"
+state   = "hour_change"
+hours   = [22, 23, 0, 1]
+weight  = 1.3
+
+[[speech]]
+text_ja = "こんな時間に起きてるのは、なんか夜行性っぽいかも"
+text_en = "Being up at this hour feels kind of nocturnal, maybe."
+trigger = "state"
+state   = "hour_change"
+hours   = [2, 3]
+weight  = 1.1
+
 # --- weather ---
 
 [[speech]]
-text_ja = "晴れてる。外に出たいな"
-text_en = "It's sunny out. I'd love to go outside."
+text_ja = "晴れてる。なんか外に出たい気がするかも"
+text_en = "It's sunny. I might kind of feel like going out."
 trigger = "weather"
 weather = ["sunny"]
 weight  = 1.2
 
 [[speech]]
+text_ja = "日差し、なんかいい感じかも"
+text_en = "The sunlight feels kind of good, maybe."
+trigger = "weather"
+weather = ["sunny"]
+weight  = 1.0
+
+[[speech]]
+text_ja = "あたたかいとなんか活動的になる気がする"
+text_en = "Warmth makes me feel kind of active, somehow."
+trigger = "weather"
+weather = ["sunny"]
+temp_min = 25.0
+weight  = 1.1
+
+[[speech]]
 text_ja = "雨かあ。まあ、のんびりしようかな"
-text_en = "Rain again. Guess I'll take it easy."
+text_en = "Rain again. Guess I'll take it easy, maybe."
 trigger = "weather"
 weather = ["rainy"]
 weight  = 1.0
 
-# --- time ---
+[[speech]]
+text_ja = "雨の日って、なんかぼーっとできるかも"
+text_en = "Rainy days might be good for spacing out."
+trigger = "weather"
+weather = ["rainy"]
+weight  = 0.9
 
 [[speech]]
-text_ja = "もうそんな時間か"
-text_en = "Is it that time already?"
-trigger = "time"
-hours   = [7, 8, 9]
+text_ja = "曇りはちょっと眠いかも"
+text_en = "Cloudy days make me a little sleepy, maybe."
+trigger = "weather"
+weather = ["cloudy"]
 weight  = 1.0
 
 [[speech]]
-text_ja = "夕方になってきた。活動しよう"
-text_en = "Evening's here. Time to get moving."
-trigger = "time"
-hours   = [17, 18, 19]
+text_ja = "外は寒いのかも…ここはあたたかいかも"
+text_en = "It might be cold out there... it might be warm in here."
+trigger = "weather"
+weather = ["snowy"]
 weight  = 1.2
 
 [[speech]]
-text_ja = "夜中は静かで好き"
-text_en = "I like how quiet it is at night."
-trigger = "time"
-hours   = [22, 23, 0, 1]
-weight  = 1.3
-
-# --- state ---
-
-[[speech]]
-text_ja = "よし、今日もはじまり"
-text_en = "Alright, another day begins."
-trigger = "state"
-state   = "startup"
+text_ja = "雪って見たことないかも。あるかもしれないけど"
+text_en = "I might never have seen snow. Or maybe I have."
+trigger = "weather"
+weather = ["snowy"]
+weight  = 1.0
