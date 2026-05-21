@@ -368,12 +368,6 @@ trigger = "random"
 weight  = 1.0
 
 [[speech]]
-text_ja = "ねーねー"
-text_en = "Hey."
-trigger = "random"
-weight  = 0.8
-
-[[speech]]
 text_ja = "今日もいてくれてありがとう"
 text_en = "Thanks for being here today too."
 trigger = "random"
