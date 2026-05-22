@@ -2128,8 +2128,14 @@ fn tick() {
                                 *x = new_x;
                                 app.chars[j].char_pos.0 = new_x;
                             }
-                            Surface::WindowTop { x_local, .. } => {
-                                *x_local += nudge;
+                            Surface::WindowTop { win_id, x_local } => {
+                                // Clamp so the nudge never pushes x_local into the at_edge
+                                // zone (edge_margin + sprite_w/2), which would trigger a
+                                // premature SitIdle→Walk transition on the next tick.
+                                let win_w = wm::find_win(*win_id, &wins)
+                                    .map(|w| w.w)
+                                    .unwrap_or(f64::MAX);
+                                *x_local = (*x_local + nudge).clamp(half_sprite, win_w - half_sprite);
                             }
                             _ => {}
                         }
