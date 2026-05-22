@@ -113,6 +113,9 @@ struct CharState {
     bubble_state: Option<crate::speech::BubbleState>,
     /// HWND for the speech bubble layered window; null when not created yet.
     bubble_hwnd: HWND,
+    /// Width of the sprite rendered last tick (scaled display pixels).
+    /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
+    last_sprite_w: f64,
 }
 
 struct AppState {
@@ -746,6 +749,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         behavior_engine,
         bubble_state: None,
         bubble_hwnd: ptr::null_mut(),
+        last_sprite_w: 150.0,
     }
 }
 
@@ -971,6 +975,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
     let sprite_w = assets.size(&sr_for_ctx.name, sr_for_ctx.mirror).0;
+    ch.last_sprite_w = sprite_w;
     let (surface_progress, at_edge, jump_target, attract_target) = surface_context(
         &ch.surface, ch.char_pos, sprite_w, ch.facing,
         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
@@ -1318,6 +1323,62 @@ fn tick_all() {
             let mut cfg = app.chars[i].config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, app.chars[i].behavior_engine.personality());
             tick_char(&mut app.chars[i], &cfg, &si, &wins);
+        }
+
+        // Post-tick: separate resting characters that are too close on the same surface.
+        {
+            let n = app.chars.len();
+            for _ in 0..2 {
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let resting_i = matches!(&app.chars[i].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        let resting_j = matches!(&app.chars[j].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        if !resting_i || !resting_j { continue; }
+
+                        let info_i: Option<(bool, u32, f64)> = match &app.chars[i].surface {
+                            Surface::Desktop { x }                 => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let info_j: Option<(bool, u32, f64)> = match &app.chars[j].surface {
+                            Surface::Desktop { x }                 => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let (is_win_i, id_i, pos_i) = match info_i { Some(v) => v, None => continue };
+                        let (is_win_j, id_j, pos_j) = match info_j { Some(v) => v, None => continue };
+
+                        if is_win_i != is_win_j || id_i != id_j { continue; }
+
+                        let half_sprite = app.chars[j].config.lock().unwrap().current.display.display_width * 0.5;
+                        let dist = (pos_i - pos_j).abs();
+                        if dist >= half_sprite { continue; }
+
+                        let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
+                        let edge_buf = app.chars[j].last_sprite_w / 2.0 + 3.0;
+                        match &mut app.chars[j].surface {
+                            Surface::Desktop { x } => {
+                                let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
+                                *x = new_x;
+                                app.chars[j].char_pos.0 = new_x;
+                            }
+                            Surface::WindowTop { win_id, x_local } => {
+                                let win_w = windows_wm::find_win(*win_id, &wins)
+                                    .map(|w| w.w)
+                                    .unwrap_or(f64::MAX);
+                                *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
 
         // Speech trigger evaluation.
