@@ -2082,6 +2082,62 @@ fn tick() {
             tick_char(ch, &cfg, &si, &wins, mt);
         }
 
+        // Post-tick: separate resting characters that are too close on the same surface.
+        // Two passes ensure a third character gets nudged correctly even if it started
+        // at the exact same position as the other two.
+        {
+            let n = app.chars.len();
+            for _ in 0..2 {
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let resting_i = matches!(&app.chars[i].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        let resting_j = matches!(&app.chars[j].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        if !resting_i || !resting_j { continue; }
+
+                        // Extract (is_window_top, win_id, position) — copies only, no refs held.
+                        let info_i: Option<(bool, u32, f64)> = match &app.chars[i].surface {
+                            Surface::Desktop { x }               => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let info_j: Option<(bool, u32, f64)> = match &app.chars[j].surface {
+                            Surface::Desktop { x }               => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let (is_win_i, id_i, pos_i) = match info_i { Some(v) => v, None => continue };
+                        let (is_win_j, id_j, pos_j) = match info_j { Some(v) => v, None => continue };
+
+                        if is_win_i != is_win_j || id_i != id_j { continue; }
+
+                        let half_sprite = app.chars[j].config.lock().unwrap().current.display.display_width * 0.5;
+                        let dist = (pos_i - pos_j).abs();
+                        if dist >= half_sprite { continue; }
+
+                        // Nudge char j away from char i by the overlap amount.
+                        let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
+                        match &mut app.chars[j].surface {
+                            Surface::Desktop { x } => {
+                                let new_x = (*x + nudge).clamp(half_sprite, si.width - half_sprite);
+                                *x = new_x;
+                                app.chars[j].char_pos.0 = new_x;
+                            }
+                            Surface::WindowTop { x_local, .. } => {
+                                *x_local += nudge;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         // Speech trigger evaluation.
         if app.speech_cfg.enabled {
             let now = Instant::now();
