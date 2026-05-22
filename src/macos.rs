@@ -74,6 +74,9 @@ struct CharState {
     bubble_state: Option<crate::speech::BubbleState>,
     /// The transparent NSPanel that renders the speech bubble; None when hidden.
     bubble_panel: Option<Retained<NSPanel>>,
+    /// Width of the sprite rendered last tick (scaled display pixels).
+    /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
+    last_sprite_w: f64,
 }
 
 // ---- App-wide state (singletons) ----
@@ -669,6 +672,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         behavior_engine,
         bubble_state: None,
         bubble_panel: None,
+        last_sprite_w: 150.0,
     }
 }
 
@@ -1723,6 +1727,7 @@ fn tick_char(
     let sprite_sz = ch.assets.image(&sr_for_ctx.name, sr_for_ctx.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
+    ch.last_sprite_w = sprite_sz.0;
     let (surface_progress, at_edge, jump_target, attract_target) =
         surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
                         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
@@ -2123,9 +2128,10 @@ fn tick() {
                         // Nudge char j away from char i by the overlap amount.
                         let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
                         // `at_edge` in surface_context fires when pos <= edge_margin + sprite_w/2.
-                        // edge_margin is 2.0, so add 3.0 (> 2.0) as buffer to stay outside that zone
-                        // and avoid triggering a premature idle→walk transition.
-                        let edge_buf = half_sprite + 3.0;
+                        // Use the actual last rendered sprite width (not display_width) because
+                        // sprites can be wider than display_width after scaling (e.g. turtle s-sit).
+                        // edge_margin is 2.0; add 1.0 extra so we stay just outside the zone.
+                        let edge_buf = app.chars[j].last_sprite_w / 2.0 + 3.0;
                         match &mut app.chars[j].surface {
                             Surface::Desktop { x } => {
                                 let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
