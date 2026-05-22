@@ -2122,20 +2122,21 @@ fn tick() {
 
                         // Nudge char j away from char i by the overlap amount.
                         let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
+                        // `at_edge` in surface_context fires when pos <= edge_margin + sprite_w/2.
+                        // edge_margin is 2.0, so add 3.0 (> 2.0) as buffer to stay outside that zone
+                        // and avoid triggering a premature idle→walk transition.
+                        let edge_buf = half_sprite + 3.0;
                         match &mut app.chars[j].surface {
                             Surface::Desktop { x } => {
-                                let new_x = (*x + nudge).clamp(half_sprite, si.width - half_sprite);
+                                let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
                                 *x = new_x;
                                 app.chars[j].char_pos.0 = new_x;
                             }
                             Surface::WindowTop { win_id, x_local } => {
-                                // Clamp so the nudge never pushes x_local into the at_edge
-                                // zone (edge_margin + sprite_w/2), which would trigger a
-                                // premature SitIdle→Walk transition on the next tick.
                                 let win_w = wm::find_win(*win_id, &wins)
                                     .map(|w| w.w)
                                     .unwrap_or(f64::MAX);
-                                *x_local = (*x_local + nudge).clamp(half_sprite, win_w - half_sprite);
+                                *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
                             }
                             _ => {}
                         }
