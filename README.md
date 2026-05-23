@@ -158,7 +158,12 @@ If no override file is present, built-in defaults derived from personality are u
 
 ### v0.5.0
 
-- Fix: `sprite_size` in `user.toml` now correctly governs all aspects of character display size — changing the value from the default 150 also adjusts physics calculations (desktop-edge clamping and character spacing)
+**Performance**
+- macOS CPU usage reduced from ~15% to under 6% at 3 characters: window list now cached with tiered refresh intervals (immediate when falling, 1.5 s on a window, 15 s on the desktop); redundant Cocoa calls skipped when sprite, position, and Z-order are unchanged; `NSImageView` reused across frames instead of being reallocated on every sprite change
+
+**Fixes**
+- Resting characters (sitting, lying, sleeping) on the same surface no longer stack on top of each other — they are nudged apart after each physics tick
+- `sprite_size` in `user.toml` now correctly governs all aspects of character size — changing the value from the default 150 also adjusts physics calculations (desktop-edge clamping and character spacing)
 
 ### v0.4.0
 
