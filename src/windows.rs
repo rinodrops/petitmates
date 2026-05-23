@@ -190,6 +190,9 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: i32,
+    /// Character display size in logical pixels (from user.toml `sprite_size`).
+    /// Single source of truth for physics clamping and collision spacing.
+    sprite_size: f64,
     /// Resolved display language: "ja" or "en".
     lang: String,
     /// Shared weather cache updated by the background weather thread.
@@ -811,7 +814,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
 
 // ---- Per-character tick ----
 
-fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo]) {
+fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64) {
     let assets: &SpriteAssets = &ch.assets;
     // While being dragged, skip the state machine and just render at the
     // position set by WM_MOUSEMOVE.
@@ -866,7 +869,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             match &mut ch.surface {
                 Surface::Desktop { x } => {
                     *x += match dir { Dir::Left => -delta, Dir::Right => delta };
-                    let half_w = cfg.display.display_width / 2.0;
+                    let half_w = sprite_size / 2.0;
                     *x = x.clamp(half_w, si.width - half_w);
                     ch.char_pos.0 = *x;
                 }
@@ -990,7 +993,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                     x_local: (foot_x - win.x).clamp(0.0, win.w),
                 })
                 .or_else(|| landed_floor.then(|| {
-                    let half_w = cfg.display.display_width / 2.0;
+                    let half_w = sprite_size / 2.0;
                     Surface::Desktop { x: foot_x.clamp(half_w, si.width - half_w) }
                 }));
 
@@ -1408,7 +1411,7 @@ fn tick_all() {
             app.chars[i].behavior_engine.reload_personality_if_changed();
             let mut cfg = app.chars[i].config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, app.chars[i].behavior_engine.personality());
-            tick_char(&mut app.chars[i], &cfg, &si, &wins);
+            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -1442,7 +1445,7 @@ fn tick_all() {
 
                         if is_win_i != is_win_j || id_i != id_j { continue; }
 
-                        let half_sprite = app.chars[j].config.lock().unwrap().current.display.display_width * 0.5;
+                        let half_sprite = app.sprite_size * 0.5;
                         let dist = (pos_i - pos_j).abs();
                         if dist >= half_sprite { continue; }
 
@@ -2184,6 +2187,7 @@ pub fn run() {
                 speech_cfg: user_cfg.speech,
                 speech_tick: Instant::now(),
                 font_size: user_cfg.display.font_size as i32,
+                sprite_size: user_cfg.display.sprite_size as f64,
                 lang: user_cfg.display.language.clone()
                     .unwrap_or_else(detect_system_language),
                 weather: weather_handle,
