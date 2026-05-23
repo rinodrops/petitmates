@@ -156,6 +156,10 @@ If no override file is present, built-in defaults derived from personality are u
 
 ## Release Notes
 
+### v0.5.0
+
+- Fix: `sprite_size` in `user.toml` now correctly governs all aspects of character display size — changing the value from the default 150 also adjusts physics calculations (desktop-edge clamping and character spacing)
+
 ### v0.4.0
 
 - Leopard Gecko added as a third built-in character — dreamy, nocturnal, and perpetually a little uncertain
