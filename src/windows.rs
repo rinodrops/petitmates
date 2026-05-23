@@ -89,6 +89,60 @@ fn is_dark_mode() -> bool {
 
 // ---- App state ----
 
+// ---- Window-list tiered cache ----
+
+/// Returns the win_id (HWND as u32) of the window this surface is anchored to.
+fn surface_host_win_id(surface: &Surface) -> Option<u32> {
+    match surface {
+        Surface::WindowTop { win_id, .. }
+        | Surface::WindowWall { win_id, .. }
+        | Surface::WindowUpperCorner { win_id, .. }
+        | Surface::WindowBottom { win_id, .. } => Some(*win_id),
+        _ => None,
+    }
+}
+
+/// Reusable window-list buffer with a countdown-based refresh schedule.
+/// See the equivalent struct in `macos.rs` for the full interval rationale.
+struct WinListCache {
+    wins: Vec<WinInfo>,
+    ticks_until_refresh: u32,
+}
+
+impl WinListCache {
+    fn new() -> Self { Self { wins: Vec::new(), ticks_until_refresh: 0 } }
+}
+
+const WIN_CACHE_IMMEDIATE: u32 = 1;
+const WIN_CACHE_HIGH_FREQ: u32 = 15;
+const WIN_CACHE_LOW_FREQ: u32 = 150;
+
+fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f64) -> u32 {
+    use crate::behavior::State;
+    for ch in chars {
+        if matches!(&ch.anim_state, State::Falling { .. } | State::JumpRunup { .. }) {
+            return WIN_CACHE_IMMEDIATE;
+        }
+        if surface_host_win_id(&ch.surface).is_some() {
+            return WIN_CACHE_HIGH_FREQ;
+        }
+    }
+    for ch in chars {
+        if let Surface::Desktop { x } = &ch.surface {
+            for win in wins {
+                let dist_r = win.x - x;
+                let dist_l = x - win.right();
+                if (dist_r >= 0.0 && dist_r < attract_dist)
+                    || (dist_l >= 0.0 && dist_l < attract_dist)
+                {
+                    return WIN_CACHE_HIGH_FREQ;
+                }
+            }
+        }
+    }
+    WIN_CACHE_LOW_FREQ
+}
+
 struct CharState {
     hwnd: HWND,
     assets: Rc<SpriteAssets>,
@@ -142,6 +196,8 @@ struct AppState {
     weather: crate::weather::WeatherHandle,
     /// Weather configuration from user.toml (city/coordinates for menu display).
     weather_cfg: crate::user_config::WeatherConfig,
+    /// Reusable window-list cache with tiered refresh schedule.
+    win_cache: WinListCache,
 }
 
 thread_local! {
@@ -1313,8 +1369,38 @@ fn tick_all() {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
 
-        let si   = windows_wm::screen_info();
-        let wins = windows_wm::list_windows(&si);
+        let si = windows_wm::screen_info();
+
+        // Tiered window-list refresh.
+        // Phase 1 — all mutations to win_cache happen here before we borrow wins.
+        if app.win_cache.ticks_until_refresh == 0 {
+            windows_wm::list_windows_into(&mut app.win_cache.wins, &si);
+            let attract_dist = app.chars.first()
+                .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
+                .unwrap_or(600.0);
+            app.win_cache.ticks_until_refresh =
+                next_refresh_interval(&app.chars, &app.win_cache.wins, attract_dist);
+        } else {
+            app.win_cache.ticks_until_refresh -= 1;
+            // Per-tick host-window update via GetWindowRect — essentially free on Windows.
+            for i in 0..app.chars.len() {
+                if let Some(host_id) = surface_host_win_id(&app.chars[i].surface) {
+                    match windows_wm::host_win_info(host_id) {
+                        Some(fresh) => {
+                            if let Some(entry) = app.win_cache.wins.iter_mut().find(|w| w.id == host_id) {
+                                *entry = fresh;
+                            }
+                        }
+                        None => {
+                            app.win_cache.wins.retain(|w| w.id != host_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2 — tick each character using the (now stable) win_cache.
+        let wins: &[WinInfo] = &app.win_cache.wins;
 
         let n = app.chars.len();
         for i in 0..n {
@@ -2102,6 +2188,7 @@ pub fn run() {
                     .unwrap_or_else(detect_system_language),
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
+                win_cache: WinListCache::new(),
             });
         });
 

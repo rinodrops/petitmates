@@ -99,13 +99,15 @@ pub fn screen_info() -> ScreenInfo {
 
 struct EnumCtx {
     my_pid: u32,
-    wins: Vec<WinInfo>,
+    // Raw pointer to the output buffer; valid for the duration of EnumWindows.
+    wins: *mut Vec<WinInfo>,
     screen_w: f64,
     usable_h: f64,
 }
 
 unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
     let ctx = unsafe { &mut *(lp as *mut EnumCtx) };
+    let wins = unsafe { &mut *ctx.wins };
 
     if unsafe { IsWindowVisible(hwnd) } == 0 { return TRUE; }
     if unsafe { IsIconic(hwnd) } != 0 { return TRUE; }
@@ -176,7 +178,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
         return TRUE;
     }
 
-    ctx.wins.push(WinInfo {
+    wins.push(WinInfo {
         id: hwnd as u32,
         x: r.left as f64,
         y: r.top as f64,
@@ -186,17 +188,50 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
     TRUE
 }
 
-/// Returns visible, non-minimised, non-system windows that are valid Petit
-/// Mates surface candidates.
-pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
+/// Fills `buf` with visible, non-minimised, non-system windows that are valid
+/// Petit Mates surface candidates.  The buffer is cleared before use so it
+/// can be reused across ticks.
+pub fn list_windows_into(buf: &mut Vec<WinInfo>, si: &ScreenInfo) {
+    buf.clear();
+    let buf_ptr: *mut Vec<WinInfo> = buf;
     let mut ctx = EnumCtx {
         my_pid: unsafe { GetCurrentProcessId() },
-        wins: Vec::new(),
+        wins: buf_ptr,
         screen_w: si.width,
         usable_h: si.floor_y(),
     };
     unsafe { EnumWindows(Some(enum_proc), &mut ctx as *mut EnumCtx as LPARAM) };
-    ctx.wins
+}
+
+/// Returns visible, non-minimised, non-system windows that are valid Petit
+/// Mates surface candidates.
+pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
+    let mut result = Vec::new();
+    list_windows_into(&mut result, si);
+    result
+}
+
+/// Returns current position and size of the given window HWND without a full
+/// enumeration.  Returns `None` if the window no longer exists or is not
+/// visible.
+///
+/// Used for per-tick host-window tracking so the character follows a dragged
+/// window smoothly between full `list_windows_into` refreshes.
+pub fn host_win_info(hwnd_id: u32) -> Option<WinInfo> {
+    let hwnd = hwnd_id as HWND;
+    if unsafe { IsWindow(hwnd) } == 0 { return None; }
+    if unsafe { IsWindowVisible(hwnd) } == 0 { return None; }
+    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    if unsafe { GetWindowRect(hwnd, &mut r) } == 0 { return None; }
+    let w = (r.right - r.left) as f64;
+    let h = (r.bottom - r.top) as f64;
+    Some(WinInfo {
+        id: hwnd_id,
+        x: r.left as f64,
+        y: r.top as f64,
+        w,
+        h,
+    })
 }
 
 /// Look up a window by ID.

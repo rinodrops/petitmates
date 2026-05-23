@@ -51,6 +51,68 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
     }
 }
 
+// ---- Window-list tiered cache ----
+
+/// Reusable window-list buffer with a countdown-based refresh schedule.
+///
+/// The refresh interval is set after each full enumeration based on how close
+/// any character is to a window:
+///
+/// - **IMMEDIATE** (1 tick): any character is in a dynamic state
+///   (Falling, JumpRunup) — need fresh surface data every tick.
+/// - **HIGH_FREQ** (15 ticks ≈ 1.5 s): a character is on a window surface
+///   or within `attract_dist` of one — keep data reasonably fresh while
+///   window dragging / scrolling occurs.
+/// - **LOW_FREQ** (150 ticks ≈ 15 s): all characters are on the Desktop
+///   with no windows nearby — window positions rarely change in this state.
+struct WinListCache {
+    wins: Vec<WinInfo>,
+    /// Remaining ticks before the next full enumeration.
+    ticks_until_refresh: u32,
+}
+
+impl WinListCache {
+    fn new() -> Self {
+        Self { wins: Vec::new(), ticks_until_refresh: 0 }
+    }
+}
+
+const WIN_CACHE_IMMEDIATE: u32 = 1;
+const WIN_CACHE_HIGH_FREQ: u32 = 15;
+const WIN_CACHE_LOW_FREQ: u32 = 150;
+
+/// Determines the next refresh interval based on character states and
+/// proximity to windows.
+fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f64) -> u32 {
+    use crate::behavior::State;
+    for ch in chars {
+        // Dynamic states require a fresh window list every tick.
+        if matches!(&ch.anim_state, State::Falling { .. } | State::JumpRunup { .. }) {
+            return WIN_CACHE_IMMEDIATE;
+        }
+        // Characters on a window surface need high-frequency refresh so that
+        // the rendered position tracks window movement within ~1.5 s.
+        if surface_host_win_id(&ch.surface).is_some() {
+            return WIN_CACHE_HIGH_FREQ;
+        }
+    }
+    // Desktop characters: check proximity to any window.
+    for ch in chars {
+        if let Surface::Desktop { x } = &ch.surface {
+            for win in wins {
+                let dist_r = win.x - x;
+                let dist_l = x - win.right();
+                if (dist_r >= 0.0 && dist_r < attract_dist)
+                    || (dist_l >= 0.0 && dist_l < attract_dist)
+                {
+                    return WIN_CACHE_HIGH_FREQ;
+                }
+            }
+        }
+    }
+    WIN_CACHE_LOW_FREQ
+}
+
 // ---- Per-character state ----
 
 struct CharState {
@@ -115,6 +177,8 @@ struct AppState {
     weather: crate::weather::WeatherHandle,
     /// Weather configuration from user.toml (city/coordinates for menu display).
     weather_cfg: crate::user_config::WeatherConfig,
+    /// Reusable window-list cache with tiered refresh schedule.
+    win_cache: WinListCache,
 }
 
 thread_local! {
@@ -2074,18 +2138,52 @@ fn tick() {
         let Some(app) = b.as_mut() else { return };
         let mt = unsafe { MainThreadMarker::new_unchecked() };
 
-        // Compute screen info and window list once for all characters.
+        // Compute screen info once for all characters.
         let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
         });
-        let wins = wm::list_windows(&si);
+
+        // Tiered window-list refresh.
+        // Phase 1 — all mutations to win_cache happen here before we borrow wins.
+        if app.win_cache.ticks_until_refresh == 0 {
+            wm::list_windows_into(&mut app.win_cache.wins, &si);
+            let attract_dist = app.chars.first()
+                .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
+                .unwrap_or(600.0);
+            app.win_cache.ticks_until_refresh =
+                next_refresh_interval(&app.chars, &app.win_cache.wins, attract_dist);
+        } else {
+            app.win_cache.ticks_until_refresh -= 1;
+            // Per-tick host-window update: refresh the cached entry for each
+            // character's host window so rendering tracks window movement within
+            // the high-frequency interval.
+            for i in 0..app.chars.len() {
+                if let Some(host_id) = surface_host_win_id(&app.chars[i].surface) {
+                    match wm::host_win_info(host_id) {
+                        Some(fresh) => {
+                            if let Some(entry) = app.win_cache.wins.iter_mut().find(|w| w.id == host_id) {
+                                *entry = fresh;
+                            }
+                        }
+                        None => {
+                            // Window gone — evict so surface_still_valid fires this tick.
+                            app.win_cache.wins.retain(|w| w.id != host_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2 — tick each character using the (now stable) win_cache.
+        // wins borrows win_cache; chars is a separate field so split-borrow is safe.
+        let wins: &[WinInfo] = &app.win_cache.wins;
 
         for ch in &mut app.chars {
             ch.config.lock().unwrap().reload_if_changed();
             ch.behavior_engine.reload_personality_if_changed();
             let mut cfg = ch.config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
-            tick_char(ch, &cfg, &si, &wins, mt);
+            tick_char(ch, &cfg, &si, wins, mt);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -2378,6 +2476,7 @@ pub fn run() {
             lang: lang,
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
+            win_cache: WinListCache::new(),
         });
     });
 

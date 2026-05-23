@@ -31,6 +31,7 @@ unsafe extern "C" {
 
 const OPT_ON_SCREEN: u32 = 1 << 0;
 const OPT_EXCL_DESKTOP: u32 = 1 << 4;
+const OPT_INCLUDING_WINDOW: u32 = 1 << 3;
 const NULL_WINDOW: u32 = 0;
 
 // ---- Types ----
@@ -75,21 +76,17 @@ impl ScreenInfo {
 
 // ---- Window list ----
 
-/// Returns on-screen windows (layer == 0) that are valid Petit Mates surface
-/// candidates, applying the following filters:
-///
-/// - Own process excluded (PID check)
-/// - `WindowManager`-owned windows excluded (Stage Manager UI, macOS 13+)
-/// - Width < `MIN_WIN_W` or height < `MIN_WIN_H` excluded (thumbnails / tooltips)
-/// - Fullscreen / maximized windows excluded (≥ `FULLSCREEN_FRAC` of screen
-///   width **and** of usable height)
-pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
+/// Fills `buf` with on-screen windows (layer == 0) that are valid Petit Mates
+/// surface candidates, applying the same filters as the original `list_windows`.
+/// The buffer is cleared before use so it can be reused across ticks.
+pub fn list_windows_into(buf: &mut Vec<WinInfo>, si: &ScreenInfo) {
+    buf.clear();
     let my_pid = std::process::id() as i32;
     let usable_h = (si.height - si.dock_height - si.menu_bar_height).max(1.0);
     let raw =
         unsafe { CGWindowListCopyWindowInfo(OPT_ON_SCREEN | OPT_EXCL_DESKTOP, NULL_WINDOW) };
     if raw.is_null() {
-        return Vec::new();
+        return;
     }
     let arr: Retained<NSArray<AnyObject>> =
         unsafe { Retained::from_raw(raw as *mut NSArray<AnyObject>).unwrap() };
@@ -100,7 +97,6 @@ pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
     let k_bounds     = NSString::from_str("kCGWindowBounds");
     let k_owner_name = NSString::from_str("kCGWindowOwnerName");
 
-    let mut result = Vec::new();
     let n = arr.count();
 
     for i in 0..n {
@@ -123,8 +119,6 @@ pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
             continue;
         }
 
-        // Exclude Stage Manager UI (macOS 13+). WindowManager owns the Recent
-        // Apps strip, group containers, and other Stage Manager chrome.
         let owner = dict_str(dict, &k_owner_name).unwrap_or_default();
         if owner == "WindowManager" {
             continue;
@@ -153,23 +147,81 @@ pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
             _ => continue,
         };
 
-        // Exclude tiny windows: tooltips, HUD shadows, and Stage Manager
-        // thumbnails (Stage Manager compresses app windows to ~141×145 px).
         if w < MIN_WIN_W || h < MIN_WIN_H {
             continue;
         }
 
-        // Exclude fullscreen / maximized windows.  A window that covers ≥ 90%
-        // of the screen width AND ≥ 90% of the usable height fills the display;
-        // the character cannot meaningfully sit on its edges.
         if w >= si.width * FULLSCREEN_FRAC && h >= usable_h * FULLSCREEN_FRAC {
             continue;
         }
 
-        result.push(WinInfo { id, x, y, w, h });
+        buf.push(WinInfo { id, x, y, w, h });
     }
+}
 
+/// Returns on-screen windows (layer == 0) that are valid Petit Mates surface
+/// candidates, applying the following filters:
+///
+/// - Own process excluded (PID check)
+/// - `WindowManager`-owned windows excluded (Stage Manager UI, macOS 13+)
+/// - Width < `MIN_WIN_W` or height < `MIN_WIN_H` excluded (thumbnails / tooltips)
+/// - Fullscreen / maximized windows excluded (≥ `FULLSCREEN_FRAC` of screen
+///   width **and** of usable height)
+pub fn list_windows(si: &ScreenInfo) -> Vec<WinInfo> {
+    let mut result = Vec::new();
+    list_windows_into(&mut result, si);
     result
+}
+
+/// Targeted single-window lookup using `kCGWindowListOptionIncludingWindow`.
+///
+/// Returns the `WinInfo` for `win_id` if the window is currently on-screen,
+/// or `None` if it has been closed or moved off-screen.
+///
+/// This call is intended for per-tick rendering updates and is cheaper than a
+/// full `list_windows_into` when only one window's position needs to be
+/// refreshed.
+pub fn host_win_info(win_id: u32) -> Option<WinInfo> {
+    let raw = unsafe {
+        CGWindowListCopyWindowInfo(OPT_INCLUDING_WINDOW, win_id)
+    };
+    if raw.is_null() { return None; }
+    let arr: Retained<NSArray<AnyObject>> =
+        unsafe { Retained::from_raw(raw as *mut NSArray<AnyObject>).unwrap() };
+
+    let k_id     = NSString::from_str("kCGWindowNumber");
+    let k_layer  = NSString::from_str("kCGWindowLayer");
+    let k_bounds = NSString::from_str("kCGWindowBounds");
+
+    for i in 0..arr.count() {
+        let obj: Retained<AnyObject> = arr.objectAtIndex(i);
+        let dict: &NSDictionary<NSString, AnyObject> = unsafe {
+            &*(Retained::as_ptr(&obj) as *const NSDictionary<NSString, AnyObject>)
+        };
+
+        let layer = dict.objectForKey(&k_layer)
+            .and_then(|v| num_i32(&v))
+            .unwrap_or(-1);
+        if layer != 0 { continue; }
+
+        let id = match dict.objectForKey(&k_id).and_then(|v| num_i32(&v)) {
+            Some(v) if v >= 0 => v as u32,
+            _ => continue,
+        };
+        if id != win_id { continue; }
+
+        let bobj = dict.objectForKey(&k_bounds)?;
+        let bd: &NSDictionary<NSString, AnyObject> = unsafe {
+            &*(Retained::as_ptr(&bobj) as *const NSDictionary<NSString, AnyObject>)
+        };
+        if let (Some(x), Some(y), Some(w), Some(h)) = (
+            dict_f64(bd, "X"), dict_f64(bd, "Y"),
+            dict_f64(bd, "Width"), dict_f64(bd, "Height"),
+        ) {
+            return Some(WinInfo { id, x, y, w, h });
+        }
+    }
+    None
 }
 
 /// Look up a window by its CGWindowID.
