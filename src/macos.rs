@@ -74,6 +74,9 @@ struct CharState {
     bubble_state: Option<crate::speech::BubbleState>,
     /// The transparent NSPanel that renders the speech bubble; None when hidden.
     bubble_panel: Option<Retained<NSPanel>>,
+    /// Width of the sprite rendered last tick (scaled display pixels).
+    /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
+    last_sprite_w: f64,
 }
 
 // ---- App-wide state (singletons) ----
@@ -669,6 +672,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         behavior_engine,
         bubble_state: None,
         bubble_panel: None,
+        last_sprite_w: 150.0,
     }
 }
 
@@ -1723,6 +1727,7 @@ fn tick_char(
     let sprite_sz = ch.assets.image(&sr_for_ctx.name, sr_for_ctx.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
+    ch.last_sprite_w = sprite_sz.0;
     let (surface_progress, at_edge, jump_target, attract_target) =
         surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
                         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
@@ -2080,6 +2085,70 @@ fn tick() {
             let mut cfg = ch.config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
             tick_char(ch, &cfg, &si, &wins, mt);
+        }
+
+        // Post-tick: separate resting characters that are too close on the same surface.
+        // Two passes ensure a third character gets nudged correctly even if it started
+        // at the exact same position as the other two.
+        {
+            let n = app.chars.len();
+            for _ in 0..2 {
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let resting_i = matches!(&app.chars[i].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        let resting_j = matches!(&app.chars[j].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        if !resting_i || !resting_j { continue; }
+
+                        // Extract (is_window_top, win_id, position) — copies only, no refs held.
+                        let info_i: Option<(bool, u32, f64)> = match &app.chars[i].surface {
+                            Surface::Desktop { x }               => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let info_j: Option<(bool, u32, f64)> = match &app.chars[j].surface {
+                            Surface::Desktop { x }               => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let (is_win_i, id_i, pos_i) = match info_i { Some(v) => v, None => continue };
+                        let (is_win_j, id_j, pos_j) = match info_j { Some(v) => v, None => continue };
+
+                        if is_win_i != is_win_j || id_i != id_j { continue; }
+
+                        let half_sprite = app.chars[j].config.lock().unwrap().current.display.display_width * 0.5;
+                        let dist = (pos_i - pos_j).abs();
+                        if dist >= half_sprite { continue; }
+
+                        // Nudge char j away from char i by the overlap amount.
+                        let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
+                        // `at_edge` in surface_context fires when pos <= edge_margin + sprite_w/2.
+                        // Use the actual last rendered sprite width (not display_width) because
+                        // sprites can be wider than display_width after scaling (e.g. turtle s-sit).
+                        // edge_margin is 2.0; add 1.0 extra so we stay just outside the zone.
+                        let edge_buf = app.chars[j].last_sprite_w / 2.0 + 3.0;
+                        match &mut app.chars[j].surface {
+                            Surface::Desktop { x } => {
+                                let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
+                                *x = new_x;
+                                app.chars[j].char_pos.0 = new_x;
+                            }
+                            Surface::WindowTop { win_id, x_local } => {
+                                let win_w = wm::find_win(*win_id, &wins)
+                                    .map(|w| w.w)
+                                    .unwrap_or(f64::MAX);
+                                *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
 
         // Speech trigger evaluation.
