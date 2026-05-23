@@ -89,6 +89,60 @@ fn is_dark_mode() -> bool {
 
 // ---- App state ----
 
+// ---- Window-list tiered cache ----
+
+/// Returns the win_id (HWND as u32) of the window this surface is anchored to.
+fn surface_host_win_id(surface: &Surface) -> Option<u32> {
+    match surface {
+        Surface::WindowTop { win_id, .. }
+        | Surface::WindowWall { win_id, .. }
+        | Surface::WindowUpperCorner { win_id, .. }
+        | Surface::WindowBottom { win_id, .. } => Some(*win_id),
+        _ => None,
+    }
+}
+
+/// Reusable window-list buffer with a countdown-based refresh schedule.
+/// See the equivalent struct in `macos.rs` for the full interval rationale.
+struct WinListCache {
+    wins: Vec<WinInfo>,
+    ticks_until_refresh: u32,
+}
+
+impl WinListCache {
+    fn new() -> Self { Self { wins: Vec::new(), ticks_until_refresh: 0 } }
+}
+
+const WIN_CACHE_IMMEDIATE: u32 = 1;
+const WIN_CACHE_HIGH_FREQ: u32 = 15;
+const WIN_CACHE_LOW_FREQ: u32 = 150;
+
+fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f64) -> u32 {
+    use crate::behavior::State;
+    for ch in chars {
+        if matches!(&ch.anim_state, State::Falling { .. } | State::JumpRunup { .. }) {
+            return WIN_CACHE_IMMEDIATE;
+        }
+        if surface_host_win_id(&ch.surface).is_some() {
+            return WIN_CACHE_HIGH_FREQ;
+        }
+    }
+    for ch in chars {
+        if let Surface::Desktop { x } = &ch.surface {
+            for win in wins {
+                let dist_r = win.x - x;
+                let dist_l = x - win.right();
+                if (dist_r >= 0.0 && dist_r < attract_dist)
+                    || (dist_l >= 0.0 && dist_l < attract_dist)
+                {
+                    return WIN_CACHE_HIGH_FREQ;
+                }
+            }
+        }
+    }
+    WIN_CACHE_LOW_FREQ
+}
+
 struct CharState {
     hwnd: HWND,
     assets: Rc<SpriteAssets>,
@@ -113,6 +167,9 @@ struct CharState {
     bubble_state: Option<crate::speech::BubbleState>,
     /// HWND for the speech bubble layered window; null when not created yet.
     bubble_hwnd: HWND,
+    /// Width of the sprite rendered last tick (scaled display pixels).
+    /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
+    last_sprite_w: f64,
 }
 
 struct AppState {
@@ -133,12 +190,17 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: i32,
+    /// Character display size in logical pixels (from user.toml `sprite_size`).
+    /// Single source of truth for physics clamping and collision spacing.
+    sprite_size: f64,
     /// Resolved display language: "ja" or "en".
     lang: String,
     /// Shared weather cache updated by the background weather thread.
     weather: crate::weather::WeatherHandle,
     /// Weather configuration from user.toml (city/coordinates for menu display).
     weather_cfg: crate::user_config::WeatherConfig,
+    /// Reusable window-list cache with tiered refresh schedule.
+    win_cache: WinListCache,
 }
 
 thread_local! {
@@ -746,12 +808,13 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         behavior_engine,
         bubble_state: None,
         bubble_hwnd: ptr::null_mut(),
+        last_sprite_w: 150.0,
     }
 }
 
 // ---- Per-character tick ----
 
-fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo]) {
+fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64) {
     let assets: &SpriteAssets = &ch.assets;
     // While being dragged, skip the state machine and just render at the
     // position set by WM_MOUSEMOVE.
@@ -806,7 +869,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             match &mut ch.surface {
                 Surface::Desktop { x } => {
                     *x += match dir { Dir::Left => -delta, Dir::Right => delta };
-                    let half_w = cfg.display.display_width / 2.0;
+                    let half_w = sprite_size / 2.0;
                     *x = x.clamp(half_w, si.width - half_w);
                     ch.char_pos.0 = *x;
                 }
@@ -930,7 +993,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                     x_local: (foot_x - win.x).clamp(0.0, win.w),
                 })
                 .or_else(|| landed_floor.then(|| {
-                    let half_w = cfg.display.display_width / 2.0;
+                    let half_w = sprite_size / 2.0;
                     Surface::Desktop { x: foot_x.clamp(half_w, si.width - half_w) }
                 }));
 
@@ -971,6 +1034,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
     let sprite_w = assets.size(&sr_for_ctx.name, sr_for_ctx.mirror).0;
+    ch.last_sprite_w = sprite_w;
     let (surface_progress, at_edge, jump_target, attract_target) = surface_context(
         &ch.surface, ch.char_pos, sprite_w, ch.facing,
         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
@@ -1308,8 +1372,38 @@ fn tick_all() {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
 
-        let si   = windows_wm::screen_info();
-        let wins = windows_wm::list_windows(&si);
+        let si = windows_wm::screen_info();
+
+        // Tiered window-list refresh.
+        // Phase 1 — all mutations to win_cache happen here before we borrow wins.
+        if app.win_cache.ticks_until_refresh == 0 {
+            windows_wm::list_windows_into(&mut app.win_cache.wins, &si);
+            let attract_dist = app.chars.first()
+                .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
+                .unwrap_or(600.0);
+            app.win_cache.ticks_until_refresh =
+                next_refresh_interval(&app.chars, &app.win_cache.wins, attract_dist);
+        } else {
+            app.win_cache.ticks_until_refresh -= 1;
+            // Per-tick host-window update via GetWindowRect — essentially free on Windows.
+            for i in 0..app.chars.len() {
+                if let Some(host_id) = surface_host_win_id(&app.chars[i].surface) {
+                    match windows_wm::host_win_info(host_id) {
+                        Some(fresh) => {
+                            if let Some(entry) = app.win_cache.wins.iter_mut().find(|w| w.id == host_id) {
+                                *entry = fresh;
+                            }
+                        }
+                        None => {
+                            app.win_cache.wins.retain(|w| w.id != host_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2 — tick each character using the (now stable) win_cache.
+        let wins: &[WinInfo] = &app.win_cache.wins;
 
         let n = app.chars.len();
         for i in 0..n {
@@ -1317,7 +1411,63 @@ fn tick_all() {
             app.chars[i].behavior_engine.reload_personality_if_changed();
             let mut cfg = app.chars[i].config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, app.chars[i].behavior_engine.personality());
-            tick_char(&mut app.chars[i], &cfg, &si, &wins);
+            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size);
+        }
+
+        // Post-tick: separate resting characters that are too close on the same surface.
+        {
+            let n = app.chars.len();
+            for _ in 0..2 {
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let resting_i = matches!(&app.chars[i].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        let resting_j = matches!(&app.chars[j].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        if !resting_i || !resting_j { continue; }
+
+                        let info_i: Option<(bool, u32, f64)> = match &app.chars[i].surface {
+                            Surface::Desktop { x }                 => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let info_j: Option<(bool, u32, f64)> = match &app.chars[j].surface {
+                            Surface::Desktop { x }                 => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let (is_win_i, id_i, pos_i) = match info_i { Some(v) => v, None => continue };
+                        let (is_win_j, id_j, pos_j) = match info_j { Some(v) => v, None => continue };
+
+                        if is_win_i != is_win_j || id_i != id_j { continue; }
+
+                        let half_sprite = app.sprite_size * 0.5;
+                        let dist = (pos_i - pos_j).abs();
+                        if dist >= half_sprite { continue; }
+
+                        let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
+                        let edge_buf = app.chars[j].last_sprite_w / 2.0 + 3.0;
+                        match &mut app.chars[j].surface {
+                            Surface::Desktop { x } => {
+                                let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
+                                *x = new_x;
+                                app.chars[j].char_pos.0 = new_x;
+                            }
+                            Surface::WindowTop { win_id, x_local } => {
+                                let win_w = windows_wm::find_win(*win_id, &wins)
+                                    .map(|w| w.w)
+                                    .unwrap_or(f64::MAX);
+                                *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
 
         // Speech trigger evaluation.
@@ -2037,10 +2187,12 @@ pub fn run() {
                 speech_cfg: user_cfg.speech,
                 speech_tick: Instant::now(),
                 font_size: user_cfg.display.font_size as i32,
+                sprite_size: user_cfg.display.sprite_size as f64,
                 lang: user_cfg.display.language.clone()
                     .unwrap_or_else(detect_system_language),
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
+                win_cache: WinListCache::new(),
             });
         });
 

@@ -65,7 +65,7 @@ corner_jump_dist    = 300.0
 [jump]
 gravity               = 0.6
 runup_duration        = 0.3
-wall_jump_max_dist    = 80.0
+wall_jump_max_dist    = 150.0
 wall_jump_floor_margin = 150.0
 climb_attract_dist    = 600.0
 air_speed             = 350.0
@@ -73,5 +73,4 @@ min_jump_vy           = 200.0
 
 # ---- Display ----
 [display]
-display_width = 150.0
 hover_alpha   = 0.25

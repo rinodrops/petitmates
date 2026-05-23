@@ -13,8 +13,9 @@ use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, ClassType, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBezierPath,
-    NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSMenu, NSMenuDelegate,
-    NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSImageView, NSMenu,
+    NSMenuDelegate, NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint,
@@ -51,10 +52,87 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
     }
 }
 
+// ---- Window-list tiered cache ----
+
+/// Reusable window-list buffer with a countdown-based refresh schedule.
+///
+/// The refresh interval is set after each full enumeration based on how close
+/// any character is to a window:
+///
+/// - **IMMEDIATE** (1 tick): any character is in a dynamic state
+///   (Falling, JumpRunup) — need fresh surface data every tick.
+/// - **HIGH_FREQ** (15 ticks ≈ 1.5 s): a character is on a window surface
+///   or within `attract_dist` of one — keep data reasonably fresh while
+///   window dragging / scrolling occurs.
+/// - **LOW_FREQ** (150 ticks ≈ 15 s): all characters are on the Desktop
+///   with no windows nearby — window positions rarely change in this state.
+struct WinListCache {
+    wins: Vec<WinInfo>,
+    /// Remaining ticks before the next full enumeration.
+    ticks_until_refresh: u32,
+}
+
+impl WinListCache {
+    fn new() -> Self {
+        Self { wins: Vec::new(), ticks_until_refresh: 0 }
+    }
+}
+
+const WIN_CACHE_IMMEDIATE: u32 = 1;
+const WIN_CACHE_HIGH_FREQ: u32 = 15;
+const WIN_CACHE_LOW_FREQ: u32 = 150;
+
+/// Determines the next refresh interval based on character states and
+/// proximity to windows.
+fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f64) -> u32 {
+    use crate::behavior::State;
+    for ch in chars {
+        // Dynamic states require a fresh window list every tick.
+        if matches!(&ch.anim_state, State::Falling { .. } | State::JumpRunup { .. }) {
+            return WIN_CACHE_IMMEDIATE;
+        }
+        // Characters on a window surface need high-frequency refresh so that
+        // the rendered position tracks window movement within ~1.5 s.
+        if surface_host_win_id(&ch.surface).is_some() {
+            return WIN_CACHE_HIGH_FREQ;
+        }
+    }
+    // Desktop characters: check proximity to any window.
+    for ch in chars {
+        if let Surface::Desktop { x } = &ch.surface {
+            for win in wins {
+                let dist_r = win.x - x;
+                let dist_l = x - win.right();
+                if (dist_r >= 0.0 && dist_r < attract_dist)
+                    || (dist_l >= 0.0 && dist_l < attract_dist)
+                {
+                    return WIN_CACHE_HIGH_FREQ;
+                }
+            }
+        }
+    }
+    WIN_CACHE_LOW_FREQ
+}
+
 // ---- Per-character state ----
+
+/// Snapshot of the values that were passed to Cocoa last tick.
+/// Used to skip redundant `swap_sprite` / `setFrameOrigin` / `orderWindow` calls.
+#[derive(PartialEq)]
+struct RenderedState {
+    sprite_name: String,
+    mirror:      bool,
+    origin:      (f64, f64),
+    y_offset:    f64,
+    z_host_id:   Option<u32>,
+}
 
 struct CharState {
     panel: Retained<NSPanel>,
+    /// NSImageView reused for all sprite swaps — only `setImage:` is called per
+    /// frame change; `setContentSize` + `setFrameSize` fire only on size change
+    /// (state transitions, not within an animation loop).
+    image_view: Retained<NSImageView>,
     assets: Rc<SpriteAssets>,
     config: SharedConfig,
     behavior: Box<dyn BehaviorScript>,
@@ -62,6 +140,8 @@ struct CharState {
     facing: Dir,
     surface: Surface,
     /// Character position in CG coordinates (origin = screen top-left, Y down).
+    /// Used ONLY for Airborne free-flight physics. For the last rendered
+    /// position use `last_screen_pos`.
     char_pos: (f64, f64),
     last_tick: Instant,
     /// Mouse offset from panel origin in NS coords when dragging; None otherwise.
@@ -74,6 +154,17 @@ struct CharState {
     bubble_state: Option<crate::speech::BubbleState>,
     /// The transparent NSPanel that renders the speech bubble; None when hidden.
     bubble_panel: Option<Retained<NSPanel>>,
+    /// Width of the sprite rendered last tick (scaled display pixels).
+    /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
+    last_sprite_w: f64,
+    /// Size of the panel / NSImageView as last sent to Cocoa (width, height).
+    /// Cached to avoid redundant `setContentSize` + `setFrameSize` calls.
+    last_panel_sz: (f64, f64),
+    /// Last rendered sprite top-left in CG coordinates (origin = screen top-left, Y down).
+    /// Updated every tick (all surfaces). Used for surface-lost fallback and jump trajectory.
+    last_screen_pos: (f64, f64),
+    /// Snapshot of what was last sent to Cocoa. None on first tick → forces full render.
+    last_rendered: Option<RenderedState>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -101,12 +192,17 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: f64,
+    /// Character display size in logical pixels (from user.toml `sprite_size`).
+    /// Single source of truth for physics clamping and collision spacing.
+    sprite_size: f64,
     /// Resolved display language: "ja" or "en".
     lang: String,
     /// Shared weather cache updated by the background weather thread.
     weather: crate::weather::WeatherHandle,
     /// Weather configuration from user.toml (city/coordinates for menu display).
     weather_cfg: crate::user_config::WeatherConfig,
+    /// Reusable window-list cache with tiered refresh schedule.
+    win_cache: WinListCache,
 }
 
 thread_local! {
@@ -135,46 +231,57 @@ fn detect_system_language() -> String {
     "en".to_owned()
 }
 
-fn make_panel(image: &NSImage, mt: MainThreadMarker) -> Retained<NSPanel> {
-    let sz = unsafe { image.size() };
-    unsafe {
-        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+fn make_char_panel(
+    init_img: &NSImage,
+    mt: MainThreadMarker,
+) -> (Retained<NSPanel>, Retained<NSImageView>) {
+    let iv = make_image_view(init_img, mt);
+    let sz = unsafe { init_img.size() };
+    let panel = unsafe {
+        let p = NSPanel::initWithContentRect_styleMask_backing_defer(
             NSPanel::alloc(mt),
             NSRect::new(NSPoint::ZERO, sz),
             NSWindowStyleMask::from_bits_retain(128), // Borderless | NonactivatingPanel
             NSBackingStoreType::Buffered,
             false,
         );
-        panel.setBackgroundColor(Some(&NSColor::clearColor()));
-        panel.setOpaque(false);
-        panel.setHasShadow(false);
-        panel.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
-        panel.setCollectionBehavior(
+        p.setBackgroundColor(Some(&NSColor::clearColor()));
+        p.setOpaque(false);
+        p.setHasShadow(false);
+        p.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
+        p.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
-        panel.setIgnoresMouseEvents(true);
-        panel.setAlphaValue(1.0);
-        panel.setContentView(Some(&*make_image_view(image, mt)));
-        panel
-    }
+        p.setIgnoresMouseEvents(true);
+        p.setAlphaValue(1.0);
+        p.setContentView(Some(&*iv));
+        p
+    };
+    (panel, iv)
 }
 
-/// Replace the panel's content with a new sprite.
+/// Update the sprite shown in the character's reusable NSImageView.
+/// `setImage:` fires on every sprite change. `setContentSize` and `setFrameSize`
+/// fire only when the sprite dimensions change (state transitions, not frame loops).
 fn swap_sprite(
+    image_view: &NSImageView,
     panel: &NSPanel,
     assets: &SpriteAssets,
     name: &str,
     mirror: bool,
-    mt: MainThreadMarker,
+    last_sz: &mut (f64, f64),
 ) {
     if let Some(img) = assets.image(name, mirror) {
-        let sz = unsafe { img.size() };
-        unsafe {
-            // Resize panel BEFORE setting content view so NSImageView
-            // does not autoresize to the old panel dimensions.
-            panel.setContentSize(sz);
-            panel.setContentView(Some(&*make_image_view(img, mt)));
+        let new_sz = unsafe { img.size() };
+        unsafe { image_view.setImage(Some(img)); }
+        let new_sz_pair = (new_sz.width, new_sz.height);
+        if new_sz_pair != *last_sz {
+            unsafe {
+                panel.setContentSize(new_sz);
+                let _: () = msg_send![image_view, setFrameSize: new_sz];
+            }
+            *last_sz = new_sz_pair;
         }
     }
 }
@@ -636,10 +743,10 @@ fn airborne_snap_target(
 fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
     let (start_cx, start_cy) = startup_drop(si, &assets);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
-    let panel = make_panel(init_img, mt);
-    let sz = unsafe { init_img.size() };
+    let (panel, image_view) = make_char_panel(init_img, mt);
+    let init_sz = unsafe { init_img.size() };
     unsafe {
-        panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
+        panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - init_sz.height));
         panel.orderFront(None);
     }
     let behavior_engine = {
@@ -651,6 +758,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         panel,
+        image_view,
         assets,
         config,
         behavior: if demo {
@@ -669,6 +777,10 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         behavior_engine,
         bubble_state: None,
         bubble_panel: None,
+        last_sprite_w: 150.0,
+        last_panel_sz: (init_sz.width, init_sz.height),
+        last_screen_pos: (start_cx, start_cy),
+        last_rendered: None,
     }
 }
 
@@ -1315,7 +1427,6 @@ fn surface_to_ns_origin(
 /// `corner_attract_dist` — detection radius for corner-to-window jump (corner_jump_dist).
 fn surface_context(
     surface: &Surface,
-    char_pos: (f64, f64),
     sprite_w: f64,
     facing: Dir,
     jump_max_dist: f64,
@@ -1377,7 +1488,7 @@ fn surface_context(
         }
         Surface::Desktop { x } => {
             let progress = (x / si.width).clamp(0.0, 1.0);
-            let (cx, _) = char_pos;
+            let cx = *x;
             let floor_y = si.floor_y();
             // jump_target: only in current walking direction, within jump_max_dist.
             let jump_target = wins.iter().find_map(|win| {
@@ -1442,6 +1553,7 @@ fn tick_char(
     si: &ScreenInfo,
     wins: &[WinInfo],
     mt: MainThreadMarker,
+    sprite_size: f64,
 ) {
     // While dragging, skip physics and state machine — panel position is
     // updated directly by the drag event monitor.
@@ -1476,9 +1588,9 @@ fn tick_char(
 
         // Reposition char_pos so the falling sprite appears centered on the
         // same screen point as the sprite that was just visible.
-        // char_pos (kept in sync each tick) is the CG top-left of the
-        // current sprite; compute its center, then derive the new top-left
-        // for the falling sprite so it shares that center.
+        // last_screen_pos is the CG top-left of the last rendered sprite;
+        // compute its center, then derive the new top-left for the falling
+        // sprite so it shares that center.
         {
             let sr_cur = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
             let sr_new = sprite_for_state(&fallback, ch.facing, &ch.assets.animations);
@@ -1488,8 +1600,8 @@ fn tick_char(
             ) {
                 let cur_sz = unsafe { img_cur.size() };
                 let new_sz = unsafe { img_new.size() };
-                let center_cx = ch.char_pos.0 + cur_sz.width  / 2.0;
-                let center_cy = ch.char_pos.1 + cur_sz.height / 2.0;
+                let center_cx = ch.last_screen_pos.0 + cur_sz.width  / 2.0;
+                let center_cy = ch.last_screen_pos.1 + cur_sz.height / 2.0;
                 ch.char_pos = (
                     center_cx - new_sz.width  / 2.0,
                     center_cy - new_sz.height / 2.0,
@@ -1526,9 +1638,8 @@ fn tick_char(
                 Surface::Desktop { x } => {
                     *x += match dir { Dir::Left => -delta, Dir::Right => delta };
                     // Clamp so the character never walks off the visible screen area.
-                    let half_w = cfg.display.display_width / 2.0;
+                    let half_w = sprite_size / 2.0;
                     *x = x.clamp(half_w, si.width - half_w);
-                    ch.char_pos.0 = *x;
                 }
                 Surface::WindowTop { x_local, .. }
                 | Surface::WindowBottom { x_local, .. } => {
@@ -1668,7 +1779,7 @@ fn tick_char(
                     x_local: (foot_x - win.x).clamp(0.0, win.w),
                 })
                 .or_else(|| landed_floor.then(|| {
-                let half_w = cfg.display.display_width / 2.0;
+                let half_w = sprite_size / 2.0;
                 let clamped_x = foot_x.clamp(half_w, si.width - half_w);
                 Surface::Desktop { x: clamped_x }
             }));
@@ -1723,8 +1834,9 @@ fn tick_char(
     let sprite_sz = ch.assets.image(&sr_for_ctx.name, sr_for_ctx.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
+    ch.last_sprite_w = sprite_sz.0;
     let (surface_progress, at_edge, jump_target, attract_target) =
-        surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
+        surface_context(&ch.surface, sprite_sz.0, ch.facing,
                         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
                         cfg.jump.climb_attract_dist, cfg.corner.corner_jump_dist, wins, si);
 
@@ -1802,10 +1914,10 @@ fn tick_char(
                             let side = *target_side;
                             let lm   = *landing_mode;
                             let (target_cx, target_cy) = airborne_snap_target(
-                                &win, side, lm, &ch.assets, ch.char_pos.1,
+                                &win, side, lm, &ch.assets, ch.last_screen_pos.1,
                             );
-                            let dx = target_cx - ch.char_pos.0;
-                            let dy = target_cy - ch.char_pos.1;
+                            let dx = target_cx - ch.last_screen_pos.0;
+                            let dy = target_cy - ch.last_screen_pos.1;
                             let g  = cfg.jump.gravity * 60.0;
                             let t  = dx.abs().max(1.0) / cfg.jump.air_speed;
                             let vx = dx / t;
@@ -1879,7 +1991,7 @@ fn tick_char(
                                 }
                                 LandingMode::ClimbFromCurrent => {
                                     // Snap to the character's current Y projected onto the target wall.
-                                    let cur_y = ch.char_pos.1;
+                                    let cur_y = ch.last_screen_pos.1;
                                     let y_local = (cur_y - win.y).clamp(hang_h / 2.0, win.h - 4.0);
                                     ch.char_pos.0 = match side {
                                         Side::Right => win.right() - stand_w,
@@ -1992,43 +2104,59 @@ fn tick_char(
         }
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
-    swap_sprite(&ch.panel, &ch.assets, &sr.name, sr.mirror, mt);
+    // ---- Rendering: skip Cocoa calls that are identical to last tick ----
 
-    // Move panel to surface-derived NS origin.
     let anchor = ch.assets.anchor(&sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
     let stand_anchor_y = ch.assets.anchor("s-stand").map(|a| a.y).unwrap_or(0.0);
     let sz = ch.assets.image(&sr.name, sr.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
-    let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
+    let origin   = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
     let y_offset = vertical_offset(&ch.anim_state, &ch.assets.animations);
-    unsafe { ch.panel.setFrameOrigin(NSPoint::new(origin.x, origin.y + y_offset)) };
+    let z_host   = surface_host_win_id(&ch.surface).or_else(|| {
+        match &ch.anim_state {
+            State::JumpRunup { target_win_id, .. } |
+            State::Airborne  { target_win_id, .. } => Some(*target_win_id),
+            _ => None,
+        }
+    });
 
-    // Keep char_pos in sync with the rendered panel position so that when a
-    // window surface is lost the character starts falling from the correct
-    // location rather than from the stale position of its last airborne state.
-    if !matches!(ch.surface, Surface::Airborne) {
-        ch.char_pos = (origin.x, si.height - origin.y - sz.1);
+    let prev = ch.last_rendered.as_ref();
+
+    // Sprite: only swap when name or mirror changed.
+    if prev.map_or(true, |p| p.sprite_name != sr.name || p.mirror != sr.mirror) {
+        swap_sprite(&ch.image_view, &ch.panel, &ch.assets, &sr.name, sr.mirror, &mut ch.last_panel_sz);
     }
 
-    // Z-order: place the panel just above its host window so windows in front
-    // of the host naturally occlude the character.
-    unsafe {
-        let z_host = surface_host_win_id(&ch.surface).or_else(|| {
-            match &ch.anim_state {
-                State::JumpRunup { target_win_id, .. } |
-                State::Airborne  { target_win_id, .. } => Some(*target_win_id),
-                _ => None,
+    // Position: only move when origin or vertical-offset changed.
+    if prev.map_or(true, |p| p.origin != (origin.x, origin.y) || p.y_offset != y_offset) {
+        unsafe { ch.panel.setFrameOrigin(NSPoint::new(origin.x, origin.y + y_offset)) };
+    }
+
+    // Record the rendered position so surface-lost and jump-launch code can
+    // read back where the character actually was last tick.
+    ch.last_screen_pos = (origin.x, si.height - origin.y - sz.1);
+
+    // Z-order: only reorder when the host window changed.
+    if prev.map_or(true, |p| p.z_host_id != z_host) {
+        unsafe {
+            if let Some(wid) = z_host {
+                // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
+                let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
+            } else {
+                // Desktop (not jumping): bring to front within the normal level.
+                ch.panel.orderFront(None);
             }
-        });
-        if let Some(wid) = z_host {
-            // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
-            let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
-        } else {
-            // Desktop (not jumping): bring to front within the normal level.
-            ch.panel.orderFront(None);
         }
     }
+
+    ch.last_rendered = Some(RenderedState {
+        sprite_name: sr.name.to_owned(),
+        mirror:      sr.mirror,
+        origin:      (origin.x, origin.y),
+        y_offset,
+        z_host_id:   z_host,
+    });
 
     // Hover alpha.
     update_hover_alpha(&ch.panel, cfg, false);
@@ -2068,18 +2196,115 @@ fn tick() {
         let Some(app) = b.as_mut() else { return };
         let mt = unsafe { MainThreadMarker::new_unchecked() };
 
-        // Compute screen info and window list once for all characters.
+        // Compute screen info once for all characters.
         let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
         });
-        let wins = wm::list_windows(&si);
+
+        // Tiered window-list refresh.
+        // Phase 1 — all mutations to win_cache happen here before we borrow wins.
+        if app.win_cache.ticks_until_refresh == 0 {
+            wm::list_windows_into(&mut app.win_cache.wins, &si);
+            let attract_dist = app.chars.first()
+                .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
+                .unwrap_or(600.0);
+            app.win_cache.ticks_until_refresh =
+                next_refresh_interval(&app.chars, &app.win_cache.wins, attract_dist);
+        } else {
+            app.win_cache.ticks_until_refresh -= 1;
+            // Per-tick host-window update: refresh the cached entry for each
+            // character's host window so rendering tracks window movement within
+            // the high-frequency interval.
+            for i in 0..app.chars.len() {
+                if let Some(host_id) = surface_host_win_id(&app.chars[i].surface) {
+                    match wm::host_win_info(host_id) {
+                        Some(fresh) => {
+                            if let Some(entry) = app.win_cache.wins.iter_mut().find(|w| w.id == host_id) {
+                                *entry = fresh;
+                            }
+                        }
+                        None => {
+                            // Window gone — evict so surface_still_valid fires this tick.
+                            app.win_cache.wins.retain(|w| w.id != host_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2 — tick each character using the (now stable) win_cache.
+        // wins borrows win_cache; chars is a separate field so split-borrow is safe.
+        let wins: &[WinInfo] = &app.win_cache.wins;
 
         for ch in &mut app.chars {
             ch.config.lock().unwrap().reload_if_changed();
             ch.behavior_engine.reload_personality_if_changed();
             let mut cfg = ch.config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
-            tick_char(ch, &cfg, &si, &wins, mt);
+            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size);
+        }
+
+        // Post-tick: separate resting characters that are too close on the same surface.
+        // Two passes ensure a third character gets nudged correctly even if it started
+        // at the exact same position as the other two.
+        {
+            let n = app.chars.len();
+            for _ in 0..2 {
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let resting_i = matches!(&app.chars[i].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        let resting_j = matches!(&app.chars[j].anim_state,
+                            State::SitIdle { .. } | State::LieIdle { .. } |
+                            State::Sleeping { .. } | State::CornerRest { .. }
+                        );
+                        if !resting_i || !resting_j { continue; }
+
+                        // Extract (is_window_top, win_id, position) — copies only, no refs held.
+                        let info_i: Option<(bool, u32, f64)> = match &app.chars[i].surface {
+                            Surface::Desktop { x }               => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let info_j: Option<(bool, u32, f64)> = match &app.chars[j].surface {
+                            Surface::Desktop { x }               => Some((false, 0, *x)),
+                            Surface::WindowTop { win_id, x_local } => Some((true, *win_id, *x_local)),
+                            _ => None,
+                        };
+                        let (is_win_i, id_i, pos_i) = match info_i { Some(v) => v, None => continue };
+                        let (is_win_j, id_j, pos_j) = match info_j { Some(v) => v, None => continue };
+
+                        if is_win_i != is_win_j || id_i != id_j { continue; }
+
+                        let half_sprite = app.sprite_size * 0.5;
+                        let dist = (pos_i - pos_j).abs();
+                        if dist >= half_sprite { continue; }
+
+                        // Nudge char j away from char i by the overlap amount.
+                        let nudge = if pos_j >= pos_i { half_sprite - dist } else { -(half_sprite - dist) };
+                        // `at_edge` in surface_context fires when pos <= edge_margin + sprite_w/2.
+                        // Use the actual last rendered sprite width (not display_width) because
+                        // sprites can be wider than display_width after scaling (e.g. turtle s-sit).
+                        // edge_margin is 2.0; add 1.0 extra so we stay just outside the zone.
+                        let edge_buf = app.chars[j].last_sprite_w / 2.0 + 3.0;
+                        match &mut app.chars[j].surface {
+                            Surface::Desktop { x } => {
+                                let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
+                                *x = new_x;
+                            }
+                            Surface::WindowTop { win_id, x_local } => {
+                                let win_w = wm::find_win(*win_id, &wins)
+                                    .map(|w| w.w)
+                                    .unwrap_or(f64::MAX);
+                                *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
 
         // Speech trigger evaluation.
@@ -2306,9 +2531,11 @@ pub fn run() {
             speech_cfg: user_cfg.speech,
             speech_tick: Instant::now(),
             font_size: user_cfg.display.font_size as f64,
+            sprite_size: user_cfg.display.sprite_size as f64,
             lang: lang,
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
+            win_cache: WinListCache::new(),
         });
     });
 
