@@ -13,8 +13,9 @@ use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, ClassType, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBezierPath,
-    NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSMenu, NSMenuDelegate,
-    NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSImageView, NSMenu,
+    NSMenuDelegate, NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSBundle, NSObject, NSObjectProtocol, NSPoint,
@@ -128,6 +129,10 @@ struct RenderedState {
 
 struct CharState {
     panel: Retained<NSPanel>,
+    /// NSImageView reused for all sprite swaps — only `setImage:` is called per
+    /// frame change; `setContentSize` + `setFrameSize` fire only on size change
+    /// (state transitions, not within an animation loop).
+    image_view: Retained<NSImageView>,
     assets: Rc<SpriteAssets>,
     config: SharedConfig,
     behavior: Box<dyn BehaviorScript>,
@@ -152,6 +157,9 @@ struct CharState {
     /// Width of the sprite rendered last tick (scaled display pixels).
     /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
     last_sprite_w: f64,
+    /// Size of the panel / NSImageView as last sent to Cocoa (width, height).
+    /// Cached to avoid redundant `setContentSize` + `setFrameSize` calls.
+    last_panel_sz: (f64, f64),
     /// Last rendered sprite top-left in CG coordinates (origin = screen top-left, Y down).
     /// Updated every tick (all surfaces). Used for surface-lost fallback and jump trajectory.
     last_screen_pos: (f64, f64),
@@ -220,46 +228,57 @@ fn detect_system_language() -> String {
     "en".to_owned()
 }
 
-fn make_panel(image: &NSImage, mt: MainThreadMarker) -> Retained<NSPanel> {
-    let sz = unsafe { image.size() };
-    unsafe {
-        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+fn make_char_panel(
+    init_img: &NSImage,
+    mt: MainThreadMarker,
+) -> (Retained<NSPanel>, Retained<NSImageView>) {
+    let iv = make_image_view(init_img, mt);
+    let sz = unsafe { init_img.size() };
+    let panel = unsafe {
+        let p = NSPanel::initWithContentRect_styleMask_backing_defer(
             NSPanel::alloc(mt),
             NSRect::new(NSPoint::ZERO, sz),
             NSWindowStyleMask::from_bits_retain(128), // Borderless | NonactivatingPanel
             NSBackingStoreType::Buffered,
             false,
         );
-        panel.setBackgroundColor(Some(&NSColor::clearColor()));
-        panel.setOpaque(false);
-        panel.setHasShadow(false);
-        panel.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
-        panel.setCollectionBehavior(
+        p.setBackgroundColor(Some(&NSColor::clearColor()));
+        p.setOpaque(false);
+        p.setHasShadow(false);
+        p.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
+        p.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
-        panel.setIgnoresMouseEvents(true);
-        panel.setAlphaValue(1.0);
-        panel.setContentView(Some(&*make_image_view(image, mt)));
-        panel
-    }
+        p.setIgnoresMouseEvents(true);
+        p.setAlphaValue(1.0);
+        p.setContentView(Some(&*iv));
+        p
+    };
+    (panel, iv)
 }
 
-/// Replace the panel's content with a new sprite.
+/// Update the sprite shown in the character's reusable NSImageView.
+/// `setImage:` fires on every sprite change. `setContentSize` and `setFrameSize`
+/// fire only when the sprite dimensions change (state transitions, not frame loops).
 fn swap_sprite(
+    image_view: &NSImageView,
     panel: &NSPanel,
     assets: &SpriteAssets,
     name: &str,
     mirror: bool,
-    mt: MainThreadMarker,
+    last_sz: &mut (f64, f64),
 ) {
     if let Some(img) = assets.image(name, mirror) {
-        let sz = unsafe { img.size() };
-        unsafe {
-            // Resize panel BEFORE setting content view so NSImageView
-            // does not autoresize to the old panel dimensions.
-            panel.setContentSize(sz);
-            panel.setContentView(Some(&*make_image_view(img, mt)));
+        let new_sz = unsafe { img.size() };
+        unsafe { image_view.setImage(Some(img)); }
+        let new_sz_pair = (new_sz.width, new_sz.height);
+        if new_sz_pair != *last_sz {
+            unsafe {
+                panel.setContentSize(new_sz);
+                let _: () = msg_send![image_view, setFrameSize: new_sz];
+            }
+            *last_sz = new_sz_pair;
         }
     }
 }
@@ -721,10 +740,10 @@ fn airborne_snap_target(
 fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
     let (start_cx, start_cy) = startup_drop(si, &assets);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
-    let panel = make_panel(init_img, mt);
-    let sz = unsafe { init_img.size() };
+    let (panel, image_view) = make_char_panel(init_img, mt);
+    let init_sz = unsafe { init_img.size() };
     unsafe {
-        panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - sz.height));
+        panel.setFrameOrigin(NSPoint::new(start_cx, si.height - start_cy - init_sz.height));
         panel.orderFront(None);
     }
     let behavior_engine = {
@@ -736,6 +755,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
     CharState {
         panel,
+        image_view,
         assets,
         config,
         behavior: if demo {
@@ -755,6 +775,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         bubble_state: None,
         bubble_panel: None,
         last_sprite_w: 150.0,
+        last_panel_sz: (init_sz.width, init_sz.height),
         last_screen_pos: (start_cx, start_cy),
         last_rendered: None,
     }
@@ -2100,7 +2121,7 @@ fn tick_char(
 
     // Sprite: only swap when name or mirror changed.
     if prev.map_or(true, |p| p.sprite_name != sr.name || p.mirror != sr.mirror) {
-        swap_sprite(&ch.panel, &ch.assets, &sr.name, sr.mirror, mt);
+        swap_sprite(&ch.image_view, &ch.panel, &ch.assets, &sr.name, sr.mirror, &mut ch.last_panel_sz);
     }
 
     // Position: only move when origin or vertical-offset changed.
