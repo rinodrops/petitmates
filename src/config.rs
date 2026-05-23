@@ -272,8 +272,6 @@ impl Default for JumpConfig {
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct DisplayConfig {
-    /// Display width of the character in logical pixels.
-    pub display_width: f64,
     /// Alpha when mouse is over the character.
     pub hover_alpha: f64,
 }
@@ -281,7 +279,6 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            display_width: 150.0,
             hover_alpha: 0.25,
         }
     }

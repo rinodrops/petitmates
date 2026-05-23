@@ -192,6 +192,9 @@ struct AppState {
     speech_tick: Instant,
     /// Font size for speech bubbles (from user.toml).
     font_size: f64,
+    /// Character display size in logical pixels (from user.toml `sprite_size`).
+    /// Single source of truth for physics clamping and collision spacing.
+    sprite_size: f64,
     /// Resolved display language: "ja" or "en".
     lang: String,
     /// Shared weather cache updated by the background weather thread.
@@ -1550,6 +1553,7 @@ fn tick_char(
     si: &ScreenInfo,
     wins: &[WinInfo],
     mt: MainThreadMarker,
+    sprite_size: f64,
 ) {
     // While dragging, skip physics and state machine — panel position is
     // updated directly by the drag event monitor.
@@ -1634,7 +1638,7 @@ fn tick_char(
                 Surface::Desktop { x } => {
                     *x += match dir { Dir::Left => -delta, Dir::Right => delta };
                     // Clamp so the character never walks off the visible screen area.
-                    let half_w = cfg.display.display_width / 2.0;
+                    let half_w = sprite_size / 2.0;
                     *x = x.clamp(half_w, si.width - half_w);
                 }
                 Surface::WindowTop { x_local, .. }
@@ -1775,7 +1779,7 @@ fn tick_char(
                     x_local: (foot_x - win.x).clamp(0.0, win.w),
                 })
                 .or_else(|| landed_floor.then(|| {
-                let half_w = cfg.display.display_width / 2.0;
+                let half_w = sprite_size / 2.0;
                 let clamped_x = foot_x.clamp(half_w, si.width - half_w);
                 Surface::Desktop { x: clamped_x }
             }));
@@ -2237,7 +2241,7 @@ fn tick() {
             ch.behavior_engine.reload_personality_if_changed();
             let mut cfg = ch.config.lock().unwrap().current.clone();
             crate::config::apply_personality(&mut cfg, ch.behavior_engine.personality());
-            tick_char(ch, &cfg, &si, wins, mt);
+            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -2274,7 +2278,7 @@ fn tick() {
 
                         if is_win_i != is_win_j || id_i != id_j { continue; }
 
-                        let half_sprite = app.chars[j].config.lock().unwrap().current.display.display_width * 0.5;
+                        let half_sprite = app.sprite_size * 0.5;
                         let dist = (pos_i - pos_j).abs();
                         if dist >= half_sprite { continue; }
 
@@ -2527,6 +2531,7 @@ pub fn run() {
             speech_cfg: user_cfg.speech,
             speech_tick: Instant::now(),
             font_size: user_cfg.display.font_size as f64,
+            sprite_size: user_cfg.display.sprite_size as f64,
             lang: lang,
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
