@@ -62,6 +62,8 @@ struct CharState {
     facing: Dir,
     surface: Surface,
     /// Character position in CG coordinates (origin = screen top-left, Y down).
+    /// Used ONLY for Airborne free-flight physics. For the last rendered
+    /// position use `last_screen_pos`.
     char_pos: (f64, f64),
     last_tick: Instant,
     /// Mouse offset from panel origin in NS coords when dragging; None otherwise.
@@ -77,6 +79,9 @@ struct CharState {
     /// Width of the sprite rendered last tick (scaled display pixels).
     /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
     last_sprite_w: f64,
+    /// Last rendered sprite top-left in CG coordinates (origin = screen top-left, Y down).
+    /// Updated every tick (all surfaces). Used for surface-lost fallback and jump trajectory.
+    last_screen_pos: (f64, f64),
 }
 
 // ---- App-wide state (singletons) ----
@@ -673,6 +678,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         bubble_state: None,
         bubble_panel: None,
         last_sprite_w: 150.0,
+        last_screen_pos: (start_cx, start_cy),
     }
 }
 
@@ -1319,7 +1325,6 @@ fn surface_to_ns_origin(
 /// `corner_attract_dist` — detection radius for corner-to-window jump (corner_jump_dist).
 fn surface_context(
     surface: &Surface,
-    char_pos: (f64, f64),
     sprite_w: f64,
     facing: Dir,
     jump_max_dist: f64,
@@ -1381,7 +1386,7 @@ fn surface_context(
         }
         Surface::Desktop { x } => {
             let progress = (x / si.width).clamp(0.0, 1.0);
-            let (cx, _) = char_pos;
+            let cx = *x;
             let floor_y = si.floor_y();
             // jump_target: only in current walking direction, within jump_max_dist.
             let jump_target = wins.iter().find_map(|win| {
@@ -1480,9 +1485,9 @@ fn tick_char(
 
         // Reposition char_pos so the falling sprite appears centered on the
         // same screen point as the sprite that was just visible.
-        // char_pos (kept in sync each tick) is the CG top-left of the
-        // current sprite; compute its center, then derive the new top-left
-        // for the falling sprite so it shares that center.
+        // last_screen_pos is the CG top-left of the last rendered sprite;
+        // compute its center, then derive the new top-left for the falling
+        // sprite so it shares that center.
         {
             let sr_cur = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
             let sr_new = sprite_for_state(&fallback, ch.facing, &ch.assets.animations);
@@ -1492,8 +1497,8 @@ fn tick_char(
             ) {
                 let cur_sz = unsafe { img_cur.size() };
                 let new_sz = unsafe { img_new.size() };
-                let center_cx = ch.char_pos.0 + cur_sz.width  / 2.0;
-                let center_cy = ch.char_pos.1 + cur_sz.height / 2.0;
+                let center_cx = ch.last_screen_pos.0 + cur_sz.width  / 2.0;
+                let center_cy = ch.last_screen_pos.1 + cur_sz.height / 2.0;
                 ch.char_pos = (
                     center_cx - new_sz.width  / 2.0,
                     center_cy - new_sz.height / 2.0,
@@ -1532,7 +1537,6 @@ fn tick_char(
                     // Clamp so the character never walks off the visible screen area.
                     let half_w = cfg.display.display_width / 2.0;
                     *x = x.clamp(half_w, si.width - half_w);
-                    ch.char_pos.0 = *x;
                 }
                 Surface::WindowTop { x_local, .. }
                 | Surface::WindowBottom { x_local, .. } => {
@@ -1729,7 +1733,7 @@ fn tick_char(
         .unwrap_or((150.0, 150.0));
     ch.last_sprite_w = sprite_sz.0;
     let (surface_progress, at_edge, jump_target, attract_target) =
-        surface_context(&ch.surface, ch.char_pos, sprite_sz.0, ch.facing,
+        surface_context(&ch.surface, sprite_sz.0, ch.facing,
                         cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
                         cfg.jump.climb_attract_dist, cfg.corner.corner_jump_dist, wins, si);
 
@@ -1807,10 +1811,10 @@ fn tick_char(
                             let side = *target_side;
                             let lm   = *landing_mode;
                             let (target_cx, target_cy) = airborne_snap_target(
-                                &win, side, lm, &ch.assets, ch.char_pos.1,
+                                &win, side, lm, &ch.assets, ch.last_screen_pos.1,
                             );
-                            let dx = target_cx - ch.char_pos.0;
-                            let dy = target_cy - ch.char_pos.1;
+                            let dx = target_cx - ch.last_screen_pos.0;
+                            let dy = target_cy - ch.last_screen_pos.1;
                             let g  = cfg.jump.gravity * 60.0;
                             let t  = dx.abs().max(1.0) / cfg.jump.air_speed;
                             let vx = dx / t;
@@ -1884,7 +1888,7 @@ fn tick_char(
                                 }
                                 LandingMode::ClimbFromCurrent => {
                                     // Snap to the character's current Y projected onto the target wall.
-                                    let cur_y = ch.char_pos.1;
+                                    let cur_y = ch.last_screen_pos.1;
                                     let y_local = (cur_y - win.y).clamp(hang_h / 2.0, win.h - 4.0);
                                     ch.char_pos.0 = match side {
                                         Side::Right => win.right() - stand_w,
@@ -2009,12 +2013,9 @@ fn tick_char(
     let y_offset = vertical_offset(&ch.anim_state, &ch.assets.animations);
     unsafe { ch.panel.setFrameOrigin(NSPoint::new(origin.x, origin.y + y_offset)) };
 
-    // Keep char_pos in sync with the rendered panel position so that when a
-    // window surface is lost the character starts falling from the correct
-    // location rather than from the stale position of its last airborne state.
-    if !matches!(ch.surface, Surface::Airborne) {
-        ch.char_pos = (origin.x, si.height - origin.y - sz.1);
-    }
+    // Record the rendered position so surface-lost and jump-launch code can
+    // read back where the character actually was last tick.
+    ch.last_screen_pos = (origin.x, si.height - origin.y - sz.1);
 
     // Z-order: place the panel just above its host window so windows in front
     // of the host naturally occlude the character.
@@ -2136,7 +2137,6 @@ fn tick() {
                             Surface::Desktop { x } => {
                                 let new_x = (*x + nudge).clamp(edge_buf, si.width - edge_buf);
                                 *x = new_x;
-                                app.chars[j].char_pos.0 = new_x;
                             }
                             Surface::WindowTop { win_id, x_local } => {
                                 let win_w = wm::find_win(*win_id, &wins)
