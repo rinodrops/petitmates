@@ -115,6 +115,17 @@ fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f6
 
 // ---- Per-character state ----
 
+/// Snapshot of the values that were passed to Cocoa last tick.
+/// Used to skip redundant `swap_sprite` / `setFrameOrigin` / `orderWindow` calls.
+#[derive(PartialEq)]
+struct RenderedState {
+    sprite_name: String,
+    mirror:      bool,
+    origin:      (f64, f64),
+    y_offset:    f64,
+    z_host_id:   Option<u32>,
+}
+
 struct CharState {
     panel: Retained<NSPanel>,
     assets: Rc<SpriteAssets>,
@@ -144,6 +155,8 @@ struct CharState {
     /// Last rendered sprite top-left in CG coordinates (origin = screen top-left, Y down).
     /// Updated every tick (all surfaces). Used for surface-lost fallback and jump trajectory.
     last_screen_pos: (f64, f64),
+    /// Snapshot of what was last sent to Cocoa. None on first tick → forces full render.
+    last_rendered: Option<RenderedState>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -743,6 +756,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         bubble_panel: None,
         last_sprite_w: 150.0,
         last_screen_pos: (start_cx, start_cy),
+        last_rendered: None,
     }
 }
 
@@ -2065,40 +2079,59 @@ fn tick_char(
         }
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
-    swap_sprite(&ch.panel, &ch.assets, &sr.name, sr.mirror, mt);
+    // ---- Rendering: skip Cocoa calls that are identical to last tick ----
 
-    // Move panel to surface-derived NS origin.
     let anchor = ch.assets.anchor(&sr.name).unwrap_or(Anchor { x: 0.0, y: 0.0 });
     let stand_anchor_y = ch.assets.anchor("s-stand").map(|a| a.y).unwrap_or(0.0);
     let sz = ch.assets.image(&sr.name, sr.mirror)
         .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
         .unwrap_or((150.0, 150.0));
-    let origin = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
+    let origin   = surface_to_ns_origin(&ch.surface, ch.char_pos, sz, anchor, stand_anchor_y, wins, si);
     let y_offset = vertical_offset(&ch.anim_state, &ch.assets.animations);
-    unsafe { ch.panel.setFrameOrigin(NSPoint::new(origin.x, origin.y + y_offset)) };
+    let z_host   = surface_host_win_id(&ch.surface).or_else(|| {
+        match &ch.anim_state {
+            State::JumpRunup { target_win_id, .. } |
+            State::Airborne  { target_win_id, .. } => Some(*target_win_id),
+            _ => None,
+        }
+    });
+
+    let prev = ch.last_rendered.as_ref();
+
+    // Sprite: only swap when name or mirror changed.
+    if prev.map_or(true, |p| p.sprite_name != sr.name || p.mirror != sr.mirror) {
+        swap_sprite(&ch.panel, &ch.assets, &sr.name, sr.mirror, mt);
+    }
+
+    // Position: only move when origin or vertical-offset changed.
+    if prev.map_or(true, |p| p.origin != (origin.x, origin.y) || p.y_offset != y_offset) {
+        unsafe { ch.panel.setFrameOrigin(NSPoint::new(origin.x, origin.y + y_offset)) };
+    }
 
     // Record the rendered position so surface-lost and jump-launch code can
     // read back where the character actually was last tick.
     ch.last_screen_pos = (origin.x, si.height - origin.y - sz.1);
 
-    // Z-order: place the panel just above its host window so windows in front
-    // of the host naturally occlude the character.
-    unsafe {
-        let z_host = surface_host_win_id(&ch.surface).or_else(|| {
-            match &ch.anim_state {
-                State::JumpRunup { target_win_id, .. } |
-                State::Airborne  { target_win_id, .. } => Some(*target_win_id),
-                _ => None,
+    // Z-order: only reorder when the host window changed.
+    if prev.map_or(true, |p| p.z_host_id != z_host) {
+        unsafe {
+            if let Some(wid) = z_host {
+                // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
+                let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
+            } else {
+                // Desktop (not jumping): bring to front within the normal level.
+                ch.panel.orderFront(None);
             }
-        });
-        if let Some(wid) = z_host {
-            // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
-            let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
-        } else {
-            // Desktop (not jumping): bring to front within the normal level.
-            ch.panel.orderFront(None);
         }
     }
+
+    ch.last_rendered = Some(RenderedState {
+        sprite_name: sr.name.to_owned(),
+        mirror:      sr.mirror,
+        origin:      (origin.x, origin.y),
+        y_offset,
+        z_host_id:   z_host,
+    });
 
     // Hover alpha.
     update_hover_alpha(&ch.panel, cfg, false);
