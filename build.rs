@@ -77,26 +77,42 @@ fn main() {
     // Windows resources (.ico files embedded via windres)
     // appicon.ico already contains 16 – 256 px layers, so it works as
     // the exe/Explorer icon AND as the system-tray icon at all sizes.
+    //
+    // Temp artifacts are written under OUT_DIR (a per-build, per-crate
+    // private directory) rather than predictable, world-writable paths in
+    // /tmp.  Fixed /tmp names are vulnerable to symlink/race attacks on
+    // shared hosts and break concurrent builds.  Process args are passed
+    // directly (no shell), so spaces in OUT_DIR are handled correctly.
     // ----------------------------------------------------------------
-    std::fs::copy(base.join("appicon.ico"), "/tmp/pm_appicon.ico").unwrap();
+    let out = std::path::Path::new(&out_dir);
+    let ico_path = out.join("pm_appicon.ico");
+    let rc_path  = out.join("pm_resource.rc");
+    let o_path   = out.join("pm_resource.o");
+
+    std::fs::copy(base.join("appicon.ico"), &ico_path).unwrap();
 
     // All three resource IDs point to the same appicon so that the
     // application icon is consistent at every size.
     //   1 = window-class / Explorer icon
     //   2 = tray icon (taskbar dark mode – white/light icon)
     //   3 = tray icon (taskbar light mode – coloured icon)
-    let rc_src = "#pragma code_page(65001)\n\
-                  1 ICON \"/tmp/pm_appicon.ico\"\n\
-                  2 ICON \"/tmp/pm_appicon.ico\"\n\
-                  3 ICON \"/tmp/pm_appicon.ico\"\n";
-    std::fs::write("/tmp/pm_resource.rc", rc_src).unwrap();
+    let rc_src = format!(
+        "#pragma code_page(65001)\n\
+         1 ICON {0:?}\n\
+         2 ICON {0:?}\n\
+         3 ICON {0:?}\n",
+        ico_path.display().to_string(),
+    );
+    std::fs::write(&rc_path, rc_src).unwrap();
 
     let windres = if cfg!(target_os = "windows") { "windres" } else { "x86_64-w64-mingw32-windres" };
     let status  = std::process::Command::new(windres)
-        .args(["-i", "/tmp/pm_resource.rc", "-o", "/tmp/pm_resource.o", "--output-format=coff"])
+        .arg("-i").arg(&rc_path)
+        .arg("-o").arg(&o_path)
+        .arg("--output-format=coff")
         .status()
         .expect("windres not found — install mingw-w64 (brew install mingw-w64)");
     assert!(status.success(), "windres failed");
 
-    println!("cargo:rustc-link-arg=/tmp/pm_resource.o");
+    println!("cargo:rustc-link-arg={}", o_path.display());
 }
