@@ -209,7 +209,7 @@ impl BehaviorScript for RustBehavior {
                 // Spontaneous window attraction: jump toward a nearby window before
                 // defaulting to the usual corner-walk / peek cycle.
                 if let Surface::Desktop { .. } = ctx.surface {
-                    if let Some((win_id, side, _)) = ctx.attract_target {
+                    if let Some((_, side, _)) = ctx.attract_target {
                         if self.rnd_bool(cfg.jump.climb_attract_prob) {
                             let dir = match side {
                                 Side::Right => Dir::Left,
@@ -217,7 +217,6 @@ impl BehaviorScript for RustBehavior {
                             };
                             return Transition::To(State::Walking { dir, frame: 0, frame_elapsed: 0.0 });
                         }
-                        let _ = win_id; // suppress unused warning
                     }
                 }
                 let dir = Self::toward_corner(ctx.surface_progress);
