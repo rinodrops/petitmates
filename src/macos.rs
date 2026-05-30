@@ -2398,7 +2398,6 @@ fn tick() {
         update_status_countdown(&app._status_item, min_remaining, mt);
 
         // Reposition active bubble panels to track their character.
-        let font_sz = app.font_size;
         for ch in &app.chars {
             if ch.bubble_state.is_none() { continue; }
             if let Some(bp) = &ch.bubble_panel {
@@ -2424,7 +2423,6 @@ fn tick() {
                         char_num,
                     );
                 }
-                let _ = font_sz; // suppress unused warning
             }
         }
 
