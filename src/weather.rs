@@ -122,9 +122,18 @@ pub fn spawn(cfg: &crate::user_config::WeatherConfig) -> WeatherHandle {
         return handle;
     }
 
-    // If lat/lon are supplied directly, mark geo as resolved immediately so
-    // the status menu can show "✓" without waiting for the background thread.
-    if cfg.latitude.is_some() && cfg.longitude.is_some() {
+    // If lat/lon are supplied directly (and valid), mark geo as resolved
+    // immediately so the status menu can show "✓" without waiting for the
+    // background thread.
+    let direct_coords = match (cfg.latitude, cfg.longitude) {
+        (Some(lat), Some(lon)) if valid_coords(lat, lon) => Some((lat, lon)),
+        (Some(lat), Some(lon)) => {
+            eprintln!("[weather] ignoring out-of-range coordinates lat={lat} lon={lon}");
+            None
+        }
+        _ => None,
+    };
+    if direct_coords.is_some() {
         handle.set_geo(GeoStatus::Ok);
     }
 
@@ -135,12 +144,12 @@ pub fn spawn(cfg: &crate::user_config::WeatherConfig) -> WeatherHandle {
     std::thread::Builder::new()
         .name("weather-fetch".into())
         .spawn(move || {
-            let lat_lon: Option<(f64, f64)> = match (cfg_bg.latitude, cfg_bg.longitude) {
-                (Some(lat), Some(lon)) => {
-                    // Already marked Ok before the thread started.
-                    Some((lat, lon))
+            let lat_lon: Option<(f64, f64)> = match direct_coords {
+                Some(coords) => {
+                    // Already validated and marked Ok before the thread started.
+                    Some(coords)
                 }
-                _ => match cfg_bg.city.as_deref() {
+                None => match cfg_bg.city.as_deref() {
                     Some(city) => match geocode_detailed(city) {
                         GeoResult::Ok(lat, lon) => {
                             handle_bg.set_geo(GeoStatus::Ok);
@@ -200,12 +209,33 @@ enum GeoResult {
     Unavailable,
 }
 
+/// Build an HTTP agent with bounded timeouts restricted to HTTPS.
+///
+/// Without an explicit timeout a stalled connection would pin the weather
+/// thread indefinitely; `https_only` prevents accidental plaintext requests
+/// if a future endpoint URL is ever misconfigured.
+fn http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .https_only(true)
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .into()
+}
+
+/// Returns `true` if the coordinate pair is within valid Earth bounds.
+fn valid_coords(lat: f64, lon: f64) -> bool {
+    lat.is_finite() && lon.is_finite()
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
+}
+
 fn geocode_detailed(city: &str) -> GeoResult {
     let url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
         urlencoded(city)
     );
-    let body: serde_json::Value = match ureq::get(&url).call() {
+    let body: serde_json::Value = match http_agent().get(&url).call() {
         Ok(mut resp) => match resp.body_mut().read_json() {
             Ok(v)  => v,
             Err(_) => return GeoResult::Unavailable,
@@ -225,6 +255,9 @@ fn geocode_detailed(city: &str) -> GeoResult {
         Some(v) => v,
         None    => return GeoResult::Unavailable,
     };
+    if !valid_coords(lat, lon) {
+        return GeoResult::Unavailable;
+    }
     GeoResult::Ok(lat, lon)
 }
 
@@ -237,7 +270,8 @@ fn fetch_weather(lat: f64, lon: f64) -> Result<WeatherInfo, Box<dyn std::error::
          &current=weather_code,temperature_2m\
          &forecast_days=1"
     );
-    let body: serde_json::Value = ureq::get(&url)
+    let body: serde_json::Value = http_agent()
+        .get(&url)
         .call()?
         .body_mut()
         .read_json()?;

@@ -71,7 +71,7 @@ impl SpriteAssets {
         manifest: &Manifest,
         display_width: f64,
     ) -> Option<Self> {
-        let scale = display_width / manifest.canonical_width;
+        let scale = display_width / manifest.canonical_width.max(1.0);
         let sprite_dir = char_dir.join("sprite");
 
         let mut images = HashMap::new();
@@ -79,6 +79,12 @@ impl SpriteAssets {
         let mut anchors = HashMap::new();
 
         for (name, info) in &manifest.sprites {
+            // Reject names that could escape the sprite directory (groundwork
+            // for untrusted `.pmate` manifests).
+            if !crate::manifest::is_safe_asset_name(name) {
+                eprintln!("[assets] rejecting unsafe sprite name: {name:?}");
+                return None;
+            }
             let path = sprite_dir.join(format!("{name}.png"));
             let ns_path = NSString::from_str(path.to_str()?);
 

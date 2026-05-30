@@ -2,6 +2,22 @@ use std::collections::HashMap;
 #[cfg(target_os = "macos")]
 use std::path::Path;
 
+/// Returns `true` if `name` is safe to use as a sprite filename stem.
+///
+/// Rejects empty names, path separators, parent-directory components,
+/// absolute paths, and embedded NUL bytes.  Built-in characters always use
+/// safe names, but this guard is the groundwork for loading untrusted
+/// `.pmate` manifests where a hostile `[sprites]` key such as
+/// `"../../../../etc/passwd"` must never escape the sprite directory.
+pub fn is_safe_asset_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && !name.contains('\0')
+        && !std::path::Path::new(name).is_absolute()
+}
+
 // ── Animation definitions ─────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
