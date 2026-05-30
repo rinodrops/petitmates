@@ -147,6 +147,10 @@ struct CharState {
     hwnd: HWND,
     assets: Rc<SpriteAssets>,
     config: SharedConfig,
+    /// Cached effective config: `config.current` with personality applied.
+    /// Recomputed only when `params.toml` or `behavior.toml` change is detected
+    /// (checked on the window-list refresh boundary, not every tick).
+    effective_config: crate::config::Config,
     behavior: Box<dyn BehaviorScript>,
     anim_state: State,
     facing: Dir,
@@ -763,6 +767,17 @@ fn surface_host_hwnd(surface: &crate::behavior::Surface) -> Option<HWND> {
 
 /// Create a new layered `HWND` and return its initial `CharState`.
 /// The window class must already be registered.
+/// Compute the effective config (base `params.toml` values with the
+/// character's current personality applied on top).
+fn compute_effective_config(
+    config: &SharedConfig,
+    engine: &crate::anim_trigger::BehaviorEngine,
+) -> crate::config::Config {
+    let mut cfg = config.lock().unwrap().current.clone();
+    crate::config::apply_personality(&mut cfg, engine.personality());
+    cfg
+}
+
 unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig, char_name: &str) -> CharState {
     let hinstance  = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide("PetitMatesOverlay");
@@ -790,10 +805,12 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         if let Some(p) = watch_path { engine.with_personality_path(p) } else { engine }
     };
     let speech_engine = crate::speech::SpeechEngine::new(crate::speech::load(char_name));
+    let effective_config = compute_effective_config(&config, &behavior_engine);
     CharState {
         hwnd,
         assets,
         config,
+        effective_config,
         behavior:        Box::new(RustBehavior::new()),
         anim_state:      State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 },
         facing:          Dir::Left,
@@ -1376,7 +1393,8 @@ fn tick_all() {
 
         // Tiered window-list refresh.
         // Phase 1 — all mutations to win_cache happen here before we borrow wins.
-        if app.win_cache.ticks_until_refresh == 0 {
+        let full_refresh = app.win_cache.ticks_until_refresh == 0;
+        if full_refresh {
             windows_wm::list_windows_into(&mut app.win_cache.wins, &si);
             let attract_dist = app.chars.first()
                 .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
@@ -1407,10 +1425,19 @@ fn tick_all() {
 
         let n = app.chars.len();
         for i in 0..n {
-            app.chars[i].config.lock().unwrap().reload_if_changed();
-            app.chars[i].behavior_engine.reload_personality_if_changed();
-            let mut cfg = app.chars[i].config.lock().unwrap().current.clone();
-            crate::config::apply_personality(&mut cfg, app.chars[i].behavior_engine.personality());
+            // Hot-reload checks (file stat) and effective-config recomputation
+            // are throttled to the window-list refresh boundary rather than run
+            // every tick. Between refreshes the cached `effective_config` is
+            // reused (a cheap stack copy — `Config` holds no heap data).
+            if full_refresh {
+                let params_changed = app.chars[i].config.lock().unwrap().reload_if_changed();
+                let pers_changed = app.chars[i].behavior_engine.reload_personality_if_changed();
+                if params_changed || pers_changed {
+                    app.chars[i].effective_config =
+                        compute_effective_config(&app.chars[i].config, &app.chars[i].behavior_engine);
+                }
+            }
+            let cfg = app.chars[i].effective_config.clone();
             tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size);
         }
 
