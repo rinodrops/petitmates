@@ -45,7 +45,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           ZIP="Petit-Mates-v${VERSION}-windows-x86_64.zip"
-          cd build/petitmates-windows
+          cd dist/petitmates-windows
           zip "../../${ZIP}" "Petit Mates.exe" "ConfUI.exe"
           echo "WIN_ZIP=${ZIP}" >> "$GITHUB_ENV"
 
