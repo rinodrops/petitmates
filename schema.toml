@@ -84,7 +84,4 @@ key    = "weather.city"
 label  = { en = "City", ja = "都市" }
 type   = "string"
 widget = "text_input"
-hint   = {
-  en = "Used for weather reactions. Leave empty to disable location lookup.",
-  ja = "天気反応に使用します。空欄の場合は位置情報を取得しません。",
-}
+hint   = { en = "Used for weather reactions. Leave empty to disable location lookup.", ja = "天気反応に使用します。空欄の場合は位置情報を取得しません。" }
