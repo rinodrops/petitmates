@@ -1350,7 +1350,7 @@ fn tick_all() {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
 
-        if crate::user_config::restart_requested() {
+        if crate::user_config::take_restart_request() {
             PostQuitMessage(0);
             return;
         }

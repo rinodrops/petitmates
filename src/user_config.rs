@@ -29,9 +29,9 @@ pub fn is_restarting_instance() -> bool {
     std::env::var_os(RESTART_ENV).is_some()
 }
 
-/// Main loop should exit so a replacement instance can take over (Windows fallback).
-pub fn restart_requested() -> bool {
-    RESTART_REQUESTED.load(Ordering::SeqCst)
+/// Main loop should relaunch and exit (ConfUI closed). Consumed once per request.
+pub fn take_restart_request() -> bool {
+    RESTART_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 // ---- Config structs ----
@@ -381,23 +381,22 @@ pub fn launch_settings_ui() {
 
 /// Relaunch the main app after ConfUI exits (reloads `user.toml` at startup).
 fn restart_after_confui_closed() {
-    let Ok(exe) = std::env::current_exe() else {
-        eprintln!("[user_config] restart: could not resolve current_exe");
-        request_main_loop_exit();
-        return;
-    };
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
     #[cfg(target_os = "macos")]
     {
-        use std::os::unix::process::CommandExt;
-        let err = Command::new(&exe).args(&args).exec();
-        eprintln!("[user_config] restart exec failed: {err}");
+        // Main thread spawns the replacement and removes the status item before exit.
+        // Do not use exec() here — same PID breaks Control Center menu bar registration.
         request_main_loop_exit();
+        return;
     }
 
     #[cfg(target_os = "windows")]
     {
+        let Ok(exe) = std::env::current_exe() else {
+            eprintln!("[user_config] restart: could not resolve current_exe");
+            request_main_loop_exit();
+            return;
+        };
+        let args: Vec<String> = std::env::args().skip(1).collect();
         match Command::new(&exe).env(RESTART_ENV, "1").args(&args).spawn() {
             Ok(_) => request_main_loop_exit(),
             Err(e) => {
