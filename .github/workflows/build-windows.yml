@@ -25,6 +25,13 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y mingw-w64 imagemagick
 
+      # ConfUI Makefile uses `magick` (ImageMagick 7); Ubuntu ships IM6 as `convert`.
+      - name: Ensure ImageMagick magick command
+        run: |
+          if ! command -v magick >/dev/null; then
+            sudo ln -sf "$(command -v convert)" /usr/local/bin/magick
+          fi
+
       - name: Install Rust stable + Windows target
         uses: dtolnay/rust-toolchain@stable
         with:
