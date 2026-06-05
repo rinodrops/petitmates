@@ -42,7 +42,26 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean
+# ConfUI settings UI (sibling repo: ../confui)
+CONFUI_DIR     := ../confui
+CONFUI_SCHEMA  := $(abspath schema.toml)
+CONFUI_BIN     := $(CONFUI_DIR)/target/release/confui
+CONFUI_WIN_EXE := $(CONFUI_DIR)/dist/confui-windows/ConfUI.exe
+
+.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean confui confui-win
+
+# Invoke cargo directly so CONFUI_SCHEMA paths may contain spaces.
+confui:
+	@test -f '$(CONFUI_DIR)/assets/icons.ttf' || $(MAKE) -C '$(CONFUI_DIR)' icons
+	cd '$(CONFUI_DIR)' && CONFUI_SCHEMA='$(CONFUI_SCHEMA)' cargo build --release
+
+confui-win:
+	@test -f '$(CONFUI_DIR)/assets/icons.ttf' || $(MAKE) -C '$(CONFUI_DIR)' icons
+	@test -f '$(CONFUI_DIR)/assets/appicon.ico' || $(MAKE) -C '$(CONFUI_DIR)' appicon-ico
+	cd '$(CONFUI_DIR)' && CONFUI_SCHEMA='$(CONFUI_SCHEMA)' CARGO_TARGET_DIR=/tmp/confui-win \
+		cargo build --release --target x86_64-pc-windows-gnu
+	@mkdir -p '$(CONFUI_DIR)/dist/confui-windows'
+	cp /tmp/confui-win/x86_64-pc-windows-gnu/release/confui.exe '$(CONFUI_WIN_EXE)'
 
 all: app
 
@@ -50,9 +69,10 @@ all: app
 # Development build (current arch only, fast)
 # -----------------------------------------------------------------------
 
-dev: | $(MACOS_DIR_T) $(RES_DIR_T)
+dev: confui | $(MACOS_DIR_T) $(RES_DIR_T)
 	cargo build --release
 	cp target/release/$(EXE_NAME) "$(EXE)"
+	cp "$(CONFUI_BIN)" "$(MACOS_DIR)/confui"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
 	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
 	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
@@ -71,12 +91,13 @@ dev: | $(MACOS_DIR_T) $(RES_DIR_T)
 # Universal release build
 # -----------------------------------------------------------------------
 
-app: | $(MACOS_DIR_T) $(RES_DIR_T)
+app: confui | $(MACOS_DIR_T) $(RES_DIR_T)
 	MACOSX_DEPLOYMENT_TARGET=$(MIN_MACOS) cargo build --release --target aarch64-apple-darwin
 	MACOSX_DEPLOYMENT_TARGET=$(MIN_MACOS) cargo build --release --target x86_64-apple-darwin
 	lipo -create -output "$(EXE)" \
 		target/aarch64-apple-darwin/release/$(EXE_NAME) \
 		target/x86_64-apple-darwin/release/$(EXE_NAME)
+	cp "$(CONFUI_BIN)" "$(MACOS_DIR)/confui"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
 	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
 	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
@@ -155,10 +176,11 @@ _icns_build: | $(RES_DIR_T)
 # Uses a space-free CARGO_TARGET_DIR to work around dlltool limitation.
 # -----------------------------------------------------------------------
 
-win:
+win: confui-win
 	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
 	mkdir -p "$(WIN_DIR)"
 	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
+	cp "$(CONFUI_WIN_EXE)" "$(WIN_DIR)/ConfUI.exe"
 	@echo "Windows build: $(WIN_DIR)"
 
 win-zip: win

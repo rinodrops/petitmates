@@ -1,0 +1,87 @@
+# Petit Mates — ConfUI schema for user.toml
+# Build: make -C ../confui SCHEMA=/path/to/this/file binary
+
+icon_style = "rounded"
+theme      = "os"
+lang       = "os"
+lang_key   = "display.language"
+save_button = "os"
+
+# ── Display ──────────────────────────────────────────────────────────────────
+
+[[tabs]]
+id    = "display"
+label = { en = "Display", ja = "表示" }
+icon  = "monitor"
+
+[[tabs.fields]]
+key    = "display.sprite_size"
+label  = { en = "Character size", ja = "キャラクターサイズ" }
+type   = "number"
+widget = "slider"
+min    = 80
+max    = 300
+step   = 10
+suffix = " px"
+
+[[tabs.fields]]
+key       = "display.font_size"
+label     = { en = "Speech font size", ja = "吹き出しの文字サイズ" }
+type      = "number"
+widget    = "drag_value"
+min       = 8
+max       = 32
+step      = 1
+suffix    = " pt"
+max_width = 120
+
+[[tabs.fields]]
+key       = "display.language"
+label     = { en = "Speech language", ja = "吹き出しの言語" }
+type      = "string"
+widget    = "segmented_control"
+options   = ["os", "en", "ja"]
+max_width = 280
+
+# ── Speech ───────────────────────────────────────────────────────────────────
+
+[[tabs]]
+id    = "speech"
+label = { en = "Speech", ja = "発話" }
+icon  = "chat"
+
+[[tabs.fields]]
+key    = "speech.enabled"
+label  = { en = "Enable speech", ja = "発話を有効にする" }
+type   = "bool"
+widget = "toggle"
+
+[[tabs.fields]]
+key    = "speech.speech_lock_sec"
+label  = { en = "Minimum interval between speeches", ja = "発話の最小間隔" }
+type   = "number"
+widget = "slider"
+min    = 5
+max    = 120
+step   = 5
+suffix = " s"
+
+# ── Weather ──────────────────────────────────────────────────────────────────
+
+[[tabs]]
+id    = "weather"
+label = { en = "Weather", ja = "天気" }
+icon  = "cloud"
+
+[[tabs.fields]]
+key    = "weather.enabled"
+label  = { en = "Enable weather", ja = "天気を有効にする" }
+type   = "bool"
+widget = "toggle"
+
+[[tabs.fields]]
+key    = "weather.city"
+label  = { en = "City", ja = "都市" }
+type   = "string"
+widget = "text_input"
+hint   = { en = "Used for weather reactions. Leave empty to disable location lookup.", ja = "天気反応に使用します。空欄の場合は位置情報を取得しません。" }

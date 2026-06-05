@@ -15,6 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout ConfUI
+        uses: actions/checkout@v4
+        with:
+          repository: rinodrops/confui
+          path: confui
+
       - name: Install mingw-w64
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
@@ -32,20 +38,15 @@ jobs:
           key: cargo-win-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-win-
 
-      - name: Build Windows exe
-        run: |
-          CARGO_TARGET_DIR=/tmp/pm-win \
-          cargo build --release --target x86_64-pc-windows-gnu
-          mkdir -p build/petitmates-windows
-          cp /tmp/pm-win/x86_64-pc-windows-gnu/release/petitmates.exe \
-             "build/petitmates-windows/Petit Mates.exe"
+      - name: Build Windows package
+        run: make win
 
       - name: Package Windows zip
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           ZIP="Petit-Mates-v${VERSION}-windows-x86_64.zip"
           cd build/petitmates-windows
-          zip "../../${ZIP}" "Petit Mates.exe"
+          zip "../../${ZIP}" "Petit Mates.exe" "ConfUI.exe"
           echo "WIN_ZIP=${ZIP}" >> "$GITHUB_ENV"
 
       - name: Upload artifact

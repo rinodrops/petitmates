@@ -215,26 +215,6 @@ thread_local! {
 
 // ---- Panel helpers ----
 
-/// Detect the OS preferred language, returning `"ja"` or `"en"`.
-///
-/// Checks `NSLocale.preferredLanguages` in order; returns `"ja"` when
-/// the first language whose tag starts with `"ja"` appears before any
-/// English tag.  Falls back to `"en"`.
-fn detect_system_language() -> String {
-    use objc2_foundation::NSLocale;
-    let langs = unsafe { NSLocale::preferredLanguages() };
-    for i in 0..langs.len() {
-        let tag: String = unsafe { langs.objectAtIndex(i).to_string() };
-        if tag.starts_with("ja") {
-            return "ja".to_owned();
-        }
-        if tag.starts_with("en") {
-            return "en".to_owned();
-        }
-    }
-    "en".to_owned()
-}
-
 fn make_char_panel(
     init_img: &NSImage,
     mt: MainThreadMarker,
@@ -605,11 +585,12 @@ fn make_status_item(
 
         let settings = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mt),
-            &NSString::from_str(if ja { "設定ファイルを開く" } else { "Open Settings File" }),
-            Some(objc2::sel!(openSettingsFile:)),
+            &NSString::from_str(if ja { "設定…" } else { "Settings…" }),
+            Some(objc2::sel!(openSettings:)),
             &NSString::from_str(""),
         );
         let (): () = unsafe { objc2::msg_send![&*settings, setTarget: handler] };
+        let (): () = unsafe { objc2::msg_send![&*settings, setTag: 2_isize] };
         menu.addItem(&settings);
 
         menu.addItem(&NSMenuItem::separatorItem(mt));
@@ -860,6 +841,22 @@ define_class!(
                         };
                         let (): () = msg_send![item, setTitle: &*NSString::from_str(&title)];
                     }
+
+                    // Tag 2: Settings… vs Open Settings File (Option held while menu is open).
+                    let flags: NSEventModifierFlags =
+                        unsafe { msg_send![NSEvent::class(), modifierFlags] };
+                    let option = flags.contains(NSEventModifierFlags::Option);
+                    let settings_item: Option<&NSMenuItem> = msg_send![menu, itemWithTag: 2_isize];
+                    if let Some(item) = settings_item {
+                        let title = if option {
+                            if ja { "設定ファイルを開く" } else { "Open Settings File" }
+                        } else if ja {
+                            "設定…"
+                        } else {
+                            "Settings…"
+                        };
+                        let (): () = msg_send![item, setTitle: &*NSString::from_str(title)];
+                    }
                 }
             });
         }
@@ -912,10 +909,16 @@ define_class!(
             });
         }
 
-        /// Open user.toml in the system default text editor.
-        #[unsafe(method(openSettingsFile:))]
-        fn open_settings_file(&self, _sender: &AnyObject) {
-            crate::user_config::open_in_editor();
+        /// Open settings (ConfUI) or user.toml in the editor when Option is held.
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: &AnyObject) {
+            let flags: NSEventModifierFlags =
+                unsafe { msg_send![NSEvent::class(), modifierFlags] };
+            if flags.contains(NSEventModifierFlags::Option) {
+                crate::user_config::open_in_editor();
+            } else {
+                crate::user_config::launch_settings_ui();
+            }
         }
 
         /// Remove the most recently added character (minimum 1 remains).
@@ -2486,8 +2489,7 @@ pub fn run() {
     // it with Control Center before the app's heavy initialization begins.
     // All menu action handlers guard against AppState not yet being initialized.
     let user_cfg = crate::user_config::load();
-    let lang = user_cfg.display.language.clone()
-        .unwrap_or_else(detect_system_language);
+    let lang = crate::user_config::resolve_display_language(&user_cfg.display.language);
     let menu_handler = MenuDelegate::new(mt);
     let status_item = make_status_item(&menu_handler, mt, &lang, &user_cfg.weather);
 
