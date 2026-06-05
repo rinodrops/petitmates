@@ -214,7 +214,8 @@ enabled = true
 
 /// Loads `user.toml` from the application support directory.
 /// If the file does not exist, creates it with default values and returns defaults.
-/// Parse errors are logged to stderr and defaults are returned.
+/// On read/parse failure, logs to stderr, shows a one-shot native warning dialog,
+/// and returns defaults.
 pub fn load() -> UserConfig {
     let path = match user_config_path() {
         Some(p) => p,
@@ -235,6 +236,7 @@ pub fn load() -> UserConfig {
         Ok(t) => t,
         Err(e) => {
             eprintln!("[user_config] failed to read user.toml: {e}");
+            warn_config_load_failed(&path, &format!("{e}"));
             return UserConfig::default();
         }
     };
@@ -243,9 +245,40 @@ pub fn load() -> UserConfig {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("[user_config] failed to parse user.toml: {e}");
+            warn_config_load_failed(&path, &format!("{e}"));
             UserConfig::default()
         }
     }
+}
+
+/// Native warning when `user.toml` could not be loaded (startup only in practice).
+fn warn_config_load_failed(path: &Path, detail: &str) {
+    let path_str = path.display();
+    let ja = detect_system_language() == "ja";
+    let (title, message) = if ja {
+        (
+            "設定を読み込めませんでした",
+            format!(
+                "user.toml を読み込めなかったため、デフォルト設定で起動します。\n\n\
+                 ファイル: {path_str}\n\
+                 {detail}\n\n\
+                 Option を押しながらメニューの「設定ファイルを開く」で修正するか、\
+                 ConfUI で内容を直してください。"
+            ),
+        )
+    } else {
+        (
+            "Could Not Load Settings",
+            format!(
+                "Could not load user.toml — starting with default settings.\n\n\
+                 File: {path_str}\n\
+                 {detail}\n\n\
+                 Hold Option and choose Open Settings File from the menu to edit, \
+                 or fix the file in ConfUI."
+            ),
+        )
+    };
+    show_native_error(title, &message);
 }
 
 /// Path to the ConfUI settings binary bundled next to the main executable.
@@ -327,15 +360,19 @@ fn open_path_in_editor(path: &Path) {
     }
 }
 
-fn show_settings_error(title: &str, message: &str) {
+fn show_native_error(title: &str, message: &str) {
     #[cfg(target_os = "macos")]
-    show_settings_error_macos(title, message);
+    show_native_error_macos(title, message);
     #[cfg(target_os = "windows")]
-    show_settings_error_windows(title, message);
+    show_native_error_windows(title, message);
+}
+
+fn show_settings_error(title: &str, message: &str) {
+    show_native_error(title, message);
 }
 
 #[cfg(target_os = "macos")]
-fn show_settings_error_macos(title: &str, message: &str) {
+fn show_native_error_macos(title: &str, message: &str) {
     let script = format!(
         r#"display alert "{}" message "{}" as critical buttons {{"OK"}} default button "OK""#,
         escape_applescript_string(title),
@@ -345,7 +382,7 @@ fn show_settings_error_macos(title: &str, message: &str) {
 }
 
 #[cfg(target_os = "windows")]
-fn show_settings_error_windows(title: &str, message: &str) {
+fn show_native_error_windows(title: &str, message: &str) {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
