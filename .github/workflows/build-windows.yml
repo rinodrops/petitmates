@@ -63,26 +63,33 @@ jobs:
           name: petitmates-windows
           path: ${{ env.WIN_ZIP }}
 
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          {
+            echo "## Petit Mates ${VERSION}"
+            echo ""
+            awk -v ver="### ${VERSION}" '
+              $0 == ver { capture=1; print; next }
+              capture && /^### v[0-9]/ { exit }
+              capture { print }
+            ' README.md
+            echo ""
+            echo "### macOS Installation"
+            echo "1. Download the DMG and open it."
+            echo "2. Drag **Petit Mates.app** to your Applications folder."
+            echo "3. Launch — a menu bar icon appears."
+            echo ""
+            echo "### Windows Installation"
+            echo "1. Download the zip and extract it."
+            echo "2. Run **Petit Mates.exe** — a system tray icon appears."
+          } > release-body.md
+
       - name: Create draft release and attach Windows zip
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           files: ${{ env.WIN_ZIP }}
-          body: |
-            ## Petit Mates ${{ github.ref_name }}
-
-            ### Downloads
-            | Platform | File |
-            |----------|------|
-            | macOS (Universal) | *(upload DMG manually)* |
-            | Windows 11 x86-64 | See attached zip |
-
-            ### macOS Installation
-            1. Download the DMG and open it.
-            2. Drag **Petit Mates.app** to your Applications folder.
-            3. Launch — a menu bar icon appears.
-
-            ### Windows Installation
-            1. Download the zip and extract it.
-            2. Run **Petit Mates.exe** — a system tray icon appears.
+          body_path: release-body.md
