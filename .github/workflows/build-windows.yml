@@ -22,8 +22,8 @@ jobs:
           ref: v0.1.0
           path: confui
 
-      - name: Install mingw-w64
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 imagemagick
 
       - name: Install Rust stable + Windows target
         uses: dtolnay/rust-toolchain@stable
