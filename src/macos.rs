@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::process::Command;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
@@ -2210,11 +2211,41 @@ fn update_status_countdown(
     }
 }
 
+/// Relaunch with a new PID after ConfUI closes. Must run on the main thread so the
+/// status item is removed before exit (`exec` reuses the PID and breaks the menu bar).
+fn perform_confui_settings_restart(mt: MainThreadMarker) {
+    if let Ok(exe) = std::env::current_exe() {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Err(e) = Command::new(&exe).args(&args).spawn() {
+            eprintln!("[petitmates] settings restart spawn failed: {e}");
+        }
+    } else {
+        eprintln!("[petitmates] settings restart: could not resolve current_exe");
+    }
+
+    APP.with(|cell| {
+        if let Some(app) = cell.borrow_mut().as_ref() {
+            unsafe {
+                NSStatusBar::systemStatusBar().removeStatusItem(&app._status_item);
+            }
+        }
+    });
+
+    unsafe {
+        NSApplication::sharedApplication(mt).terminate(None);
+    }
+}
+
 fn tick() {
     APP.with(|cell| {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
         let mt = unsafe { MainThreadMarker::new_unchecked() };
+
+        if crate::user_config::take_restart_request() {
+            perform_confui_settings_restart(mt);
+            return;
+        }
 
         // Compute screen info once for all characters.
         let si = wm::screen_info(mt).unwrap_or(ScreenInfo {

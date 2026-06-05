@@ -5,12 +5,34 @@
 /// - Windows: %APPDATA%\PetitMates\user.toml
 ///
 /// The file is auto-generated with defaults on first launch.
-/// Users can edit it manually; changes take effect on next launch.
+/// Users can edit it manually, or via ConfUI (**Settings…** in the menu).
+/// When ConfUI closes, Petit Mates restarts so display / speech / weather apply cleanly.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use serde::Deserialize;
+
+/// Environment variable set on a Windows replacement instance while the prior
+/// process is shutting down (single-instance mutex handoff).
+#[cfg(target_os = "windows")]
+pub const RESTART_ENV: &str = "PETITMATES_RESTARTING";
+
+static CONFUI_WATCHER_ACTIVE: Mutex<bool> = Mutex::new(false);
+static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// `true` when this process was spawned to replace a settings-session exit (Windows).
+#[cfg(target_os = "windows")]
+pub fn is_restarting_instance() -> bool {
+    std::env::var_os(RESTART_ENV).is_some()
+}
+
+/// Main loop should relaunch and exit (ConfUI closed). Consumed once per request.
+pub fn take_restart_request() -> bool {
+    RESTART_REQUESTED.swap(false, Ordering::SeqCst)
+}
 
 // ---- Config structs ----
 
@@ -324,12 +346,69 @@ pub fn launch_settings_ui() {
         }
     }
 
-    if let Err(e) = Command::new(&confui).arg(&path).spawn() {
-        show_settings_error(
-            "Settings Unavailable",
-            &format!("Failed to launch ConfUI:\n{e}"),
-        );
+    let start_watcher = {
+        let mut active = CONFUI_WATCHER_ACTIVE.lock().unwrap();
+        if *active {
+            false
+        } else {
+            *active = true;
+            true
+        }
+    };
+
+    let mut child = match Command::new(&confui).arg(&path).spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            if start_watcher {
+                *CONFUI_WATCHER_ACTIVE.lock().unwrap() = false;
+            }
+            show_settings_error(
+                "Settings Unavailable",
+                &format!("Failed to launch ConfUI:\n{e}"),
+            );
+            return;
+        }
+    };
+
+    if start_watcher {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            *CONFUI_WATCHER_ACTIVE.lock().unwrap() = false;
+            restart_after_confui_closed();
+        });
     }
+}
+
+/// Relaunch the main app after ConfUI exits (reloads `user.toml` at startup).
+fn restart_after_confui_closed() {
+    #[cfg(target_os = "macos")]
+    {
+        // Main thread spawns the replacement and removes the status item before exit.
+        // Do not use exec() here — same PID breaks Control Center menu bar registration.
+        request_main_loop_exit();
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            eprintln!("[user_config] restart: could not resolve current_exe");
+            request_main_loop_exit();
+            return;
+        };
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        match Command::new(&exe).env(RESTART_ENV, "1").args(&args).spawn() {
+            Ok(_) => request_main_loop_exit(),
+            Err(e) => {
+                eprintln!("[user_config] restart spawn failed: {e}");
+                request_main_loop_exit();
+            }
+        }
+    }
+}
+
+fn request_main_loop_exit() {
+    RESTART_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 /// Opens `user.toml` in the system default text editor.

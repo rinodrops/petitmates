@@ -121,6 +121,8 @@ No installer needed — the executable is fully self-contained.
 </tr>
 </table>
 
+- **Settings…** — Open the settings window (ConfUI) to edit display, speech, and weather. When you close ConfUI, Petit Mates **restarts** so changes apply.
+- **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor instead (restart the app manually to apply).
 - **Add / Remove character** — Spawn or dismiss each of the three characters independently.
 - **About** — Version info.
 - **Quit** — Exit the app.
@@ -139,6 +141,19 @@ Move your cursor over a character and it fades to 25% opacity, letting you inter
 
 ## Customization
 
+### User settings (`user.toml`)
+
+Open **Settings…** from the menu bar / system tray. The settings window edits `user.toml` in your application data folder:
+
+- macOS: `~/Library/Application Support/PetitMates/user.toml`
+- Windows: `%APPDATA%\PetitMates\user.toml`
+
+You can change character size, speech bubble font size, speech language (`os` / `en` / `ja`), speech on/off and interval, and weather (city name). **Close the settings window to restart Petit Mates** — settings load on the next launch.
+
+If you edit `user.toml` in a text editor (Option/Alt + menu), restart the app yourself to apply changes.
+
+### Character behavior (`behavior.toml`)
+
 Character behavior is controlled by the `[personality]` section in each character's `behavior.toml` (included in the app bundle). Speed, activity level, curiosity, and sleep patterns are all derived from four values in `[0.0, 1.0]`.
 
 ### Windows — parameter overrides
@@ -155,6 +170,12 @@ leopard_gecko_params.toml    ← optional override
 If no override file is present, built-in defaults derived from personality are used.
 
 ## Release Notes
+
+### v0.6.0
+
+- **Settings window** — Edit `user.toml` from the menu via ConfUI (bundled with the app). Closing ConfUI **restarts** Petit Mates so display, speech, and weather settings apply reliably (including character size).
+- macOS: **Settings…** in the menu bar; hold **Option** when opening the menu for **Open Settings File**.
+- Windows: **Settings…** in the tray menu; hold **Alt** for **Open Settings File**.
 
 ### v0.5.0
 

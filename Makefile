@@ -7,20 +7,20 @@ BUNDLE_ID := jp.emotiongraphics.petitmates
 VERSION   := $(shell awk -F'"' '/^version *=/{print $$2; exit}' Cargo.toml)
 MIN_MACOS := 13.0
 
-BUILD_DIR := build
-APP       := $(BUILD_DIR)/$(APP_NAME).app
+DIST_DIR  := dist
+APP       := $(DIST_DIR)/$(APP_NAME).app
 CONTENTS  := $(APP)/Contents
 MACOS_DIR := $(CONTENTS)/MacOS
 RES_DIR   := $(CONTENTS)/Resources
 EXE       := $(MACOS_DIR)/$(EXE_NAME)
 
-APP_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.zip
-APP_DMG   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.dmg
+APP_ZIP   := $(DIST_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.zip
+APP_DMG   := $(DIST_DIR)/Petit-Mates-v$(VERSION)-darwin-universal.dmg
 DMG_SETTINGS := dmg_settings.py
-WIN_DIR     := $(BUILD_DIR)/petitmates-windows
+WIN_DIR     := $(DIST_DIR)/petitmates-windows
 WIN_EXE_NAME := Petit Mates
 WIN_EXE   := $(WIN_DIR)/$(WIN_EXE_NAME).exe
-WIN_ZIP   := $(BUILD_DIR)/Petit-Mates-v$(VERSION)-windows-x86_64.zip
+WIN_ZIP   := $(DIST_DIR)/Petit-Mates-v$(VERSION)-windows-x86_64.zip
 WIN_TARGET_DIR := /tmp/pm-win
 
 # Make-target–safe versions: spaces escaped as '\ ' for use in
@@ -34,7 +34,7 @@ BD_SRC    := assets/bearded_dragon
 PT_SRC    := assets/pond_turtle
 LG_SRC    := assets/leopard_gecko
 ICON_SRC  := assets/appicon.png
-ICONSET   := $(BUILD_DIR)/AppIcon.iconset
+ICONSET   := $(DIST_DIR)/AppIcon.iconset
 ICNS      := $(RES_DIR)/AppIcon.icns
 
 CERT      := $(APPLE_DEVELOPER_CERTIFICATE_NAME)
@@ -184,7 +184,7 @@ win: confui-win
 	@echo "Windows build: $(WIN_DIR)"
 
 win-zip: win
-	cd "$(BUILD_DIR)" && zip "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_EXE))"
+	cd "$(DIST_DIR)" && zip "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_EXE))"
 	@echo "Windows package: $(WIN_ZIP)"
 
 # -----------------------------------------------------------------------
@@ -249,10 +249,10 @@ notarize: sign
 # Directory scaffolding
 # -----------------------------------------------------------------------
 
-$(BUILD_DIR):
-	mkdir -p "$(BUILD_DIR)"
+$(DIST_DIR):
+	mkdir -p "$(DIST_DIR)"
 
-$(CONTENTS_T): | $(BUILD_DIR)
+$(CONTENTS_T): | $(DIST_DIR)
 	mkdir -p "$(CONTENTS)"
 
 $(MACOS_DIR_T): | $(CONTENTS_T)
@@ -264,4 +264,4 @@ $(RES_DIR_T): | $(CONTENTS_T)
 # -----------------------------------------------------------------------
 
 clean:
-	rm -rf "$(BUILD_DIR)"
+	rm -rf "$(DIST_DIR)"
