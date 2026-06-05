@@ -1343,45 +1343,6 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     ch.last_screen_pos = (px, py);
 }
 
-// ---- Language detection ----
-
-/// Detect the OS preferred UI language, returning `"ja"` or `"en"`.
-///
-/// Uses `GetUserPreferredUILanguages` and returns `"ja"` if the first
-/// language whose BCP-47 tag starts with `"ja"` appears before any English
-/// tag.  Falls back to `"en"`.
-fn detect_system_language() -> String {
-    use windows_sys::Win32::Globalization::GetUserPreferredUILanguages;
-    use windows_sys::Win32::Foundation::FALSE;
-    const MUI_LANGUAGE_NAME: u32 = 0x08;
-    unsafe {
-        let mut num_langs: u32 = 0;
-        let mut buf_size: u32  = 0;
-        // First call: get required buffer size.
-        GetUserPreferredUILanguages(
-            MUI_LANGUAGE_NAME, &mut num_langs, std::ptr::null_mut(), &mut buf_size,
-        );
-        if buf_size == 0 {
-            return "en".to_owned();
-        }
-        let mut buf: Vec<u16> = vec![0u16; buf_size as usize];
-        let ok = GetUserPreferredUILanguages(
-            MUI_LANGUAGE_NAME, &mut num_langs, buf.as_mut_ptr(), &mut buf_size,
-        );
-        if ok == FALSE || buf_size == 0 {
-            return "en".to_owned();
-        }
-        // Buffer is a double-null-terminated list of null-separated strings.
-        for segment in buf.split(|&c| c == 0) {
-            if segment.is_empty() { continue; }
-            let tag = String::from_utf16_lossy(segment);
-            if tag.starts_with("ja") { return "ja".to_owned(); }
-            if tag.starts_with("en") { return "en".to_owned(); }
-        }
-    }
-    "en".to_owned()
-}
-
 // ---- Tick all characters (10 Hz timer callback) ----
 
 fn tick_all() {
@@ -1836,7 +1797,20 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     let add_lg_str  = to_wide(if ja { "レオパを追加" } else { "Add Leopard Gecko" });
                     let remove_str  = to_wide(if ja { "最後のキャラクターを削除" } else { "Remove Last" });
                     let about_str    = to_wide(if ja { "Petit Mates について" } else { "About Petit Mates" });
-                    let settings_str = to_wide(if ja { "設定ファイルを開く" } else { "Open Settings File" });
+                    let alt_held = unsafe {
+                        windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
+                            windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_MENU as i32,
+                        ) as u16
+                            & 0x8000
+                            != 0
+                    };
+                    let settings_str = to_wide(if alt_held {
+                        if ja { "設定ファイルを開く" } else { "Open Settings File" }
+                    } else if ja {
+                        "設定…"
+                    } else {
+                        "Settings…"
+                    });
                     let exit_str     = to_wide(if ja { "終了" } else { "Quit" });
                     AppendMenuW(menu, MF_STRING, IDM_ADD_BD, add_bd_str.as_ptr());
                     AppendMenuW(menu, MF_STRING, IDM_ADD_PT, add_pt_str.as_ptr());
@@ -2035,7 +2009,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_SETTINGS => {
-                crate::user_config::open_in_editor();
+                let alt = unsafe {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
+                        windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_MENU as i32,
+                    ) as u16
+                        & 0x8000
+                        != 0
+                };
+                if alt {
+                    crate::user_config::open_in_editor();
+                } else {
+                    crate::user_config::launch_settings_ui();
+                }
                 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_ABOUT => {
@@ -2215,8 +2200,7 @@ pub fn run() {
                 speech_tick: Instant::now(),
                 font_size: user_cfg.display.font_size as i32,
                 sprite_size: user_cfg.display.sprite_size as f64,
-                lang: user_cfg.display.language.clone()
-                    .unwrap_or_else(detect_system_language),
+                lang: crate::user_config::resolve_display_language(&user_cfg.display.language),
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
                 win_cache: WinListCache::new(),
