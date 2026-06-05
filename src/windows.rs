@@ -1350,6 +1350,11 @@ fn tick_all() {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
 
+        if crate::user_config::restart_requested() {
+            PostQuitMessage(0);
+            return;
+        }
+
         let si = windows_wm::screen_info();
 
         // Tiered window-list refresh.
@@ -2115,11 +2120,37 @@ fn remove_tray_icon(hwnd: HWND) {
 
 // ---- Entry point ----
 
+/// Wait until the previous instance releases the single-instance mutex (settings restart).
+unsafe fn wait_for_prior_instance_exit(mutex_name: &[u16]) {
+    use std::thread;
+    use std::time::Duration;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+
+    for _ in 0..200 {
+        let h = CreateMutexW(ptr::null(), 0, mutex_name.as_ptr());
+        if h.is_null() {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+        let already = GetLastError() == ERROR_ALREADY_EXISTS;
+        CloseHandle(h);
+        if !already {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    eprintln!("[petitmates] timed out waiting for prior instance to exit");
+}
+
 pub fn run() {
     unsafe {
+        let mutex_name = to_wide("Local\\PetitMatesSingleInstance");
+        if crate::user_config::is_restarting_instance() {
+            wait_for_prior_instance_exit(&mutex_name);
+        }
         // Single-instance guard: create a named mutex. If it already exists
         // (ERROR_ALREADY_EXISTS), another instance is running — exit silently.
-        let mutex_name = to_wide("Local\\PetitMatesSingleInstance");
         let _mutex = windows_sys::Win32::System::Threading::CreateMutexW(
             ptr::null(), 1, mutex_name.as_ptr(),
         );

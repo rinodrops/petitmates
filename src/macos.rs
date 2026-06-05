@@ -2216,6 +2216,13 @@ fn tick() {
         let Some(app) = b.as_mut() else { return };
         let mt = unsafe { MainThreadMarker::new_unchecked() };
 
+        if crate::user_config::restart_requested() {
+            unsafe {
+                NSApplication::sharedApplication(mt).terminate(None);
+            }
+            return;
+        }
+
         // Compute screen info once for all characters.
         let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
