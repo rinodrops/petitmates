@@ -42,8 +42,8 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-# ConfUI settings UI (sibling repo: ../confui)
-CONFUI_DIR     := ../confui
+# ConfUI settings UI (local dev: repos/confui as ../confui; CI: checkout at ./confui)
+CONFUI_DIR     ?= ../confui
 CONFUI_SCHEMA  := $(abspath schema.toml)
 CONFUI_BIN     := $(CONFUI_DIR)/target/release/confui
 CONFUI_WIN_EXE := $(CONFUI_DIR)/dist/confui-windows/ConfUI.exe
