@@ -10,14 +10,37 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Deserialize;
+
 // ---- Config structs ----
+
+/// ConfUI writes slider/drag values as TOML floats (e.g. `300.0`); accept integers too.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum TomlU32 {
+    Int(i64),
+    Float(f64),
+}
+
+fn deserialize_u32_lossy<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match TomlU32::deserialize(deserializer)? {
+        TomlU32::Int(v) if v >= 0 => Ok(v as u32),
+        TomlU32::Float(v) if v >= 0.0 => Ok(v.round() as u32),
+        _ => Err(serde::de::Error::custom("expected non-negative number")),
+    }
+}
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct DisplayConfig {
     /// Character sprite size in pixels (applies to all characters).
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
     pub sprite_size: u32,
     /// Font size in points for speech bubbles (OS default font).
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
     pub font_size: u32,
     /// Speech bubble display language: `"os"`, `"en"`, or `"ja"`.
     /// When absent or `"os"`, the OS preferred language is used (falls back to `"en"`).
