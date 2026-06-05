@@ -173,9 +173,14 @@ If no override file is present, built-in defaults derived from personality are u
 
 ### v0.6.0
 
-- **Settings window** — Edit `user.toml` from the menu via ConfUI (bundled with the app). Closing ConfUI **restarts** Petit Mates so display, speech, and weather settings apply reliably (including character size).
-- macOS: **Settings…** in the menu bar; hold **Option** when opening the menu for **Open Settings File**.
-- Windows: **Settings…** in the tray menu; hold **Alt** for **Open Settings File**.
+**Settings**
+- **Settings window** — Open **Settings…** from the menu bar (macOS) or system tray (Windows) to edit `user.toml` in ConfUI (bundled with the app). Change character size, speech bubble font size, speech language (`os` / `en` / `ja`), speech on/off and interval, and weather (city name).
+- **Apply on close** — Closing ConfUI **restarts** Petit Mates so settings load cleanly at startup (including sprite scaling and weather). This replaces an abandoned runtime hot-reload approach that could not reliably update character size.
+- **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor; restart the app manually to apply changes.
+
+**Fixes**
+- If `user.toml` cannot be read or parsed at startup, a one-time warning is shown and defaults are used instead of failing silently.
+- ConfUI slider values saved as TOML floats (e.g. `300.0`) are accepted when parsing integer fields such as `sprite_size` and `font_size`.
 
 ### v0.5.0
 
