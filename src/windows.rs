@@ -2207,17 +2207,43 @@ pub fn run() {
                 .expect("failed to decode embedded leopard_gecko sprites"),
         );
 
-        // Create both character windows. The first serves as the host for timer+tray.
+        // Create character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
         let weather_handle = crate::weather::spawn(&user_cfg.weather);
-        let bd_char    = spawn_char_hwnd(&si, Rc::clone(&bd_assets), bd_config.clone(), "bearded_dragon");
-        let pt_char    = spawn_char_hwnd(&si, Rc::clone(&pt_assets), pt_config.clone(), "pond_turtle");
-        let lg_char    = spawn_char_hwnd(&si, Rc::clone(&lg_assets), lg_config.clone(), "leopard_gecko");
-        let host_hwnd  = bd_char.hwnd;
+        let initial_chars: Vec<CharState> = user_cfg
+            .characters
+            .startup_species_ids()
+            .into_iter()
+            .map(|species| match species {
+                "bearded_dragon" => spawn_char_hwnd(
+                    &si,
+                    Rc::clone(&bd_assets),
+                    bd_config.clone(),
+                    species,
+                ),
+                "pond_turtle" => spawn_char_hwnd(
+                    &si,
+                    Rc::clone(&pt_assets),
+                    pt_config.clone(),
+                    species,
+                ),
+                "leopard_gecko" => spawn_char_hwnd(
+                    &si,
+                    Rc::clone(&lg_assets),
+                    lg_config.clone(),
+                    species,
+                ),
+                _ => unreachable!("startup_species_ids only returns built-in species"),
+            })
+            .collect();
+        let host_hwnd = initial_chars
+            .first()
+            .expect("startup_species_ids always returns at least one character")
+            .hwnd;
 
         APP.with(|cell| {
             *cell.borrow_mut() = Some(AppState {
-                chars:     vec![bd_char, pt_char, lg_char],
+                chars:     initial_chars,
                 bd_assets,
                 pt_assets,
                 lg_assets,

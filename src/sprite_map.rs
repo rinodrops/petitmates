@@ -292,7 +292,12 @@ mod tests {
 
     #[test]
     fn anim_def_ping_pong() {
-        let anim = AnimationDef { frames: 3, mode: crate::manifest::AnimMode::PingPong, frame_secs: 0.12 };
+        let anim = AnimationDef {
+            frames: 3,
+            mode: crate::manifest::AnimMode::PingPong,
+            frame_secs: 0.12,
+            vertical_oscillation: None,
+        };
         // cycle: 0→1→2→1, length 4
         assert_eq!(anim.cycle_len(), 4);
         assert_eq!(anim.sprite_index(0), 0);
@@ -303,7 +308,12 @@ mod tests {
 
     #[test]
     fn anim_def_loop() {
-        let anim = AnimationDef { frames: 4, mode: crate::manifest::AnimMode::Loop, frame_secs: 0.12 };
+        let anim = AnimationDef {
+            frames: 4,
+            mode: crate::manifest::AnimMode::Loop,
+            frame_secs: 0.12,
+            vertical_oscillation: None,
+        };
         assert_eq!(anim.cycle_len(), 4);
         assert_eq!(anim.sprite_index(0), 0);
         assert_eq!(anim.sprite_index(3), 3);

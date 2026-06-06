@@ -15,17 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout ConfUI
+      - name: Checkout Settings
         uses: actions/checkout@v4
         with:
-          repository: rinodrops/confui
-          ref: v0.1.0
-          path: confui
+          repository: rinodrops/settings
+          ref: v0.1.1
+          path: settings
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y mingw-w64 imagemagick
 
-      # ConfUI Makefile uses `magick` (ImageMagick 7); Ubuntu ships IM6 as `convert`.
+      # Settings Makefile uses `magick` (ImageMagick 7); Ubuntu ships IM6 as `convert`.
       - name: Ensure ImageMagick magick command
         run: |
           if ! command -v magick >/dev/null; then
@@ -47,7 +47,7 @@ jobs:
           restore-keys: cargo-win-
 
       - name: Build Windows package
-        run: make win CONFUI_DIR=confui
+        run: make win SETTINGS_DIR=settings
 
       - name: Package Windows zip
         run: |

@@ -121,7 +121,7 @@ No installer needed — the executable is fully self-contained.
 </tr>
 </table>
 
-- **Settings…** — Open the settings window (ConfUI) to edit display, speech, and weather. When you close ConfUI, Petit Mates **restarts** so changes apply.
+- **Settings…** — Open the settings window to edit display, speech, and weather. When you close the settings window, Petit Mates **restarts** so changes apply.
 - **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor instead (restart the app manually to apply).
 - **Add / Remove character** — Spawn or dismiss each of the three characters independently.
 - **About** — Version info.
@@ -148,9 +148,11 @@ Open **Settings…** from the menu bar / system tray. The settings window edits 
 - macOS: `~/Library/Application Support/PetitMates/user.toml`
 - Windows: `%APPDATA%\PetitMates\user.toml`
 
-You can change character size, speech bubble font size, speech language (`os` / `en` / `ja`), speech on/off and interval, and weather (city name). **Close the settings window to restart Petit Mates** — settings load on the next launch.
+You can change character size, speech bubble font size, speech language (`os` / `en` / `ja`), how many of each built-in character spawn at startup (0–5 per species), speech on/off and interval, and weather (city name). **Close the settings window to restart Petit Mates** — settings load on the next launch.
 
-If you edit `user.toml` in a text editor (Option/Alt + menu), restart the app yourself to apply changes.
+The **Characters** tab sets startup counts in `[characters]` (`bearded_dragon`, `pond_turtle`, `leopard_gecko`). If all three are `0`, exactly one Bearded Dragon spawns. Menu **Add / Remove character** is runtime-only and does not change these startup counts (restart restores the saved values).
+
+If you edit `user.toml` in a text editor (Option/Alt + menu), restart the app yourself to apply changes. Counts above 5 are clamped to 5 on load.
 
 ### Character behavior (`behavior.toml`)
 
@@ -174,13 +176,13 @@ If no override file is present, built-in defaults derived from personality are u
 ### v0.6.0
 
 **Settings**
-- **Settings window** — Open **Settings…** from the menu bar (macOS) or system tray (Windows) to edit `user.toml` in ConfUI (bundled with the app). Change character size, speech bubble font size, speech language (`os` / `en` / `ja`), speech on/off and interval, and weather (city name).
-- **Apply on close** — Closing ConfUI **restarts** Petit Mates so settings load cleanly at startup (including sprite scaling and weather). This replaces an abandoned runtime hot-reload approach that could not reliably update character size.
+- **Settings window** — Open **Settings…** from the menu bar (macOS) or system tray (Windows) to edit `user.toml` in the settings window. Change character size, speech bubble font size, speech language (`os` / `en` / `ja`), startup character counts per species (Characters tab), speech on/off and interval, and weather (city name).
+- **Apply on close** — Closing the settings window **restarts** Petit Mates so settings load cleanly at startup (including sprite scaling and weather). This replaces an abandoned runtime hot-reload approach that could not reliably update character size.
 - **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor; restart the app manually to apply changes.
 
 **Fixes**
 - If `user.toml` cannot be read or parsed at startup, a one-time warning is shown and defaults are used instead of failing silently.
-- ConfUI slider values saved as TOML floats (e.g. `300.0`) are accepted when parsing integer fields such as `sprite_size` and `font_size`.
+- Slider values saved as TOML floats (e.g. `300.0`) are accepted when parsing integer fields such as `sprite_size` and `font_size`.
 
 ### v0.5.0
 
