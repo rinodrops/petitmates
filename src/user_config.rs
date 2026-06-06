@@ -5,8 +5,8 @@
 /// - Windows: %APPDATA%\PetitMates\user.toml
 ///
 /// The file is auto-generated with defaults on first launch.
-/// Users can edit it manually, or via ConfUI (**Settings…** in the menu).
-/// When ConfUI closes, Petit Mates restarts so display / speech / weather apply cleanly.
+/// Users can edit it manually, or via the settings window (**Settings…** in the menu).
+/// When the settings window closes, Petit Mates restarts so display / speech / weather / characters apply cleanly.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,7 +20,7 @@ use serde::Deserialize;
 #[cfg(target_os = "windows")]
 pub const RESTART_ENV: &str = "PETITMATES_RESTARTING";
 
-static CONFUI_WATCHER_ACTIVE: Mutex<bool> = Mutex::new(false);
+static SETTINGS_WATCHER_ACTIVE: Mutex<bool> = Mutex::new(false);
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// `true` when this process was spawned to replace a settings-session exit (Windows).
@@ -29,14 +29,14 @@ pub fn is_restarting_instance() -> bool {
     std::env::var_os(RESTART_ENV).is_some()
 }
 
-/// Main loop should relaunch and exit (ConfUI closed). Consumed once per request.
+/// Main loop should relaunch and exit (settings window closed). Consumed once per request.
 pub fn take_restart_request() -> bool {
     RESTART_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 // ---- Config structs ----
 
-/// ConfUI writes slider/drag values as TOML floats (e.g. `300.0`); accept integers too.
+/// Settings may write slider/drag values as TOML floats (e.g. `300.0`); accept integers too.
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum TomlU32 {
@@ -122,12 +122,72 @@ impl Default for WeatherConfig {
     }
 }
 
+/// Per-species startup spawn counts (0–5 each). Applied on launch only; menu add/remove is runtime-only.
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+#[serde(default)]
+pub struct CharactersConfig {
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
+    pub bearded_dragon: u32,
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
+    pub pond_turtle: u32,
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
+    pub leopard_gecko: u32,
+}
+
+impl Default for CharactersConfig {
+    fn default() -> Self {
+        Self {
+            bearded_dragon: 1,
+            pond_turtle: 1,
+            leopard_gecko: 1,
+        }
+    }
+}
+
+const MAX_STARTUP_COUNT: u32 = 5;
+
+impl CharactersConfig {
+    /// Clamp a raw count to the valid startup range (manual `user.toml` edits may exceed slider limits).
+    fn clamp_count(n: u32) -> u32 {
+        n.min(MAX_STARTUP_COUNT)
+    }
+
+    /// Resolved per-species counts after clamping and the all-zero fallback (1 bearded dragon).
+    pub fn resolved_counts(&self) -> (u32, u32, u32) {
+        let bd = Self::clamp_count(self.bearded_dragon);
+        let pt = Self::clamp_count(self.pond_turtle);
+        let lg = Self::clamp_count(self.leopard_gecko);
+        if bd == 0 && pt == 0 && lg == 0 {
+            (1, 0, 0)
+        } else {
+            (bd, pt, lg)
+        }
+    }
+
+    /// Built-in species IDs to spawn at startup, in fixed order (BD → PT → LG).
+    pub fn startup_species_ids(&self) -> Vec<&'static str> {
+        let (bd, pt, lg) = self.resolved_counts();
+        let mut ids = Vec::with_capacity((bd + pt + lg) as usize);
+        for _ in 0..bd {
+            ids.push("bearded_dragon");
+        }
+        for _ in 0..pt {
+            ids.push("pond_turtle");
+        }
+        for _ in 0..lg {
+            ids.push("leopard_gecko");
+        }
+        ids
+    }
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct UserConfig {
     pub display: DisplayConfig,
     pub speech: SpeechConfig,
     pub weather: WeatherConfig,
+    pub characters: CharactersConfig,
 }
 
 // ---- Path resolution ----
@@ -232,6 +292,11 @@ speech_lock_sec = 30.0    # minimum seconds between speeches (global)
 [weather]
 enabled = true
 # city = "Tokyo"   # uncomment and set your city name
+
+[characters]
+bearded_dragon = 1   # startup count per species (0–5); all zero → 1 bearded dragon
+pond_turtle    = 1
+leopard_gecko  = 1
 "#;
 
 /// Loads `user.toml` from the application support directory.
@@ -303,20 +368,20 @@ fn warn_config_load_failed(path: &Path, detail: &str) {
     show_native_error(title, &message);
 }
 
-/// Path to the ConfUI settings binary bundled next to the main executable.
-pub fn confui_exe_path() -> Option<PathBuf> {
+/// Path to the Settings binary bundled next to the main executable.
+pub fn settings_exe_path() -> Option<PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     #[cfg(target_os = "windows")]
     let name = "Settings.exe";
     #[cfg(not(target_os = "windows"))]
-    let name = "confui";
+    let name = "settings";
     let path = dir.join(name);
     path.exists().then_some(path)
 }
 
-/// Launches the ConfUI settings window for `user.toml`.
+/// Launches the settings window for `user.toml`.
 pub fn launch_settings_ui() {
-    let Some(confui) = confui_exe_path() else {
+    let Some(settings) = settings_exe_path() else {
         show_settings_error(
             "Settings Unavailable",
             "Settings was not found next to the application.\n\
@@ -347,7 +412,7 @@ pub fn launch_settings_ui() {
     }
 
     let start_watcher = {
-        let mut active = CONFUI_WATCHER_ACTIVE.lock().unwrap();
+        let mut active = SETTINGS_WATCHER_ACTIVE.lock().unwrap();
         if *active {
             false
         } else {
@@ -356,11 +421,11 @@ pub fn launch_settings_ui() {
         }
     };
 
-    let mut child = match Command::new(&confui).arg(&path).spawn() {
+    let mut child = match Command::new(&settings).arg(&path).spawn() {
         Ok(c) => c,
         Err(e) => {
             if start_watcher {
-                *CONFUI_WATCHER_ACTIVE.lock().unwrap() = false;
+                *SETTINGS_WATCHER_ACTIVE.lock().unwrap() = false;
             }
             show_settings_error(
                 "Settings Unavailable",
@@ -373,14 +438,14 @@ pub fn launch_settings_ui() {
     if start_watcher {
         std::thread::spawn(move || {
             let _ = child.wait();
-            *CONFUI_WATCHER_ACTIVE.lock().unwrap() = false;
-            restart_after_confui_closed();
+            *SETTINGS_WATCHER_ACTIVE.lock().unwrap() = false;
+            restart_after_settings_closed();
         });
     }
 }
 
-/// Relaunch the main app after ConfUI exits (reloads `user.toml` at startup).
-fn restart_after_confui_closed() {
+/// Relaunch the main app after the settings window exits (reloads `user.toml` at startup).
+fn restart_after_settings_closed() {
     #[cfg(target_os = "macos")]
     {
         // Main thread spawns the replacement and removes the status item before exit.
@@ -484,4 +549,81 @@ fn show_native_error_windows(title: &str, message: &str) {
 #[cfg(target_os = "macos")]
 fn escape_applescript_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn characters_default_is_one_each() {
+        let cfg = CharactersConfig::default();
+        assert_eq!(cfg.resolved_counts(), (1, 1, 1));
+        assert_eq!(
+            cfg.startup_species_ids(),
+            vec!["bearded_dragon", "pond_turtle", "leopard_gecko"]
+        );
+    }
+
+    #[test]
+    fn characters_missing_section_uses_defaults() {
+        let cfg: UserConfig = toml::from_str(
+            r#"[display]
+sprite_size = 150
+font_size = 14
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.characters.resolved_counts(), (1, 1, 1));
+    }
+
+    #[test]
+    fn characters_custom_counts() {
+        let cfg: CharactersConfig = toml::from_str(
+            r#"bearded_dragon = 2
+pond_turtle = 0
+leopard_gecko = 1"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.resolved_counts(), (2, 0, 1));
+        assert_eq!(
+            cfg.startup_species_ids(),
+            vec!["bearded_dragon", "bearded_dragon", "leopard_gecko"]
+        );
+    }
+
+    #[test]
+    fn characters_all_zero_fallback() {
+        let cfg: CharactersConfig = toml::from_str(
+            r#"bearded_dragon = 0
+pond_turtle = 0
+leopard_gecko = 0"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.resolved_counts(), (1, 0, 0));
+        assert_eq!(cfg.startup_species_ids(), vec!["bearded_dragon"]);
+    }
+
+    #[test]
+    fn characters_clamp_manual_overflow() {
+        let cfg: CharactersConfig = toml::from_str(
+            r#"bearded_dragon = 99
+pond_turtle = 0
+leopard_gecko = 0"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.resolved_counts(), (5, 0, 0));
+        assert_eq!(cfg.startup_species_ids().len(), 5);
+    }
+
+    #[test]
+    fn characters_accepts_float_values() {
+        let cfg: CharactersConfig = toml::from_str(
+            r#"bearded_dragon = 2.0
+pond_turtle = 0.0
+leopard_gecko = 1.0"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.resolved_counts(), (2, 0, 1));
+    }
 }

@@ -910,7 +910,7 @@ define_class!(
             });
         }
 
-        /// Open settings (ConfUI) or user.toml in the editor when Option is held.
+        /// Open the settings window or user.toml in the editor when Option is held.
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: &AnyObject) {
             let flags: NSEventModifierFlags =
@@ -2211,9 +2211,9 @@ fn update_status_countdown(
     }
 }
 
-/// Relaunch with a new PID after ConfUI closes. Must run on the main thread so the
+/// Relaunch with a new PID after the settings window closes. Must run on the main thread so the
 /// status item is removed before exit (`exec` reuses the PID and breaks the menu bar).
-fn perform_confui_settings_restart(mt: MainThreadMarker) {
+fn perform_settings_restart(mt: MainThreadMarker) {
     if let Ok(exe) = std::env::current_exe() {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if let Err(e) = Command::new(&exe).args(&args).spawn() {
@@ -2243,7 +2243,7 @@ fn tick() {
         let mt = unsafe { MainThreadMarker::new_unchecked() };
 
         if crate::user_config::take_restart_request() {
-            perform_confui_settings_restart(mt);
+            perform_settings_restart(mt);
             return;
         }
 
@@ -2549,11 +2549,38 @@ pub fn run() {
         // Demo mode: one bearded dragon with deterministic scripted behavior.
         vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true, "bearded_dragon")]
     } else {
-        vec![
-            spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, false, "bearded_dragon"),
-            spawn_char(Rc::clone(&pt_assets), pt_config.clone(), &si, mt, false, "pond_turtle"),
-            spawn_char(Rc::clone(&lg_assets), lg_config.clone(), &si, mt, false, "leopard_gecko"),
-        ]
+        user_cfg
+            .characters
+            .startup_species_ids()
+            .into_iter()
+            .map(|species| match species {
+                "bearded_dragon" => spawn_char(
+                    Rc::clone(&bd_assets),
+                    bd_config.clone(),
+                    &si,
+                    mt,
+                    false,
+                    species,
+                ),
+                "pond_turtle" => spawn_char(
+                    Rc::clone(&pt_assets),
+                    pt_config.clone(),
+                    &si,
+                    mt,
+                    false,
+                    species,
+                ),
+                "leopard_gecko" => spawn_char(
+                    Rc::clone(&lg_assets),
+                    lg_config.clone(),
+                    &si,
+                    mt,
+                    false,
+                    species,
+                ),
+                _ => unreachable!("startup_species_ids only returns built-in species"),
+            })
+            .collect()
     };
 
     let weather_handle = crate::weather::spawn(&user_cfg.weather);

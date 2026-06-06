@@ -1,5 +1,5 @@
-# Petit Mates — ConfUI schema for user.toml
-# Build: make -C ../confui SCHEMA=/path/to/this/file binary
+# Petit Mates — Settings schema for user.toml
+# Build: make -C ../settings SCHEMA=/path/to/this/file binary
 
 icon_style = "rounded"
 theme      = "os"
@@ -42,6 +42,41 @@ type      = "string"
 widget    = "segmented_control"
 options   = ["os", "en", "ja"]
 max_width = 280
+
+# ── Characters ───────────────────────────────────────────────────────────────
+
+[[tabs]]
+id    = "characters"
+label = { en = "Characters", ja = "キャラクター" }
+icon  = "egg"
+
+[[tabs.fields]]
+key    = "characters.bearded_dragon"
+label  = { en = "Bearded Dragon", ja = "フトアゴヒゲトカゲ" }
+type   = "number"
+widget = "slider"
+min    = 0
+max    = 5
+step   = 1
+
+[[tabs.fields]]
+key    = "characters.pond_turtle"
+label  = { en = "Pond Turtle", ja = "クサガメ" }
+type   = "number"
+widget = "slider"
+min    = 0
+max    = 5
+step   = 1
+
+[[tabs.fields]]
+key    = "characters.leopard_gecko"
+label  = { en = "Leopard Gecko", ja = "レオパードゲッコー" }
+type   = "number"
+widget = "slider"
+min    = 0
+max    = 5
+step   = 1
+hint   = { en = "If all three counts are 0, one Bearded Dragon spawns at startup.", ja = "3種とも 0 のときは、起動時にフトアゴが 1 体スポーンします。" }
 
 # ── Speech ───────────────────────────────────────────────────────────────────
 

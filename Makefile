@@ -43,26 +43,26 @@ TEAM_ID   := $(APPLE_DEVELOPER_TEAM_ID)
 APPLE_ID_ := $(APPLE_ID)
 APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 
-# ConfUI settings UI (local dev: repos/confui as ../confui; CI: checkout at ./confui)
-CONFUI_DIR     ?= ../confui
-CONFUI_SCHEMA  := $(abspath schema.toml)
-CONFUI_BIN     := $(CONFUI_DIR)/target/release/confui
-CONFUI_WIN_EXE := $(CONFUI_DIR)/dist/confui-windows/ConfUI.exe
+# Settings UI (local dev: repos/settings as ../settings; CI: checkout at ./settings)
+SETTINGS_DIR     ?= ../settings
+SETTINGS_SCHEMA  := $(abspath schema.toml)
+SETTINGS_BIN     := $(SETTINGS_DIR)/target/release/settings
+SETTINGS_WIN_EXE := $(SETTINGS_DIR)/dist/settings-windows/Settings.exe
 
-.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean confui confui-win
+.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean settings settings-win
 
-# Invoke cargo directly so CONFUI_SCHEMA paths may contain spaces.
-confui:
-	@test -f '$(CONFUI_DIR)/assets/icons.ttf' || $(MAKE) -C '$(CONFUI_DIR)' icons
-	cd '$(CONFUI_DIR)' && CONFUI_SCHEMA='$(CONFUI_SCHEMA)' cargo build --release
+# Invoke cargo directly so SETTINGS_SCHEMA paths may contain spaces.
+settings:
+	@test -f '$(SETTINGS_DIR)/assets/icons.ttf' || $(MAKE) -C '$(SETTINGS_DIR)' icons
+	cd '$(SETTINGS_DIR)' && SETTINGS_SCHEMA='$(SETTINGS_SCHEMA)' cargo build --release
 
-confui-win:
-	@test -f '$(CONFUI_DIR)/assets/icons.ttf' || $(MAKE) -C '$(CONFUI_DIR)' icons
-	@test -f '$(CONFUI_DIR)/assets/appicon.ico' || $(MAKE) -C '$(CONFUI_DIR)' appicon-ico
-	cd '$(CONFUI_DIR)' && CONFUI_SCHEMA='$(CONFUI_SCHEMA)' CARGO_TARGET_DIR=/tmp/confui-win \
+settings-win:
+	@test -f '$(SETTINGS_DIR)/assets/icons.ttf' || $(MAKE) -C '$(SETTINGS_DIR)' icons
+	@test -f '$(SETTINGS_DIR)/assets/appicon.ico' || $(MAKE) -C '$(SETTINGS_DIR)' appicon-ico
+	cd '$(SETTINGS_DIR)' && SETTINGS_SCHEMA='$(SETTINGS_SCHEMA)' CARGO_TARGET_DIR=/tmp/settings-win \
 		cargo build --release --target x86_64-pc-windows-gnu
-	@mkdir -p '$(CONFUI_DIR)/dist/confui-windows'
-	cp /tmp/confui-win/x86_64-pc-windows-gnu/release/confui.exe '$(CONFUI_WIN_EXE)'
+	@mkdir -p '$(SETTINGS_DIR)/dist/settings-windows'
+	cp /tmp/settings-win/x86_64-pc-windows-gnu/release/settings.exe '$(SETTINGS_WIN_EXE)'
 
 all: app
 
@@ -70,10 +70,10 @@ all: app
 # Development build (current arch only, fast)
 # -----------------------------------------------------------------------
 
-dev: confui | $(MACOS_DIR_T) $(RES_DIR_T)
+dev: settings | $(MACOS_DIR_T) $(RES_DIR_T)
 	cargo build --release
 	cp target/release/$(EXE_NAME) "$(EXE)"
-	cp "$(CONFUI_BIN)" "$(MACOS_DIR)/confui"
+	cp "$(SETTINGS_BIN)" "$(MACOS_DIR)/settings"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
 	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
 	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
@@ -92,13 +92,13 @@ dev: confui | $(MACOS_DIR_T) $(RES_DIR_T)
 # Universal release build
 # -----------------------------------------------------------------------
 
-app: confui | $(MACOS_DIR_T) $(RES_DIR_T)
+app: settings | $(MACOS_DIR_T) $(RES_DIR_T)
 	MACOSX_DEPLOYMENT_TARGET=$(MIN_MACOS) cargo build --release --target aarch64-apple-darwin
 	MACOSX_DEPLOYMENT_TARGET=$(MIN_MACOS) cargo build --release --target x86_64-apple-darwin
 	lipo -create -output "$(EXE)" \
 		target/aarch64-apple-darwin/release/$(EXE_NAME) \
 		target/x86_64-apple-darwin/release/$(EXE_NAME)
-	cp "$(CONFUI_BIN)" "$(MACOS_DIR)/confui"
+	cp "$(SETTINGS_BIN)" "$(MACOS_DIR)/settings"
 	mkdir -p "$(RES_DIR)/assets/bearded_dragon/sprite"
 	cp $(BD_SRC)/manifest.toml   "$(RES_DIR)/assets/bearded_dragon/"
 	cp $(BD_SRC)/sprite/*.png    "$(RES_DIR)/assets/bearded_dragon/sprite/"
@@ -177,12 +177,11 @@ _icns_build: | $(RES_DIR_T)
 # Uses a space-free CARGO_TARGET_DIR to work around dlltool limitation.
 # -----------------------------------------------------------------------
 
-win: confui-win
+win: settings-win
 	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
 	mkdir -p "$(WIN_DIR)"
-	rm -f "$(WIN_DIR)/ConfUI.exe"
 	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
-	cp "$(CONFUI_WIN_EXE)" "$(WIN_DIR)/$(WIN_SETTINGS_EXE)"
+	cp "$(SETTINGS_WIN_EXE)" "$(WIN_DIR)/$(WIN_SETTINGS_EXE)"
 	@echo "Windows build: $(WIN_DIR)"
 
 win-zip: win
