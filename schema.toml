@@ -51,32 +51,26 @@ label = { en = "Characters", ja = "キャラクター" }
 icon  = "egg"
 
 [[tabs.fields]]
-key    = "characters.bearded_dragon"
-label  = { en = "Bearded Dragon", ja = "フトアゴヒゲトカゲ" }
-type   = "number"
-widget = "slider"
-min    = 0
-max    = 5
-step   = 1
+key       = "characters.bearded_dragon"
+label     = { en = "Bearded Dragon", ja = "フトアゴヒゲトカゲ" }
+type      = "number"
+widget    = "segmented_control"
+options   = ["0", "1", "2", "3", "4", "5"]
 
 [[tabs.fields]]
-key    = "characters.pond_turtle"
-label  = { en = "Pond Turtle", ja = "クサガメ" }
-type   = "number"
-widget = "slider"
-min    = 0
-max    = 5
-step   = 1
+key       = "characters.pond_turtle"
+label     = { en = "Pond Turtle", ja = "クサガメ" }
+type      = "number"
+widget    = "segmented_control"
+options   = ["0", "1", "2", "3", "4", "5"]
 
 [[tabs.fields]]
-key    = "characters.leopard_gecko"
-label  = { en = "Leopard Gecko", ja = "レオパードゲッコー" }
-type   = "number"
-widget = "slider"
-min    = 0
-max    = 5
-step   = 1
-hint   = { en = "If all three counts are 0, one Bearded Dragon spawns at startup.", ja = "3種とも 0 のときは、起動時にフトアゴが 1 体スポーンします。" }
+key       = "characters.leopard_gecko"
+label     = { en = "Leopard Gecko", ja = "レオパードゲッコー" }
+type      = "number"
+widget    = "segmented_control"
+options   = ["0", "1", "2", "3", "4", "5"]
+hint      = { en = "If all three counts are 0, one Bearded Dragon spawns at startup.", ja = "3種とも 0 のときは、起動時にフトアゴが 1 体スポーンします。" }
 
 # ── Speech ───────────────────────────────────────────────────────────────────
 
