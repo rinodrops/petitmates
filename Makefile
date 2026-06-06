@@ -20,6 +20,7 @@ DMG_SETTINGS := dmg_settings.py
 WIN_DIR     := $(DIST_DIR)/petitmates-windows
 WIN_EXE_NAME := Petit Mates
 WIN_EXE   := $(WIN_DIR)/$(WIN_EXE_NAME).exe
+WIN_SETTINGS_EXE := Settings.exe
 WIN_ZIP   := $(DIST_DIR)/Petit-Mates-v$(VERSION)-windows-x86_64.zip
 WIN_TARGET_DIR := /tmp/pm-win
 
@@ -179,12 +180,14 @@ _icns_build: | $(RES_DIR_T)
 win: confui-win
 	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --release --target x86_64-pc-windows-gnu
 	mkdir -p "$(WIN_DIR)"
+	rm -f "$(WIN_DIR)/ConfUI.exe"
 	cp "$(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/release/$(EXE_NAME).exe" "$(WIN_EXE)"
-	cp "$(CONFUI_WIN_EXE)" "$(WIN_DIR)/ConfUI.exe"
+	cp "$(CONFUI_WIN_EXE)" "$(WIN_DIR)/$(WIN_SETTINGS_EXE)"
 	@echo "Windows build: $(WIN_DIR)"
 
 win-zip: win
-	cd "$(DIST_DIR)" && zip "$(notdir $(WIN_ZIP))" "$(notdir $(WIN_EXE))"
+	rm -f "$(WIN_ZIP)"
+	cd "$(WIN_DIR)" && zip "../$(notdir $(WIN_ZIP))" "$(WIN_EXE_NAME).exe" "$(WIN_SETTINGS_EXE)"
 	@echo "Windows package: $(WIN_ZIP)"
 
 # -----------------------------------------------------------------------

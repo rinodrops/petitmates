@@ -285,7 +285,7 @@ fn warn_config_load_failed(path: &Path, detail: &str) {
                  ファイル: {path_str}\n\
                  {detail}\n\n\
                  Option を押しながらメニューの「設定ファイルを開く」で修正するか、\
-                 ConfUI で内容を直してください。"
+                 設定ウィンドウで内容を直してください。"
             ),
         )
     } else {
@@ -296,7 +296,7 @@ fn warn_config_load_failed(path: &Path, detail: &str) {
                  File: {path_str}\n\
                  {detail}\n\n\
                  Hold Option and choose Open Settings File from the menu to edit, \
-                 or fix the file in ConfUI."
+                 or open Settings to fix the file."
             ),
         )
     };
@@ -307,7 +307,7 @@ fn warn_config_load_failed(path: &Path, detail: &str) {
 pub fn confui_exe_path() -> Option<PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     #[cfg(target_os = "windows")]
-    let name = "ConfUI.exe";
+    let name = "Settings.exe";
     #[cfg(not(target_os = "windows"))]
     let name = "confui";
     let path = dir.join(name);
@@ -319,8 +319,8 @@ pub fn launch_settings_ui() {
     let Some(confui) = confui_exe_path() else {
         show_settings_error(
             "Settings Unavailable",
-            "The settings UI (ConfUI) was not found next to the application.\n\
-             Reinstall Petit Mates or rebuild with ConfUI bundled.",
+            "Settings was not found next to the application.\n\
+             Reinstall Petit Mates.",
         );
         return;
     };
@@ -364,7 +364,7 @@ pub fn launch_settings_ui() {
             }
             show_settings_error(
                 "Settings Unavailable",
-                &format!("Failed to launch ConfUI:\n{e}"),
+                &format!("Failed to launch Settings:\n{e}"),
             );
             return;
         }
