@@ -52,6 +52,8 @@ APP_PASS  := $(APPLE_DEVELOPER_APP_PASSWORD)
 # Settings UI (local dev: repos/settings as ../settings; CI: checkout at ./settings)
 SETTINGS_DIR        ?= ../settings
 SETTINGS_SCHEMA     := $(abspath schema.toml)
+# Relative from SETTINGS_DIR (no spaces in the Make arg); settings `abspath $(SCHEMA)` splits on spaces.
+SETTINGS_SCHEMA_REL := $(if $(wildcard $(SETTINGS_DIR)/../petitmates/schema.toml),../petitmates/schema.toml,../schema.toml)
 SETTINGS_BIN_ARM64  := $(SETTINGS_DIR)/target/$(RUST_TARGET_ARM64)/release/settings
 SETTINGS_BIN_X86    := $(SETTINGS_DIR)/target/$(RUST_TARGET_X86)/release/settings
 SETTINGS_WIN_EXE    := $(SETTINGS_DIR)/dist/settings/windows-x86_64/Settings.exe
@@ -134,14 +136,8 @@ settings-x86_64:
 		MACOSX_DEPLOYMENT_TARGET=$(MIN_MACOS) \
 		cargo build --release --target $(RUST_TARGET_X86)
 
-# Inline build: settings Makefile passes SETTINGS_SCHEMA unquoted (breaks paths with spaces).
 settings-win:
-	@test -f '$(SETTINGS_DIR)/assets/icons.ttf' || $(MAKE) -C '$(SETTINGS_DIR)' icons
-	@test -f '$(SETTINGS_DIR)/assets/appicon.ico' || $(MAKE) -C '$(SETTINGS_DIR)' appicon-ico
-	cd '$(SETTINGS_DIR)' && SETTINGS_SCHEMA='$(SETTINGS_SCHEMA)' CARGO_TARGET_DIR=/tmp/settings-win \
-		cargo build --release -p settings --target x86_64-pc-windows-gnu
-	@mkdir -p '$(SETTINGS_DIR)/dist/settings/windows-x86_64'
-	cp /tmp/settings-win/x86_64-pc-windows-gnu/release/settings.exe '$(SETTINGS_WIN_EXE)'
+	$(MAKE) -C '$(SETTINGS_DIR)' settings-win SCHEMA='$(SETTINGS_SCHEMA_REL)'
 
 # -----------------------------------------------------------------------
 # Windows cross-compile (x86_64, from macOS)
