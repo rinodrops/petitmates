@@ -134,8 +134,14 @@ settings-x86_64:
 		MACOSX_DEPLOYMENT_TARGET=$(MIN_MACOS) \
 		cargo build --release --target $(RUST_TARGET_X86)
 
+# Inline build: settings Makefile passes SETTINGS_SCHEMA unquoted (breaks paths with spaces).
 settings-win:
-	$(MAKE) -C '$(SETTINGS_DIR)' settings-win SCHEMA='$(SETTINGS_SCHEMA)'
+	@test -f '$(SETTINGS_DIR)/assets/icons.ttf' || $(MAKE) -C '$(SETTINGS_DIR)' icons
+	@test -f '$(SETTINGS_DIR)/assets/appicon.ico' || $(MAKE) -C '$(SETTINGS_DIR)' appicon-ico
+	cd '$(SETTINGS_DIR)' && SETTINGS_SCHEMA='$(SETTINGS_SCHEMA)' CARGO_TARGET_DIR=/tmp/settings-win \
+		cargo build --release -p settings --target x86_64-pc-windows-gnu
+	@mkdir -p '$(SETTINGS_DIR)/dist/settings/windows-x86_64'
+	cp /tmp/settings-win/x86_64-pc-windows-gnu/release/settings.exe '$(SETTINGS_WIN_EXE)'
 
 # -----------------------------------------------------------------------
 # Windows cross-compile (x86_64, from macOS)
