@@ -152,7 +152,7 @@ Open **Settings…** from the menu bar / system tray. The settings window edits 
 
 You can change character size, speech bubble font size, speech language (`os` / `en` / `ja`), how many of each built-in character spawn at startup (0–5 per species), speech on/off and interval, and weather (city name). **Close the settings window to restart Petit Mates** — settings load on the next launch.
 
-The **Characters** tab sets startup counts in `[characters]` (`bearded_dragon`, `pond_turtle`, `leopard_gecko`). If all three are `0`, exactly one Bearded Dragon spawns. Menu **Add / Remove character** is runtime-only and does not change these startup counts (restart restores the saved values).
+The **Characters** tab sets startup counts in `[characters]` (`bearded_dragon`, `pond_turtle`, `leopard_gecko`). At least one count must be greater than zero in the Settings UI. If `user.toml` is edited manually with all three at `0`, exactly one Bearded Dragon still spawns at startup (engine fallback). Menu **Add / Remove character** is runtime-only and does not change these startup counts (restart restores the saved values).
 
 If you edit `user.toml` in a text editor (Option/Alt + menu), restart the app yourself to apply changes. Counts above 5 are clamped to 5 on load.
 
