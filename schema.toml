@@ -45,6 +45,10 @@ max_width = 280
 
 # ── Characters ───────────────────────────────────────────────────────────────
 
+[[constraints]]
+id   = "chars_min_one"
+expr = "characters.bearded_dragon + characters.pond_turtle + characters.leopard_gecko >= 1"
+
 [[tabs]]
 id    = "characters"
 label = { en = "Characters", ja = "キャラクター" }
@@ -56,6 +60,11 @@ label     = { en = "Bearded Dragon", ja = "フトアゴヒゲトカゲ" }
 type      = "number"
 widget    = "segmented_control"
 options   = ["0", "1", "2", "3", "4", "5"]
+hint      = { en = "At least one species count must be greater than zero.", ja = "少なくとも1種類のキャラクター数を0より大きくしてください。" }
+
+[[tabs.fields.option_states]]
+value = "0"
+when  = "chars_min_one"
 
 [[tabs.fields]]
 key       = "characters.pond_turtle"
@@ -64,13 +73,20 @@ type      = "number"
 widget    = "segmented_control"
 options   = ["0", "1", "2", "3", "4", "5"]
 
+[[tabs.fields.option_states]]
+value = "0"
+when  = "chars_min_one"
+
 [[tabs.fields]]
 key       = "characters.leopard_gecko"
 label     = { en = "Leopard Gecko", ja = "レオパードゲッコー" }
 type      = "number"
 widget    = "segmented_control"
 options   = ["0", "1", "2", "3", "4", "5"]
-hint      = { en = "If all three counts are 0, one Bearded Dragon spawns at startup.", ja = "3種とも 0 のときは、起動時にフトアゴが 1 体スポーンします。" }
+
+[[tabs.fields.option_states]]
+value = "0"
+when  = "chars_min_one"
 
 # ── Speech ───────────────────────────────────────────────────────────────────
 

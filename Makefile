@@ -54,7 +54,7 @@ SETTINGS_DIR        ?= ../settings
 SETTINGS_SCHEMA     := $(abspath schema.toml)
 SETTINGS_BIN_ARM64  := $(SETTINGS_DIR)/target/$(RUST_TARGET_ARM64)/release/settings
 SETTINGS_BIN_X86    := $(SETTINGS_DIR)/target/$(RUST_TARGET_X86)/release/settings
-SETTINGS_WIN_EXE    := $(SETTINGS_DIR)/dist/settings-windows/Settings.exe
+SETTINGS_WIN_EXE    := $(SETTINGS_DIR)/dist/settings/windows-x86_64/Settings.exe
 
 .PHONY: all dev app app-arm64 app-x86_64 win win-zip \
 	mac-dmg-arm64 mac-dmg-x86_64 mac-zip-arm64 mac-zip-x86_64 \
@@ -135,12 +135,7 @@ settings-x86_64:
 		cargo build --release --target $(RUST_TARGET_X86)
 
 settings-win:
-	@test -f '$(SETTINGS_DIR)/assets/icons.ttf' || $(MAKE) -C '$(SETTINGS_DIR)' icons
-	@test -f '$(SETTINGS_DIR)/assets/appicon.ico' || $(MAKE) -C '$(SETTINGS_DIR)' appicon-ico
-	cd '$(SETTINGS_DIR)' && SETTINGS_SCHEMA='$(SETTINGS_SCHEMA)' CARGO_TARGET_DIR=/tmp/settings-win \
-		cargo build --release --target x86_64-pc-windows-gnu
-	@mkdir -p '$(SETTINGS_DIR)/dist/settings-windows'
-	cp /tmp/settings-win/x86_64-pc-windows-gnu/release/settings.exe '$(SETTINGS_WIN_EXE)'
+	$(MAKE) -C '$(SETTINGS_DIR)' settings-win SCHEMA='$(SETTINGS_SCHEMA)'
 
 # -----------------------------------------------------------------------
 # Windows cross-compile (x86_64, from macOS)
