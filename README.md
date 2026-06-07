@@ -84,7 +84,7 @@ Characters occasionally say something. A small speech bubble appears above them 
 
 | Platform | Requirement                                                 |
 | -------- | ----------------------------------------------------------- |
-| macOS    | macOS 13 Ventura or later (Apple Silicon + Intel universal) |
+| macOS    | macOS 13 Ventura or later (Apple Silicon or Intel)          |
 | Windows  | Windows 11, x86-64                                          |
 
 Screen Recording permission is **not** required. Characters navigate using public window geometry APIs only.
@@ -93,7 +93,9 @@ Screen Recording permission is **not** required. Characters navigate using publi
 
 ### macOS
 
-1. Download **`Petit-Mates-vX.X.X-darwin-universal.dmg`** from [Releases](https://github.com/rinodrops/petitmates/releases/latest).
+1. Download the DMG for your Mac from [Releases](https://github.com/rinodrops/petitmates/releases/latest):
+   - **`Petit-Mates-vX.X.X-darwin-arm64.dmg`** — Apple Silicon
+   - **`Petit-Mates-vX.X.X-darwin-x86_64.dmg`** — Intel
 2. Open the DMG and drag **Petit Mates.app** to your Applications folder.
 3. Launch. A menu bar icon (🦎) appears.
 
