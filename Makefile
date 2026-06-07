@@ -49,7 +49,7 @@ SETTINGS_SCHEMA  := $(abspath schema.toml)
 SETTINGS_BIN     := $(SETTINGS_DIR)/target/release/settings
 SETTINGS_WIN_EXE := $(SETTINGS_DIR)/dist/settings-windows/Settings.exe
 
-.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize inspect-mac inspect-win clean settings settings-win
+.PHONY: all app dev win win-zip mac-zip mac-dmg sign notarize clean settings settings-win
 
 # Invoke cargo directly so SETTINGS_SCHEMA paths may contain spaces.
 settings:
@@ -188,20 +188,6 @@ win-zip: win
 	rm -f "$(WIN_ZIP)"
 	cd "$(WIN_DIR)" && zip "../$(notdir $(WIN_ZIP))" "$(WIN_EXE_NAME).exe" "$(WIN_SETTINGS_EXE)"
 	@echo "Windows package: $(WIN_ZIP)"
-
-# -----------------------------------------------------------------------
-# Diagnostic tools (developer only, not included in distribution)
-# -----------------------------------------------------------------------
-
-inspect-mac:
-	cargo build --bin wm_inspect
-	@echo "Built: target/debug/wm_inspect"
-	@echo "Run:   ./target/debug/wm_inspect"
-
-inspect-win:
-	CARGO_TARGET_DIR="$(WIN_TARGET_DIR)" cargo build --bin wm_inspect_win \
-		--features inspect-win --target x86_64-pc-windows-gnu
-	@echo "Built: $(WIN_TARGET_DIR)/x86_64-pc-windows-gnu/debug/wm_inspect_win.exe"
 
 # -----------------------------------------------------------------------
 # Distribution (macOS)
