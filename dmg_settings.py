@@ -1,7 +1,7 @@
 import os.path
 
 # Application bundle
-application = defines.get('app', 'dist/Petit Mates.app')
+application = defines.get('app', 'dist/darwin-arm64/Petit Mates.app')
 appname = os.path.basename(application)
 
 # Contents of the DMG

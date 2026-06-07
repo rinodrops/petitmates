@@ -53,7 +53,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           ZIP="Petit-Mates-v${VERSION}-windows-x86_64.zip"
-          cd dist/petitmates-windows
+          cd dist/windows-x86_64
           zip "../../${ZIP}" "Petit Mates.exe" "Settings.exe"
           echo "WIN_ZIP=${ZIP}" >> "$GITHUB_ENV"
 
@@ -77,7 +77,7 @@ jobs:
             ' README.md
             echo ""
             echo "### macOS Installation"
-            echo "1. Download the DMG and open it."
+            echo "1. Download the DMG for your Mac (Apple Silicon or Intel) and open it."
             echo "2. Drag **Petit Mates.app** to your Applications folder."
             echo "3. Launch — a menu bar icon appears."
             echo ""

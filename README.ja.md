@@ -84,7 +84,7 @@
 
 | プラットフォーム | 要件                                                        |
 | ---------------- | ----------------------------------------------------------- |
-| macOS            | macOS 13 Ventura 以降（Apple Silicon + Intel ユニバーサル） |
+| macOS            | macOS 13 Ventura 以降（Apple Silicon または Intel）         |
 | Windows          | Windows 11，x86-64                                          |
 
 画面収録の権限は**不要**です。公開されているウィンドウ情報 API のみを使用します。
@@ -93,7 +93,9 @@
 
 ### macOS
 
-1. [Releases](https://github.com/rinodrops/petitmates/releases/latest) から **`Petit-Mates-vX.X.X-darwin-universal.dmg`** をダウンロードします。
+1. [Releases](https://github.com/rinodrops/petitmates/releases/latest) からお使いの Mac 用 DMG をダウンロードします。
+   - **`Petit-Mates-vX.X.X-darwin-arm64.dmg`** — Apple Silicon
+   - **`Petit-Mates-vX.X.X-darwin-x86_64.dmg`** — Intel
 2. DMG を開き，**Petit Mates.app** をアプリケーションフォルダにドラッグします。
 3. 起動するとメニューバーにアイコン（🦎）が表示されます。
 
