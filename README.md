@@ -175,6 +175,15 @@ If no override file is present, built-in defaults derived from personality are u
 
 ## Release Notes
 
+### v0.7.0
+
+**macOS distribution**
+- Releases ship **two DMGs** — `darwin-arm64` (Apple Silicon) and `darwin-x86_64` (Intel) — instead of a single universal build. Download the file that matches your Mac (see [Installation](#installation)).
+
+**Settings**
+- **Characters validation** — In the Characters tab, at least one startup count must stay above zero. If two species are set to `0`, the third cannot be set to `0` either. Invalid combinations are not saved when you close the Settings window.
+- Settings UI updated (Settings **v0.2.2**). If you edit `user.toml` by hand with all three counts at `0`, the engine still spawns one Bearded Dragon at startup (unchanged fallback).
+
 ### v0.6.0
 
 **Settings**
