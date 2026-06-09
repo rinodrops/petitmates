@@ -634,7 +634,8 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
             ptr::null_mut(), ptr::null_mut(), hinstance, ptr::null(),
         )
     };
-    let (sx, sy) = startup_drop(si, &assets);
+    let stand_size = assets.size("s-stand", false);
+    let (sx, sy) = physics::startup_drop(&si.physics_screen(), stand_size.0, -stand_size.1);
     if let Some(init) = assets.sprite("s-stand", false) {
         unsafe { set_layered_content(hwnd, &init.bgra, init.w, init.h, -4096, -4096, 255) };
     }
