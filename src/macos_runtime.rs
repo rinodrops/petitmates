@@ -23,7 +23,7 @@ use objc2_foundation::{
     NSRect, NSRunLoop, NSRunLoopMode, NSSize, NSString, NSTimer,
 };
 
-use crate::assets::{make_image_view, Anchor, SpriteAssets};
+use crate::macos_assets::{make_image_view, Anchor, SpriteAssets};
 use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, SurfaceEdge, Transition};
 use crate::config::{make_shared, Config, SharedConfig};
 use crate::engine::{advance_anim, vertical_offset};
@@ -32,7 +32,8 @@ use crate::demo_behavior::DemoBehavior;
 use crate::physics;
 use crate::rust_behavior::RustBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
-use crate::wm::{self, ScreenInfo, WinInfo};
+use crate::macos_wm as wm;
+use crate::macos_wm::{ScreenInfo, WinInfo};
 
 // ---- FFI ----
 
@@ -1087,7 +1088,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                     };
                     let new_anim = ch.behavior.on_landed(&ctx);
                     let stand_anchor = ch.assets.anchor("s-stand")
-                        .unwrap_or(crate::assets::Anchor { x: 0.0, y: 0.0 });
+                        .unwrap_or(Anchor { x: 0.0, y: 0.0 });
                     let stand_h = ch.assets.image("s-stand", false)
                         .map(|img| unsafe { img.size() }.height)
                         .unwrap_or(fh);
