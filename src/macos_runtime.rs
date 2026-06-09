@@ -32,8 +32,7 @@ use crate::demo_behavior::DemoBehavior;
 use crate::physics;
 use crate::rust_behavior::RustBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
-use crate::macos_wm as wm;
-use crate::macos_wm::{ScreenInfo, WinInfo};
+use crate::macos_wm::{self, ScreenInfo, WinInfo};
 
 // ---- FFI ----
 
@@ -825,7 +824,7 @@ define_class!(
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
                 let Some(app) = b.as_mut() else { return };
-                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
                 let assets = Rc::clone(&app.bd_assets);
@@ -841,7 +840,7 @@ define_class!(
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
                 let Some(app) = b.as_mut() else { return };
-                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
                 let assets = Rc::clone(&app.pt_assets);
@@ -857,7 +856,7 @@ define_class!(
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
                 let Some(app) = b.as_mut() else { return };
-                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
                 let assets = Rc::clone(&app.lg_assets);
@@ -1035,7 +1034,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let new_ns_y = mouse_ns.y - off.1;
             unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
             let sz = unsafe { app.chars[drag_idx].panel.frame().size };
-            let si_height = wm::screen_info_raw();
+            let si_height = macos_wm::screen_info_raw();
             app.chars[drag_idx].char_pos = (new_ns_x, si_height - new_ns_y - sz.height);
         });
     });
@@ -1055,8 +1054,8 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                 else { return };
             app.chars[drag_idx].drag_offset = None;
 
-            let si = wm::screen_info_raw_full();
-            let wins = wm::list_windows(&si);
+            let si = macos_wm::screen_info_raw_full();
+            let wins = macos_wm::list_windows(&si);
             let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
 
             let ch = &mut app.chars[drag_idx];
@@ -1070,7 +1069,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let foot_y = ch.char_pos.1 + fh;
 
             // Try to snap to a nearby surface.
-            let new_surface = wm::find_surface_near(foot_x, foot_y, &wins, &si);
+            let new_surface = macos_wm::find_surface_near(foot_x, foot_y, &wins, &si);
             match new_surface {
                 Some(surf) => {
                     let ctx = BehaviorContext {
@@ -1094,9 +1093,9 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                         .unwrap_or(fh);
                     let snap_y = match &surf {
                         Surface::WindowTop { win_id, .. } =>
-                            wm::find_win(*win_id, &wins).map(|w| w.y),
+                            macos_wm::find_win(*win_id, &wins).map(|w| w.y),
                         Surface::Desktop { .. } => {
-                            let si2 = wm::screen_info_raw_full();
+                            let si2 = macos_wm::screen_info_raw_full();
                             Some(si2.floor_y())
                         }
                         _ => None,
@@ -1329,7 +1328,7 @@ fn surface_to_ns_origin(
 
         // Window top: foot on the window's top edge, x_local from left edge.
         Surface::WindowTop { win_id, x_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             let ns_top = si.height - win.y;
@@ -1340,7 +1339,7 @@ fn surface_to_ns_origin(
         // anchor.x = distance from **right** edge to grip line (for right wall).
         // Mirrored sprite (left wall): grip is the same distance from the left edge.
         Surface::WindowWall { win_id, side, y_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             // Vertical: centre sprite on grip row.
@@ -1364,7 +1363,7 @@ fn surface_to_ns_origin(
         //     Side::Right: ns_x = win.right() - sw
         //     Side::Left:  ns_x = win.x
         Surface::WindowUpperCorner { win_id, side } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             let ns_top = si.height - win.y;
@@ -1387,7 +1386,7 @@ fn surface_to_ns_origin(
 
         // Window bottom: foot on the window's bottom edge, x_local from left edge.
         Surface::WindowBottom { win_id, x_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             let ns_foot = si.height - win.bottom();
@@ -1418,7 +1417,7 @@ fn tick_char(
     ch.last_tick = now;
 
     // Surface validity check.
-    if !wm::surface_still_valid(&ch.surface, wins) {
+    if !macos_wm::surface_still_valid(&ch.surface, wins) {
         let fallback = {
             let ctx = BehaviorContext {
                 state: &ch.anim_state,
@@ -1713,7 +1712,7 @@ fn tick() {
         }
 
         // Compute screen info once for all characters.
-        let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+        let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
         });
 
@@ -1721,7 +1720,7 @@ fn tick() {
         // Phase 1 — all mutations to win_cache happen here before we borrow wins.
         let full_refresh = app.win_cache.ticks_until_refresh == 0;
         if full_refresh {
-            wm::list_windows_into(&mut app.win_cache.wins, &si);
+            macos_wm::list_windows_into(&mut app.win_cache.wins, &si);
             let attract_dist = app.chars.first()
                 .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
                 .unwrap_or(600.0);
@@ -1734,7 +1733,7 @@ fn tick() {
             // the high-frequency interval.
             for i in 0..app.chars.len() {
                 if let Some(host_id) = surface_host_win_id(&app.chars[i].surface) {
-                    match wm::host_win_info(host_id) {
+                    match macos_wm::host_win_info(host_id) {
                         Some(fresh) => {
                             if let Some(entry) = app.win_cache.wins.iter_mut().find(|w| w.id == host_id) {
                                 *entry = fresh;
@@ -1821,7 +1820,7 @@ fn tick() {
                                 *x = new_x;
                             }
                             Surface::WindowTop { win_id, x_local } => {
-                                let win_w = wm::find_win(*win_id, &wins)
+                                let win_w = macos_wm::find_win(*win_id, &wins)
                                     .map(|w| w.w)
                                     .unwrap_or(f64::MAX);
                                 *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
@@ -2006,7 +2005,7 @@ pub fn run() {
     let pt_assets = Rc::new(SpriteAssets::load(&pt_cdir, &pt_mf, pt_display_w).expect("failed to load pond_turtle sprites"));
     let lg_assets = Rc::new(SpriteAssets::load(&lg_cdir, &lg_mf, lg_display_w).expect("failed to load leopard_gecko sprites"));
 
-    let si = wm::screen_info(mt)
+    let si = macos_wm::screen_info(mt)
         .unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
 
     let demo_mode = std::env::args().any(|a| a == "--demo");
