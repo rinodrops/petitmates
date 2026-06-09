@@ -30,7 +30,7 @@ use crate::engine::{advance_anim, vertical_offset};
 use crate::manifest;
 use crate::demo_behavior::DemoBehavior;
 use crate::physics;
-use crate::rust_behavior::RustBehavior;
+use crate::terrestrial_behavior::TerrestrialBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
 use crate::macos_wm::{self, ScreenInfo, WinInfo};
 
@@ -718,7 +718,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         behavior: if demo {
             Box::new(DemoBehavior::new()) as Box<dyn crate::behavior::BehaviorScript>
         } else {
-            Box::new(RustBehavior::new())
+            Box::new(TerrestrialBehavior::new())
         },
         anim_state: State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 },
         facing: Dir::Left,
@@ -1560,7 +1560,7 @@ fn tick_char(
             physics::resolve_transition(
                 &mut new_state, &ch.anim_state, &mut ch.surface,
                 &mut ch.char_pos, &mut ch.facing, cfg, wins, &sz,
-                ch.assets.surfaces.window_bottom, ch.last_screen_pos,
+                ch.assets.surfaces.habitat, ch.last_screen_pos,
             );
             ch.anim_state = new_state;
         }

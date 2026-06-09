@@ -6,7 +6,7 @@
 
 use rand::{Rng, SeedableRng};
 
-use crate::behavior::{Dir, LandingMode, Side, State, Surface};
+use crate::behavior::{Dir, Habitat, LandingMode, Side, State, Surface};
 use crate::config::Config;
 
 // ---- Shared geometry ----
@@ -463,7 +463,7 @@ pub fn resolve_transition(
     cfg: &Config,
     wins: &[WinInfo],
     sz: &TerrestrialSizes,
-    window_bottom: bool,
+    habitat: Habitat,
     launch_pos: (f64, f64),
 ) {
     // Seed pos from wall position when transitioning to Falling from a wall.
@@ -541,7 +541,7 @@ pub fn resolve_transition(
          Surface::WindowWall { win_id, side, y_local }) => {
             resolve_wall_bottom(
                 new_state, pos, facing, wins, *win_id, *side, *y_local, *dir,
-                sz.jump_w, sz.jump_h, sz.sprite_w, window_bottom,
+                sz.jump_w, sz.jump_h, sz.sprite_w, habitat,
             )
         }
 
@@ -618,11 +618,11 @@ fn resolve_wall_bottom(
     jump_w: f64,
     jump_h: f64,
     sprite_w: f64,
-    window_bottom: bool,
+    habitat: Habitat,
 ) -> Option<Surface> {
     let win = find_win(win_id, wins)?;
     if y_local < win.h - 4.0 { return None; }
-    if window_bottom {
+    if habitat == Habitat::SemiAquatic {
         let corner_offset = sprite_w / 2.0 + 4.0;
         let x_local = match side {
             Side::Left  => corner_offset,

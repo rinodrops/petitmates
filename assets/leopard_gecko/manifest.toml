@@ -1,7 +1,7 @@
 canonical_width = 512
 
 [surfaces]
-window_bottom = false
+habitat = "terrestrial"
 
 [animations.walk]
 frames = 3

@@ -23,9 +23,9 @@ fn dir_to_side(dir: Dir) -> Side {
     }
 }
 
-// ---- RustBehavior ----
+// ---- TerrestrialBehavior ----
 
-pub struct RustBehavior {
+pub struct TerrestrialBehavior {
     rng: Mutex<SmallRng>,
     /// Instant of the last window-to-window jump (or app start).
     last_outing: Mutex<Instant>,
@@ -37,7 +37,7 @@ pub struct RustBehavior {
     next_run_secs: Mutex<f64>,
 }
 
-impl RustBehavior {
+impl TerrestrialBehavior {
     pub fn new() -> Self {
         Self {
             rng: Mutex::new(SmallRng::from_os_rng()),
@@ -168,7 +168,7 @@ impl RustBehavior {
     }
 }
 
-impl BehaviorScript for RustBehavior {
+impl BehaviorScript for TerrestrialBehavior {
     fn outing_info(&self, cfg: &crate::config::Config) -> Option<(f64, f64)> {
         let interval = cfg.corner.outing_interval;
         if interval[0] <= 0.0 && interval[1] <= 0.0 {

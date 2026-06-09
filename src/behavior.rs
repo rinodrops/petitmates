@@ -1,10 +1,27 @@
 /// Core types for the behavior state machine.
 ///
 /// `BehaviorScript` is the trait that drives state transitions.
-/// Currently, it uses `RustBehavior` (built-in).
-/// In the future, I will add `LuaBehavior` for user `.pmate` characters.
+/// Currently, it uses `TerrestrialBehavior` (built-in).
 
 use crate::config::Config;
+
+// ---- Habitat ----
+
+/// Ecological category of a character, read from `manifest.toml`.
+///
+/// Determines which physics world is used and which surfaces are valid.
+/// `Aquatic` is reserved for Step 3 (water physics).
+#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Habitat {
+    /// Terrestrial character: uses Desktop / WindowTop / WindowWall.
+    /// Cannot walk on window undersides (`WindowBottom`).
+    Terrestrial,
+    /// Semi-aquatic character: same surfaces as Terrestrial plus `WindowBottom`.
+    /// Default for new characters.
+    #[default]
+    SemiAquatic,
+}
 
 // ---- Orientation helpers ----
 

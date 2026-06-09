@@ -8,7 +8,7 @@ mod debug_menu;
 mod demo_behavior;
 mod engine;
 mod manifest;
-mod rust_behavior;
+mod terrestrial_behavior;
 mod speech;
 mod sprite_map;
 mod user_config;

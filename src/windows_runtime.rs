@@ -32,7 +32,7 @@ use crate::config::{make_shared_win_for, SharedConfig};
 use crate::engine::{advance_anim, vertical_offset};
 use crate::manifest;
 use crate::physics;
-use crate::rust_behavior::RustBehavior;
+use crate::terrestrial_behavior::TerrestrialBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
 use crate::windows_assets::{self, Anchor, SpriteAssets};
 use crate::windows_wm::{self, ScreenInfo, WinInfo};
@@ -655,7 +655,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         assets,
         config,
         effective_config,
-        behavior:        Box::new(RustBehavior::new()),
+        behavior:        Box::new(TerrestrialBehavior::new()),
         anim_state:      State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 },
         facing:          Dir::Left,
         surface:         Surface::Airborne,
@@ -798,7 +798,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             physics::resolve_transition(
                 &mut new_state, &ch.anim_state, &mut ch.surface,
                 &mut ch.char_pos, &mut ch.facing, cfg, wins, &sz,
-                ch.assets.surfaces.window_bottom, launch_pos,
+                ch.assets.surfaces.habitat, launch_pos,
             );
             ch.anim_state = new_state;
         }
