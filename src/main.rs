@@ -3,6 +3,7 @@
 mod anim_trigger;
 mod behavior;
 mod config;
+mod physics;
 mod debug_menu;
 mod demo_behavior;
 mod engine;
