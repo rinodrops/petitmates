@@ -91,6 +91,7 @@ struct EnumCtx {
     // Raw pointer to the output buffer; valid for the duration of EnumWindows.
     wins: *mut Vec<WinInfo>,
     screen_w: f64,
+    screen_h: f64,
     usable_h: f64,
 }
 
@@ -167,10 +168,18 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
         return TRUE;
     }
 
+    // Exclude windows that don't overlap the primary monitor rectangle.
+    // This prevents characters from jumping to windows on secondary monitors.
+    let x = r.left as f64;
+    let y = r.top as f64;
+    if x + w <= 0.0 || x >= ctx.screen_w || y + h <= 0.0 || y >= ctx.screen_h {
+        return TRUE;
+    }
+
     wins.push(WinInfo {
         id: hwnd as u32,
-        x: r.left as f64,
-        y: r.top as f64,
+        x,
+        y,
         w,
         h,
     });
@@ -187,6 +196,7 @@ pub fn list_windows_into(buf: &mut Vec<WinInfo>, si: &ScreenInfo) {
         my_pid: unsafe { GetCurrentProcessId() },
         wins: buf_ptr,
         screen_w: si.width,
+        screen_h: si.height,
         usable_h: si.floor_y(),
     };
     unsafe { EnumWindows(Some(enum_proc), &mut ctx as *mut EnumCtx as LPARAM) };

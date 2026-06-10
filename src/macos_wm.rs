@@ -145,6 +145,12 @@ pub fn list_windows_into(buf: &mut Vec<WinInfo>, si: &ScreenInfo) {
             continue;
         }
 
+        // Exclude windows that don't overlap the primary screen rectangle.
+        // This prevents characters from jumping to windows on secondary displays.
+        if x + w <= 0.0 || x >= si.width || y + h <= 0.0 || y >= si.height {
+            continue;
+        }
+
         buf.push(WinInfo { id, x, y, w, h });
     }
 }
@@ -216,12 +222,16 @@ pub fn host_win_info(win_id: u32) -> Option<WinInfo> {
 
 // ---- Screen info ----
 
-/// Query screen dimensions and Dock height from the main NSScreen.
+/// Query screen dimensions and Dock height from the primary NSScreen.
+///
+/// Uses `NSScreen::screens()[0]` (the screen that always carries the menu bar)
+/// rather than `NSScreen::mainScreen()`, which tracks the key-window's screen
+/// and changes when the user activates a window on a secondary display.
 ///
 /// NSScreen uses bottom-left origin; `visibleFrame.origin.y` equals the Dock
 /// height when the Dock is positioned at the bottom.
 pub fn screen_info(mt: MainThreadMarker) -> Option<ScreenInfo> {
-    let screen = NSScreen::mainScreen(mt)?;
+    let screen = NSScreen::screens(mt).firstObject()?;
     let frame = screen.frame();
     let visible = screen.visibleFrame();
     let height = frame.size.height;
@@ -241,7 +251,8 @@ pub fn screen_info(mt: MainThreadMarker) -> Option<ScreenInfo> {
 pub fn screen_info_raw() -> f64 {
     unsafe {
         let mt = MainThreadMarker::new_unchecked();
-        NSScreen::mainScreen(mt)
+        NSScreen::screens(mt)
+            .firstObject()
             .map(|s| s.frame().size.height)
             .unwrap_or(800.0)
     }
