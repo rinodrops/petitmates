@@ -81,7 +81,7 @@ impl WinListCache {
 }
 
 const WIN_CACHE_IMMEDIATE: u32 = 1;
-const WIN_CACHE_HIGH_FREQ: u32 = 15;
+const WIN_CACHE_HIGH_FREQ: u32 = 5;
 const WIN_CACHE_LOW_FREQ: u32 = 150;
 
 /// Determines the next refresh interval based on character states and
@@ -122,12 +122,15 @@ fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f6
 /// Used to skip redundant `swap_sprite` / `setFrameOrigin` / `orderWindow` calls.
 #[derive(PartialEq)]
 struct RenderedState {
-    sprite_name: String,
-    mirror:      bool,
-    origin:      (f64, f64),
-    y_offset:    f64,
-    z_host_id:   Option<u32>,
-    panel_level:  isize,
+    sprite_name:      String,
+    mirror:           bool,
+    origin:           (f64, f64),
+    y_offset:         f64,
+    z_host_id:        Option<u32>,
+    /// The CGWindowID of the first foreign window above the host in z-order,
+    /// or None when the host is already at the front of all foreign windows.
+    /// Mirrors Windows' GW_HWNDPREV logic: only re-order when this changes.
+    z_above_host_id:  Option<u32>,
 }
 
 struct CharState {
@@ -1623,36 +1626,48 @@ fn tick_char(
     // read back where the character actually was last tick.
     ch.last_screen_pos = (origin.x, si.height - origin.y - sz.1);
 
-    // Z-order: keep character in front of its host window.
+    // Z-order: mirror the Windows GW_HWNDPREV approach.
     //
-    // When on a window surface (WindowTop, WindowWall, etc.) or mid-jump toward
-    // one, use NSFloatingWindowLevel (3) so the panel sits above all
-    // NSNormalWindowLevel (0) windows regardless of which is active.
-    // On Desktop/Airborne with no target, revert to NSNormalWindowLevel (0).
-    let desired_level: isize = if z_host.is_some() { 3 } else { 0 };
-    let level_changed = prev.map_or(true, |p| p.panel_level != desired_level);
-    let host_changed  = prev.map_or(true, |p| p.z_host_id  != z_host);
-    if level_changed || host_changed {
+    // Read the first foreign window above the host from the cached wins list
+    // (front-to-back order).  The cache is refreshed at HIGH_FREQ so z-order
+    // changes are detected within ~500 ms — no extra IPC per tick.
+    // When above_id is Some: insert panel just below it (between it and host).
+    // When above_id is None: host is frontmost; panel goes directly above it.
+    // On Desktop/Airborne (z_host == None): panel comes to front.
+    // Only call into Cocoa when the relevant ids actually change.
+    let z_above_host_id: Option<u32> = z_host.and_then(|host_id| {
+        let host_pos = wins.iter().position(|w| w.id == host_id)?;
+        if host_pos == 0 { None } else { wins.get(host_pos - 1).map(|w| w.id) }
+    });
+
+    let host_changed  = prev.map_or(true, |p| p.z_host_id       != z_host);
+    let above_changed = prev.map_or(true, |p| p.z_above_host_id != z_above_host_id);
+    if host_changed || above_changed {
         unsafe {
-            if level_changed {
-                ch.panel.setLevel(desired_level);
-            }
-            if let Some(wid) = z_host {
-                // Place just above the host window within the floating level.
-                let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
-            } else {
-                ch.panel.orderFront(None);
+            match (z_host, z_above_host_id) {
+                (None, _) => {
+                    ch.panel.orderFront(None);
+                }
+                (Some(host_id), None) => {
+                    // Host is the frontmost foreign window; place panel just above it.
+                    let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: host_id as isize];
+                }
+                (Some(_), Some(above_id)) => {
+                    // Place panel just below the foreign window that sits above the host.
+                    // NSWindowBelow = -1.
+                    let (): () = msg_send![&*ch.panel, orderWindow: -1_isize relativeTo: above_id as isize];
+                }
             }
         }
     }
 
     ch.last_rendered = Some(RenderedState {
-        sprite_name: sr.name.to_owned(),
-        mirror:      sr.mirror,
-        origin:      (origin.x, origin.y),
+        sprite_name:     sr.name.to_owned(),
+        mirror:          sr.mirror,
+        origin:          (origin.x, origin.y),
         y_offset,
-        z_host_id:   z_host,
-        panel_level:  desired_level,
+        z_host_id:       z_host,
+        z_above_host_id,
     });
 
     // Hover alpha.
