@@ -127,6 +127,7 @@ struct RenderedState {
     origin:      (f64, f64),
     y_offset:    f64,
     z_host_id:   Option<u32>,
+    panel_level:  isize,
 }
 
 struct CharState {
@@ -1622,14 +1623,24 @@ fn tick_char(
     // read back where the character actually was last tick.
     ch.last_screen_pos = (origin.x, si.height - origin.y - sz.1);
 
-    // Z-order: only reorder when the host window changed.
-    if prev.map_or(true, |p| p.z_host_id != z_host) {
+    // Z-order: keep character in front of its host window.
+    //
+    // When on a window surface (WindowTop, WindowWall, etc.) or mid-jump toward
+    // one, use NSFloatingWindowLevel (3) so the panel sits above all
+    // NSNormalWindowLevel (0) windows regardless of which is active.
+    // On Desktop/Airborne with no target, revert to NSNormalWindowLevel (0).
+    let desired_level: isize = if z_host.is_some() { 3 } else { 0 };
+    let level_changed = prev.map_or(true, |p| p.panel_level != desired_level);
+    let host_changed  = prev.map_or(true, |p| p.z_host_id  != z_host);
+    if level_changed || host_changed {
         unsafe {
+            if level_changed {
+                ch.panel.setLevel(desired_level);
+            }
             if let Some(wid) = z_host {
-                // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
+                // Place just above the host window within the floating level.
                 let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
             } else {
-                // Desktop (not jumping): bring to front within the normal level.
                 ch.panel.orderFront(None);
             }
         }
@@ -1641,6 +1652,7 @@ fn tick_char(
         origin:      (origin.x, origin.y),
         y_offset,
         z_host_id:   z_host,
+        panel_level:  desired_level,
     });
 
     // Hover alpha.
