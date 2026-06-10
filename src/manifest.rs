@@ -106,14 +106,12 @@ pub struct SpriteInfo {
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct SurfaceConfig {
-    #[serde(default = "bool_true")]
-    pub window_bottom: bool,
+    #[serde(default)]
+    pub habitat: crate::behavior::Habitat,
 }
 
-fn bool_true() -> bool { true }
-
 impl Default for SurfaceConfig {
-    fn default() -> Self { SurfaceConfig { window_bottom: true } }
+    fn default() -> Self { SurfaceConfig { habitat: crate::behavior::Habitat::SemiAquatic } }
 }
 
 #[derive(serde::Deserialize, Debug)]

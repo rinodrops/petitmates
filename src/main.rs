@@ -3,24 +3,25 @@
 mod anim_trigger;
 mod behavior;
 mod config;
+mod physics;
 mod debug_menu;
 mod demo_behavior;
 mod engine;
 mod manifest;
-mod rust_behavior;
+mod terrestrial_behavior;
 mod speech;
 mod sprite_map;
 mod user_config;
 mod weather;
 
 #[cfg(target_os = "macos")]
-mod assets;
+mod macos_assets;
 
 #[cfg(target_os = "macos")]
-mod wm;
+mod macos_wm;
 
 #[cfg(target_os = "macos")]
-mod macos;
+mod macos_runtime;
 
 #[cfg(target_os = "windows")]
 mod windows_wm;
@@ -29,12 +30,12 @@ mod windows_wm;
 mod windows_assets;
 
 #[cfg(target_os = "windows")]
-mod windows;
+mod windows_runtime;
 
 fn main() {
     #[cfg(target_os = "macos")]
-    macos::run();
+    macos_runtime::run();
 
     #[cfg(target_os = "windows")]
-    windows::run();
+    windows_runtime::run();
 }
