@@ -8,6 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
 
+use rand::{Rng, SeedableRng};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -49,7 +50,8 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
         Surface::WindowTop { win_id, .. }
         | Surface::WindowWall { win_id, .. }
         | Surface::WindowUpperCorner { win_id, .. }
-        | Surface::WindowBottom { win_id, .. } => Some(*win_id),
+        | Surface::WindowBottom { win_id, .. }
+        | Surface::WindowInterior { win_id, .. } => Some(*win_id),
         _ => None,
     }
 }
@@ -175,6 +177,8 @@ struct CharState {
     last_screen_pos: (f64, f64),
     /// Snapshot of what was last sent to Cocoa. None on first tick → forces full render.
     last_rendered: Option<RenderedState>,
+    /// Present when the character is in `PhysicsWorld::Water`; `None` on land.
+    aquatic: Option<crate::behavior::AquaticState>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -739,6 +743,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_panel_sz: (init_sz.width, init_sz.height),
         last_screen_pos: (start_cx, start_cy),
         last_rendered: None,
+        aquatic: None,
     }
 }
 
@@ -1397,6 +1402,16 @@ fn surface_to_ns_origin(
             NSPoint::new(win.x + x_local - sw / 2.0, ns_foot - anchor.y)
         }
 
+        // Window interior: centre sprite on (x_local, y_local) in window-local coords.
+        Surface::WindowInterior { win_id, x_local, y_local } => {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
+                return NSPoint::ZERO;
+            };
+            let cg_x = win.x + x_local;
+            let cg_y = win.y + y_local;
+            NSPoint::new(cg_x - sw / 2.0, cg_to_ns_y(cg_y, sh) - sh / 2.0 + anchor.y)
+        }
+
     }
 }
 
@@ -1468,6 +1483,67 @@ fn tick_char(
 
     // Advance per-state animation timers / frame counters.
     let elapsed = advance_anim(&mut ch.anim_state, dt, cfg, &ch.assets.animations);
+
+    if let Some(ref mut aq) = ch.aquatic {
+        // --- Water physics ---
+        let wa = ch.assets.surfaces.water_affinity;
+        if let Surface::WindowInterior { win_id, x_local, y_local } = ch.surface {
+            if let Some(&win) = macos_wm::find_win(win_id, wins) {
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(
+                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
+                );
+                physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, sprite_size / 2.0, dt, &mut rng);
+
+                // Exit water: near a top corner and probability check passes.
+                if y_local < cfg.water.thigmotaxis_margin * 0.5 {
+                    let exit_prob = (cfg.water.exit_prob_per_sec * (1.0 - wa) * dt).clamp(0.0, 1.0);
+                    let side = if x_local < win.w / 2.0 { Side::Left } else { Side::Right };
+                    let corner_x = match side { Side::Left => 0.0, Side::Right => win.w };
+                    if (x_local - corner_x).abs() < sprite_size && rng.gen_bool(exit_prob) {
+                        ch.surface = Surface::WindowUpperCorner { win_id, side };
+                        ch.aquatic = None;
+                        ch.anim_state = State::CornerTransitionFront {
+                            elapsed: 0.0,
+                            going_up: true,
+                            side,
+                        };
+                    }
+                }
+            }
+        }
+        // Update facing to match swim direction.
+        if let Some(ref aq2) = ch.aquatic {
+            if aq2.vx < -1.0 { ch.facing = Dir::Left; }
+            else if aq2.vx > 1.0 { ch.facing = Dir::Right; }
+        }
+    } else {
+        // Water entry: dive at a WindowUpperCorner when water_affinity > 0.
+        let wa = ch.assets.surfaces.water_affinity;
+        if wa > 0.0 {
+            if let Surface::WindowUpperCorner { win_id, side } = ch.surface {
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(
+                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
+                );
+                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
+                if rng.gen_bool(dive_prob) {
+                    if let Some(&win) = macos_wm::find_win(win_id, wins) {
+                        let half = sprite_size / 2.0;
+                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
+                        let vx = match side {
+                            Side::Left  =>  cfg.water.swim_speed * 0.5,
+                            Side::Right => -cfg.water.swim_speed * 0.5,
+                        };
+                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
+                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3 });
+                        ch.anim_state = State::Walking {
+                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
+                            frame: 0,
+                            frame_elapsed: 0.0,
+                        };
+                    }
+                }
+            }
+        }
 
     // Save CG y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -1564,7 +1640,7 @@ fn tick_char(
             physics::resolve_transition(
                 &mut new_state, &ch.anim_state, &mut ch.surface,
                 &mut ch.char_pos, &mut ch.facing, cfg, wins, &sz,
-                ch.assets.surfaces.habitat, ch.last_screen_pos,
+                ch.assets.surfaces.water_affinity, ch.last_screen_pos,
             );
             ch.anim_state = new_state;
         }
@@ -1580,9 +1656,13 @@ fn tick_char(
         }
     }
 
-    // Keep facing in sync with Walking/Running direction.
-    if let State::Walking { dir, .. } | State::Running { dir, .. } = &ch.anim_state {
-        ch.facing = *dir;
+    } // end land physics (else branch)
+
+    // Keep facing in sync with Walking/Running direction (land only; water updates facing via vx).
+    if ch.aquatic.is_none() {
+        if let State::Walking { dir, .. } | State::Running { dir, .. } = &ch.anim_state {
+            ch.facing = *dir;
+        }
     }
 
     // Select sprite and update panel position.

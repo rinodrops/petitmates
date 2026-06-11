@@ -284,6 +284,32 @@ impl Default for DisplayConfig {
     }
 }
 
+#[derive(serde::Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct WaterConfig {
+    /// Maximum distance from any window edge before thigmotaxis pull activates (pixels).
+    pub thigmotaxis_margin: f64,
+    /// Base swim speed (px/s).
+    pub swim_speed: f64,
+    /// Probability per second of diving into a window interior at a corner.
+    /// Multiplied by `water_affinity` at runtime.
+    pub dive_prob_per_sec: f64,
+    /// Probability per second of exiting water at a top corner.
+    /// Multiplied by `(1 - water_affinity)` at runtime.
+    pub exit_prob_per_sec: f64,
+}
+
+impl Default for WaterConfig {
+    fn default() -> Self {
+        Self {
+            thigmotaxis_margin: 80.0,
+            swim_speed:         100.0,
+            dive_prob_per_sec:  0.3,
+            exit_prob_per_sec:  0.2,
+        }
+    }
+}
+
 #[derive(serde::Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct Config {
@@ -292,6 +318,7 @@ pub struct Config {
     pub corner: CornerConfig,
     pub jump: JumpConfig,
     pub display: DisplayConfig,
+    pub water: WaterConfig,
 }
 
 // ---- Hot-reload wrapper ----

@@ -5,24 +5,6 @@
 
 use crate::config::Config;
 
-// ---- Habitat ----
-
-/// Ecological category of a character, read from `manifest.toml`.
-///
-/// Determines which physics world is used and which surfaces are valid.
-/// `Aquatic` is reserved for Step 3 (water physics).
-#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Habitat {
-    /// Terrestrial character: uses Desktop / WindowTop / WindowWall.
-    /// Cannot walk on window undersides (`WindowBottom`).
-    Terrestrial,
-    /// Semi-aquatic character: same surfaces as Terrestrial plus `WindowBottom`.
-    /// Default for new characters.
-    #[default]
-    SemiAquatic,
-}
-
 // ---- Orientation helpers ----
 
 /// Horizontal direction the character is facing.
@@ -110,8 +92,21 @@ pub enum Surface {
     /// Bottom edge of a window. `x_local` is offset from the window's left edge.
     /// Character stands below the window's bottom edge (hanging from the underside).
     WindowBottom { win_id: u32, x_local: f64 },
+    /// Interior of a window (water zone). Position is window-local: origin at
+    /// window top-left, Y increases downward. Used by aquatic characters.
+    WindowInterior { win_id: u32, x_local: f64, y_local: f64 },
     /// In the air (falling or jumping). Not bound to any surface.
     Airborne,
+}
+
+// ---- AquaticState ----
+
+/// Physics state for a character currently in `PhysicsWorld::Water`.
+/// Position is stored in `Surface::WindowInterior`; this struct holds velocity only.
+#[derive(Debug, Clone)]
+pub struct AquaticState {
+    pub vx: f64,
+    pub vy: f64,
 }
 
 // ---- State ----

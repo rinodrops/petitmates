@@ -1,7 +1,7 @@
 canonical_width = 512
 
 [surfaces]
-habitat = "terrestrial"
+water_affinity = 0.5
 
 [animations.walk]
 frames = 4

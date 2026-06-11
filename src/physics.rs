@@ -6,7 +6,7 @@
 
 use rand::{Rng, SeedableRng};
 
-use crate::behavior::{Dir, Habitat, LandingMode, Side, State, Surface};
+use crate::behavior::{AquaticState, Dir, LandingMode, Side, State, Surface};
 use crate::config::Config;
 
 // ---- Shared geometry ----
@@ -52,7 +52,8 @@ pub fn surface_still_valid(surface: &Surface, wins: &[WinInfo]) -> bool {
         Surface::WindowTop { win_id, .. }
         | Surface::WindowWall { win_id, .. }
         | Surface::WindowUpperCorner { win_id, .. }
-        | Surface::WindowBottom { win_id, .. } => find_win(*win_id, wins).is_some(),
+        | Surface::WindowBottom { win_id, .. }
+        | Surface::WindowInterior { win_id, .. } => find_win(*win_id, wins).is_some(),
     }
 }
 
@@ -463,7 +464,7 @@ pub fn resolve_transition(
     cfg: &Config,
     wins: &[WinInfo],
     sz: &TerrestrialSizes,
-    habitat: Habitat,
+    water_affinity: f64,
     launch_pos: (f64, f64),
 ) {
     // Seed pos from wall position when transitioning to Falling from a wall.
@@ -541,7 +542,7 @@ pub fn resolve_transition(
          Surface::WindowWall { win_id, side, y_local }) => {
             resolve_wall_bottom(
                 new_state, pos, facing, wins, *win_id, *side, *y_local, *dir,
-                sz.jump_w, sz.jump_h, sz.sprite_w, habitat,
+                sz.jump_w, sz.jump_h, sz.sprite_w, water_affinity,
             )
         }
 
@@ -618,11 +619,11 @@ fn resolve_wall_bottom(
     jump_w: f64,
     jump_h: f64,
     sprite_w: f64,
-    habitat: Habitat,
+    water_affinity: f64,
 ) -> Option<Surface> {
     let win = find_win(win_id, wins)?;
     if y_local < win.h - 4.0 { return None; }
-    if habitat == Habitat::SemiAquatic {
+    if water_affinity > 0.0 {
         let corner_offset = sprite_w / 2.0 + 4.0;
         let x_local = match side {
             Side::Left  => corner_offset,
@@ -637,5 +638,72 @@ fn resolve_wall_bottom(
         pos.1 = win.y + y_local - jump_h / 2.0;
         *new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
         Some(Surface::Airborne)
+    }
+}
+
+// ---- Water physics ----
+
+/// Per-tick physics for a character in `PhysicsWorld::Water`.
+///
+/// `surface` must be `Surface::WindowInterior`; other variants are a no-op.
+/// `sprite_half` is half the sprite's display width, used as the wall margin.
+pub fn tick_water(
+    surface: &mut Surface,
+    aq: &mut AquaticState,
+    win: &WinInfo,
+    cfg: &crate::config::WaterConfig,
+    sprite_half: f64,
+    dt: f64,
+    rng: &mut impl rand::Rng,
+) {
+    let Surface::WindowInterior { ref mut x_local, ref mut y_local, .. } = *surface else { return };
+
+    // Integrate velocity.
+    *x_local += aq.vx * dt;
+    *y_local += aq.vy * dt;
+
+    let m = sprite_half.max(4.0);
+
+    // Bounce off walls with a slight random angle perturbation.
+    if *x_local < m         { *x_local = m;           aq.vx =  aq.vx.abs()  + rng.gen_range(-8.0..8.0); }
+    if *x_local > win.w - m { *x_local = win.w - m;   aq.vx = -aq.vx.abs()  + rng.gen_range(-8.0..8.0); }
+    if *y_local < m         { *y_local = m;            aq.vy =  aq.vy.abs()  + rng.gen_range(-8.0..8.0); }
+    if *y_local > win.h - m { *y_local = win.h - m;   aq.vy = -aq.vy.abs()  + rng.gen_range(-8.0..8.0); }
+
+    // Thigmotaxis: pull toward the nearest wall when too far from all walls.
+    let dist_l = *x_local - m;
+    let dist_r = (win.w - m) - *x_local;
+    let dist_t = *y_local - m;
+    let dist_b = (win.h - m) - *y_local;
+    let min_dist = dist_l.min(dist_r).min(dist_t).min(dist_b);
+
+    if min_dist > cfg.thigmotaxis_margin {
+        let pull = (min_dist - cfg.thigmotaxis_margin) * 30.0;
+        if dist_l <= dist_r && dist_l <= dist_t && dist_l <= dist_b {
+            aq.vx -= pull * dt;
+        } else if dist_r <= dist_t && dist_r <= dist_b {
+            aq.vx += pull * dt;
+        } else if dist_t <= dist_b {
+            aq.vy -= pull * dt;
+        } else {
+            aq.vy += pull * dt;
+        }
+    }
+
+    // Clamp to max speed.
+    let speed_sq = aq.vx * aq.vx + aq.vy * aq.vy;
+    let max_sp   = cfg.swim_speed;
+    if speed_sq > max_sp * max_sp {
+        let s = speed_sq.sqrt();
+        aq.vx = aq.vx / s * max_sp;
+        aq.vy = aq.vy / s * max_sp;
+    }
+
+    // Ensure minimum speed so the character never becomes stationary.
+    let min_sp = max_sp * 0.25;
+    if speed_sq < min_sp * min_sp {
+        let angle: f64 = rng.gen_range(0.0..std::f64::consts::TAU);
+        aq.vx = angle.cos() * min_sp;
+        aq.vy = angle.sin() * min_sp;
     }
 }
