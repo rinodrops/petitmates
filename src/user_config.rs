@@ -181,6 +181,19 @@ impl CharactersConfig {
     }
 }
 
+/// Runtime mode selected by the user.
+///
+/// - `Free` (default): characters roam the desktop and external window frames only.
+///   Aquatic physics is disabled; no character enters a `WindowInterior`.
+/// - `Vivarium`: enables the dedicated vivarium window and aquatic physics.
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Free,
+    Vivarium,
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct UserConfig {
@@ -188,6 +201,7 @@ pub struct UserConfig {
     pub speech: SpeechConfig,
     pub weather: WeatherConfig,
     pub characters: CharactersConfig,
+    pub mode: Mode,
 }
 
 // ---- Path resolution ----
@@ -297,6 +311,8 @@ enabled = true
 bearded_dragon = 1   # startup count per species (0–5); all zero → 1 bearded dragon
 pond_turtle    = 1
 leopard_gecko  = 1
+
+# mode = "free"   # "free" (default) or "vivarium"
 "#;
 
 /// Loads `user.toml` from the application support directory.

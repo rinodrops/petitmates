@@ -105,13 +105,16 @@ pub struct SpriteInfo {
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct SurfaceConfig {
-    #[serde(default)]
-    pub habitat: crate::behavior::Habitat,
+    /// Affinity for water surfaces in [0.0, 1.0].
+    /// 0.0 = never enters water; 1.0 = almost always in water.
+    /// Controls `PhysicsWorld::Water` transitions and `WindowBottom` access.
+    pub water_affinity: f64,
 }
 
 impl Default for SurfaceConfig {
-    fn default() -> Self { SurfaceConfig { habitat: crate::behavior::Habitat::SemiAquatic } }
+    fn default() -> Self { SurfaceConfig { water_affinity: 0.0 } }
 }
 
 #[derive(serde::Deserialize, Debug)]
