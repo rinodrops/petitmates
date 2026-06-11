@@ -8,6 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
 
+use rand::{Rng, SeedableRng};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -23,15 +24,16 @@ use objc2_foundation::{
     NSRect, NSRunLoop, NSRunLoopMode, NSSize, NSString, NSTimer,
 };
 
-use crate::assets::{make_image_view, Anchor, SpriteAssets};
-use crate::behavior::{BehaviorContext, BehaviorScript, Dir, LandingMode, Side, State, Surface, SurfaceEdge, Transition};
+use crate::macos_assets::{make_image_view, Anchor, SpriteAssets};
+use crate::behavior::{BehaviorContext, BehaviorScript, Dir, Side, State, Surface, SurfaceEdge, Transition};
 use crate::config::{make_shared, Config, SharedConfig};
 use crate::engine::{advance_anim, vertical_offset};
 use crate::manifest;
 use crate::demo_behavior::DemoBehavior;
-use crate::rust_behavior::RustBehavior;
+use crate::physics;
+use crate::terrestrial_behavior::TerrestrialBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
-use crate::wm::{self, ScreenInfo, WinInfo};
+use crate::macos_wm::{self, ScreenInfo, WinInfo};
 
 // ---- FFI ----
 
@@ -48,7 +50,8 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
         Surface::WindowTop { win_id, .. }
         | Surface::WindowWall { win_id, .. }
         | Surface::WindowUpperCorner { win_id, .. }
-        | Surface::WindowBottom { win_id, .. } => Some(*win_id),
+        | Surface::WindowBottom { win_id, .. }
+        | Surface::WindowInterior { win_id, .. } => Some(*win_id),
         _ => None,
     }
 }
@@ -80,7 +83,7 @@ impl WinListCache {
 }
 
 const WIN_CACHE_IMMEDIATE: u32 = 1;
-const WIN_CACHE_HIGH_FREQ: u32 = 15;
+const WIN_CACHE_HIGH_FREQ: u32 = 5;
 const WIN_CACHE_LOW_FREQ: u32 = 150;
 
 /// Determines the next refresh interval based on character states and
@@ -121,11 +124,15 @@ fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f6
 /// Used to skip redundant `swap_sprite` / `setFrameOrigin` / `orderWindow` calls.
 #[derive(PartialEq)]
 struct RenderedState {
-    sprite_name: String,
-    mirror:      bool,
-    origin:      (f64, f64),
-    y_offset:    f64,
-    z_host_id:   Option<u32>,
+    sprite_name:      String,
+    mirror:           bool,
+    origin:           (f64, f64),
+    y_offset:         f64,
+    z_host_id:        Option<u32>,
+    /// The CGWindowID of the first foreign window above the host in z-order,
+    /// or None when the host is already at the front of all foreign windows.
+    /// Mirrors Windows' GW_HWNDPREV logic: only re-order when this changes.
+    z_above_host_id:  Option<u32>,
 }
 
 struct CharState {
@@ -170,6 +177,8 @@ struct CharState {
     last_screen_pos: (f64, f64),
     /// Snapshot of what was last sent to Cocoa. None on first tick → forces full render.
     last_rendered: Option<RenderedState>,
+    /// Present when the character is in `PhysicsWorld::Water`; `None` on land.
+    aquatic: Option<crate::behavior::AquaticState>,
 }
 
 // ---- App-wide state (singletons) ----
@@ -208,6 +217,8 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
+    mode: crate::user_config::Mode,
 }
 
 thread_local! {
@@ -677,52 +688,6 @@ pub fn char_dir_for(name: &str) -> Option<PathBuf> {
 
 // ---- Position persistence ----
 
-// ---- Startup drop position ----
-
-/// Choose the initial drop position in CG coordinates (top-left of sprite).
-/// Always picks a random X within the center 80% of the screen so every
-/// launch starts fresh — no persistent state that could lock in bugs.
-fn startup_drop(si: &ScreenInfo, assets: &SpriteAssets) -> (f64, f64) {
-    use rand::{SeedableRng, Rng};
-    let stand_w = assets
-        .image("s-stand", false)
-        .map(|img| unsafe { img.size() }.width)
-        .unwrap_or(150.0);
-    // Start at the top of the visible screen area (below the menu bar).
-    let start_cg_y = si.menu_bar_height;
-    // Random x within the center 80% of the screen width.
-    let margin = si.width * 0.10;
-    let usable = (si.width - margin * 2.0 - stand_w).max(0.0);
-    let offset = rand::rngs::SmallRng::from_os_rng().random::<f64>() * usable;
-    (margin + offset, start_cg_y)
-}
-
-// ---- Spawn helper ----
-
-/// Precompute the horizontal snap X and approximate target Y for an `Airborne` jump.
-/// `target_cx` is used for arrival detection; `target_cy` is an approximation for
-/// physics (vx/vy) calculation only — actual snap Y uses the character's real position.
-fn airborne_snap_target(
-    win: &wm::WinInfo,
-    side: Side,
-    landing_mode: LandingMode,
-    assets: &SpriteAssets,
-    current_cy: f64,
-) -> (f64, f64) {
-    let hang_h  = assets.image("s-hang-wall-0", false).map(|img| unsafe { img.size() }.height).unwrap_or(150.0);
-    let stand_w = assets.image("s-stand", false).map(|img| unsafe { img.size() }.width).unwrap_or(150.0);
-    let target_cx = match side {
-        Side::Right => win.right() - stand_w,
-        Side::Left  => win.x,
-    };
-    let target_cy = match landing_mode {
-        LandingMode::ClimbFromBottom  => (win.y + win.h - hang_h / 2.0).clamp(win.y, win.y + win.h),
-        LandingMode::ClimbFromCurrent => current_cy,
-        LandingMode::TopLanding       => win.y,
-    };
-    (target_cx, target_cy)
-}
-
 /// Create one character, place it in a startup-drop position, and return
 /// the fully initialised `CharState`.  Caller is responsible for pushing it
 /// into `AppState::chars`.
@@ -738,7 +703,7 @@ fn compute_effective_config(
 }
 
 fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
-    let (start_cx, start_cy) = startup_drop(si, &assets);
+    let (start_cx, start_cy) = physics::startup_drop(&si.physics_screen(), assets.size("s-stand", false).0, si.menu_bar_height);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
     let (panel, image_view) = make_char_panel(init_img, mt);
     let init_sz = unsafe { init_img.size() };
@@ -763,7 +728,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         behavior: if demo {
             Box::new(DemoBehavior::new()) as Box<dyn crate::behavior::BehaviorScript>
         } else {
-            Box::new(RustBehavior::new())
+            Box::new(TerrestrialBehavior::new())
         },
         anim_state: State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 },
         facing: Dir::Left,
@@ -780,6 +745,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_panel_sz: (init_sz.width, init_sz.height),
         last_screen_pos: (start_cx, start_cy),
         last_rendered: None,
+        aquatic: None,
     }
 }
 
@@ -869,7 +835,7 @@ define_class!(
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
                 let Some(app) = b.as_mut() else { return };
-                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
                 let assets = Rc::clone(&app.bd_assets);
@@ -885,7 +851,7 @@ define_class!(
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
                 let Some(app) = b.as_mut() else { return };
-                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
                 let assets = Rc::clone(&app.pt_assets);
@@ -901,7 +867,7 @@ define_class!(
             APP.with(|cell| {
                 let mut b = cell.borrow_mut();
                 let Some(app) = b.as_mut() else { return };
-                let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
                 let assets = Rc::clone(&app.lg_assets);
@@ -1079,7 +1045,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let new_ns_y = mouse_ns.y - off.1;
             unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
             let sz = unsafe { app.chars[drag_idx].panel.frame().size };
-            let si_height = wm::screen_info_raw();
+            let si_height = macos_wm::screen_info_raw();
             app.chars[drag_idx].char_pos = (new_ns_x, si_height - new_ns_y - sz.height);
         });
     });
@@ -1099,8 +1065,8 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                 else { return };
             app.chars[drag_idx].drag_offset = None;
 
-            let si = wm::screen_info_raw_full();
-            let wins = wm::list_windows(&si);
+            let si = macos_wm::screen_info_raw_full();
+            let wins = macos_wm::list_windows(&si);
             let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
 
             let ch = &mut app.chars[drag_idx];
@@ -1114,7 +1080,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let foot_y = ch.char_pos.1 + fh;
 
             // Try to snap to a nearby surface.
-            let new_surface = wm::find_surface_near(foot_x, foot_y, &wins, &si);
+            let new_surface = macos_wm::find_surface_near(foot_x, foot_y, &wins, &si);
             match new_surface {
                 Some(surf) => {
                     let ctx = BehaviorContext {
@@ -1132,15 +1098,15 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
                     };
                     let new_anim = ch.behavior.on_landed(&ctx);
                     let stand_anchor = ch.assets.anchor("s-stand")
-                        .unwrap_or(crate::assets::Anchor { x: 0.0, y: 0.0 });
+                        .unwrap_or(Anchor { x: 0.0, y: 0.0 });
                     let stand_h = ch.assets.image("s-stand", false)
                         .map(|img| unsafe { img.size() }.height)
                         .unwrap_or(fh);
                     let snap_y = match &surf {
                         Surface::WindowTop { win_id, .. } =>
-                            wm::find_win(*win_id, &wins).map(|w| w.y),
+                            macos_wm::find_win(*win_id, &wins).map(|w| w.y),
                         Surface::Desktop { .. } => {
-                            let si2 = wm::screen_info_raw_full();
+                            let si2 = macos_wm::screen_info_raw_full();
                             Some(si2.floor_y())
                         }
                         _ => None,
@@ -1333,6 +1299,36 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
+    // FlagsChanged (global) — immediately update ignoresMouseEvents when ⌥⌘ is
+    // pressed or released. Without this, the 10 Hz tick creates a ≤100 ms window
+    // where the panel still ignores mouse events even though ⌥⌘ is held, causing
+    // the local RightMouseDown monitor to never fire.
+    let mask_flags = NSEventMask::FlagsChanged;
+    let blk_flags = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
+        let flags = unsafe { NSEvent::modifierFlags_class() };
+        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
+            && flags.contains(NSEventModifierFlags::Command);
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        APP.with(|cell| {
+            let b = cell.borrow();
+            let Some(app) = b.as_ref() else { return };
+            for ch in &app.chars {
+                let frame = unsafe { ch.panel.frame() };
+                let over = opt_cmd
+                    && mouse_ns.x >= frame.origin.x
+                    && mouse_ns.x < frame.origin.x + frame.size.width
+                    && mouse_ns.y >= frame.origin.y
+                    && mouse_ns.y < frame.origin.y + frame.size.height;
+                unsafe { ch.panel.setIgnoresMouseEvents(!over) };
+            }
+        });
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_flags, &*blk_flags)
+    } {
+        monitors.push(m);
+    }
+
     monitors
 }
 
@@ -1373,7 +1369,7 @@ fn surface_to_ns_origin(
 
         // Window top: foot on the window's top edge, x_local from left edge.
         Surface::WindowTop { win_id, x_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             let ns_top = si.height - win.y;
@@ -1384,7 +1380,7 @@ fn surface_to_ns_origin(
         // anchor.x = distance from **right** edge to grip line (for right wall).
         // Mirrored sprite (left wall): grip is the same distance from the left edge.
         Surface::WindowWall { win_id, side, y_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             // Vertical: centre sprite on grip row.
@@ -1408,7 +1404,7 @@ fn surface_to_ns_origin(
         //     Side::Right: ns_x = win.right() - sw
         //     Side::Left:  ns_x = win.x
         Surface::WindowUpperCorner { win_id, side } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             let ns_top = si.height - win.y;
@@ -1431,140 +1427,23 @@ fn surface_to_ns_origin(
 
         // Window bottom: foot on the window's bottom edge, x_local from left edge.
         Surface::WindowBottom { win_id, x_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
                 return NSPoint::ZERO;
             };
             let ns_foot = si.height - win.bottom();
             NSPoint::new(win.x + x_local - sw / 2.0, ns_foot - anchor.y)
         }
 
-    }
-}
+        // Window interior: centre sprite on (x_local, y_local) in window-local coords.
+        Surface::WindowInterior { win_id, x_local, y_local } => {
+            let Some(win) = macos_wm::find_win(*win_id, wins) else {
+                return NSPoint::ZERO;
+            };
+            let cg_x = win.x + x_local;
+            let cg_y = win.y + y_local;
+            NSPoint::new(cg_x - sw / 2.0, cg_to_ns_y(cg_y, sh) - sh / 2.0 + anchor.y)
+        }
 
-/// Compute `surface_progress`, `at_edge`, `jump_target`, and `attract_target`
-/// for the current surface.
-/// `jump_floor_margin` — windows above this many px from the Dock are excluded.
-/// `attract_dist` — detection radius for spontaneous floor→window attraction.
-/// `corner_attract_dist` — detection radius for corner-to-window jump (corner_jump_dist).
-fn surface_context(
-    surface: &Surface,
-    sprite_w: f64,
-    facing: Dir,
-    jump_max_dist: f64,
-    jump_floor_margin: f64,
-    attract_dist: f64,
-    corner_attract_dist: f64,
-    wins: &[WinInfo],
-    si: &ScreenInfo,
-) -> (f64, bool, Option<(u32, Side)>, Option<(u32, Side, LandingMode)>) {
-    let edge_margin = 2.0;
-    match surface {
-        Surface::WindowTop { win_id, x_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
-                return (0.5, false, None, None);
-            };
-            let progress = (x_local / win.w).clamp(0.0, 1.0);
-            let at_edge = *x_local <= edge_margin + sprite_w / 2.0
-                || *x_local >= win.w - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, None, None)
-        }
-        Surface::WindowUpperCorner { win_id, side } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
-                return (0.5, false, None, None);
-            };
-            let corner_cx = match side {
-                Side::Left  => win.x,
-                Side::Right => win.right(),
-            };
-            let corner_cy = win.y;
-            let attract_target = wins.iter()
-                .filter_map(|w| {
-                    if w.id == *win_id { return None; }
-                    let dist_r = w.x - corner_cx;
-                    let dist_l = corner_cx - w.right();
-                    // Determine how the character lands on the target wall based on
-                    // the vertical relationship between the current corner and the target window.
-                    let landing_mode = if w.y > corner_cy {
-                        // Target window starts below current corner → step down onto its top.
-                        LandingMode::TopLanding
-                    } else if w.y + w.h > corner_cy {
-                        // Target window straddles current corner height → start from bottom, climb up.
-                        LandingMode::ClimbFromBottom
-                    } else {
-                        // Target window is entirely above → snap to character's current Y (clamped).
-                        LandingMode::ClimbFromCurrent
-                    };
-                    if dist_r >= 0.0 && dist_r < corner_attract_dist {
-                        Some((w.id, Side::Left, dist_r, landing_mode))
-                    } else if dist_l >= 0.0 && dist_l < corner_attract_dist {
-                        Some((w.id, Side::Right, dist_l, landing_mode))
-                    } else {
-                        None
-                    }
-                })
-                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(id, s, _, lm)| (id, s, lm));
-            let progress = if *side == Side::Left { 0.0 } else { 1.0 };
-            (progress, false, None, attract_target)
-        }
-        Surface::Desktop { x } => {
-            let progress = (x / si.width).clamp(0.0, 1.0);
-            let cx = *x;
-            let floor_y = si.floor_y();
-            // jump_target: only in current walking direction, within jump_max_dist.
-            let jump_target = wins.iter().find_map(|win| {
-                if win.bottom() < floor_y - jump_floor_margin { return None; }
-                match facing {
-                    Dir::Left => {
-                        let dist = cx - win.right();
-                        if dist >= 0.0 && dist < jump_max_dist { Some((win.id, Side::Right)) }
-                        else { None }
-                    }
-                    Dir::Right => {
-                        let dist = win.x - cx;
-                        if dist >= 0.0 && dist < jump_max_dist { Some((win.id, Side::Left)) }
-                        else { None }
-                    }
-                }
-            });
-            // attract_target: nearest window in either direction within attract_dist.
-            let attract_target = wins.iter()
-                .filter_map(|win| {
-                    if win.bottom() < floor_y - jump_floor_margin { return None; }
-                    let dist_r = win.x - cx;
-                    let dist_l = cx - win.right();
-                    if dist_r >= 0.0 && dist_r < attract_dist {
-                        Some((win.id, Side::Left, dist_r))
-                    } else if dist_l >= 0.0 && dist_l < attract_dist {
-                        Some((win.id, Side::Right, dist_l))
-                    } else {
-                        None
-                    }
-                })
-                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(id, side, _)| (id, side, LandingMode::ClimbFromBottom));
-            let at_edge = *x <= edge_margin + sprite_w / 2.0
-                || *x >= si.width - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, jump_target, attract_target)
-        }
-        Surface::WindowWall { win_id, y_local, .. } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
-                return (0.5, false, None, None);
-            };
-            let progress = (y_local / win.h).clamp(0.0, 1.0);
-            let at_edge = *y_local <= edge_margin || *y_local >= win.h - edge_margin;
-            (progress, at_edge, None, None)
-        }
-        Surface::WindowBottom { win_id, x_local } => {
-            let Some(win) = wm::find_win(*win_id, wins) else {
-                return (0.5, false, None, None);
-            };
-            let progress = (x_local / win.w).clamp(0.0, 1.0);
-            let at_edge = *x_local <= edge_margin + sprite_w / 2.0
-                || *x_local >= win.w - edge_margin - sprite_w / 2.0;
-            (progress, at_edge, None, None)
-        }
-        _ => (0.5, false, None, None),
     }
 }
 
@@ -1573,8 +1452,9 @@ fn tick_char(
     cfg: &Config,
     si: &ScreenInfo,
     wins: &[WinInfo],
-    mt: MainThreadMarker,
+    _mt: MainThreadMarker,
     sprite_size: f64,
+    mode: &crate::user_config::Mode,
 ) {
     // While dragging, skip physics and state machine — panel position is
     // updated directly by the drag event monitor.
@@ -1589,7 +1469,7 @@ fn tick_char(
     ch.last_tick = now;
 
     // Surface validity check.
-    if !wm::surface_still_valid(&ch.surface, wins) {
+    if !macos_wm::surface_still_valid(&ch.surface, wins) {
         let fallback = {
             let ctx = BehaviorContext {
                 state: &ch.anim_state,
@@ -1637,211 +1517,155 @@ fn tick_char(
     // Advance per-state animation timers / frame counters.
     let elapsed = advance_anim(&mut ch.anim_state, dt, cfg, &ch.assets.animations);
 
+    if let Some(ref mut aq) = ch.aquatic {
+        // --- Water physics ---
+        let wa = ch.assets.surfaces.water_affinity;
+        if let Surface::WindowInterior { win_id, .. } = ch.surface {
+            if let Some(&win) = macos_wm::find_win(win_id, wins) {
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(
+                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
+                );
+                physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, wa, sprite_size / 2.0, dt, &mut rng);
+
+                // Rest/wake transitions (resting only triggers near the bottom).
+                let was_resting = aq.resting;
+                if aq.resting {
+                    let wake_p = (cfg.water.wake_prob_per_sec * dt).clamp(0.0, 1.0);
+                    if rng.gen_bool(wake_p) { aq.resting = false; }
+                } else {
+                    let near_bottom = if let Surface::WindowInterior { y_local, .. } = ch.surface {
+                        y_local > win.h - cfg.water.thigmotaxis_margin
+                    } else { false };
+                    if near_bottom {
+                        let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
+                        if rng.gen_bool(rest_p) { aq.resting = true; }
+                    }
+                }
+                // Flip animation state when rest/swim mode changes.
+                if was_resting != aq.resting {
+                    if aq.resting {
+                        ch.anim_state = State::LieIdle {
+                            head_front: false, elapsed: 0.0,
+                            duration: f64::MAX, head_timer: 0.0,
+                        };
+                    } else {
+                        ch.anim_state = State::Walking { dir: ch.facing, frame: 0, frame_elapsed: 0.0 };
+                    }
+                }
+
+                // Exit water: only when swimming and near a top corner.
+                if let Surface::WindowInterior { win_id: eid, x_local: xl, y_local: yl } = ch.surface {
+                    if !aq.resting && yl < cfg.water.thigmotaxis_margin * 0.5 {
+                        let exit_prob = (cfg.water.exit_prob_per_sec * (1.0 - wa) * dt).clamp(0.0, 1.0);
+                        let side = if xl < win.w / 2.0 { Side::Left } else { Side::Right };
+                        let corner_x = match side { Side::Left => 0.0, Side::Right => win.w };
+                        if (xl - corner_x).abs() < sprite_size && rng.gen_bool(exit_prob) {
+                            ch.surface = Surface::WindowUpperCorner { win_id: eid, side };
+                            ch.aquatic = None;
+                            ch.anim_state = State::CornerTransitionFront {
+                                elapsed: 0.0, going_up: true, side,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+        // Update facing and Walking dir to match swim velocity (swimming only).
+        if let Some(ref aq2) = ch.aquatic {
+            if !aq2.resting {
+                let new_dir = if aq2.vx < -1.0 { Some(Dir::Left) }
+                              else if aq2.vx > 1.0 { Some(Dir::Right) }
+                              else { None };
+                if let Some(d) = new_dir {
+                    ch.facing = d;
+                    if let State::Walking { ref mut dir, .. } = ch.anim_state { *dir = d; }
+                }
+            }
+        }
+    } else {
+        // Water entry: only in Vivarium mode.
+        let wa = ch.assets.surfaces.water_affinity;
+        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
+            let win_id_side: Option<(u32, Side)> = match ch.surface {
+                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
+                Surface::WindowTop { win_id, x_local } => {
+                    // Entry from the left or right end of the window top.
+                    macos_wm::find_win(win_id, wins).and_then(|win| {
+                        let half = sprite_size / 2.0;
+                        let edge_margin = 2.0;
+                        if x_local <= edge_margin + half {
+                            Some((win_id, Side::Left))
+                        } else if x_local >= win.w - edge_margin - half {
+                            Some((win_id, Side::Right))
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            };
+            if let Some((win_id, side)) = win_id_side {
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(
+                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
+                );
+                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
+                if rng.gen_bool(dive_prob) {
+                    if let Some(&win) = macos_wm::find_win(win_id, wins) {
+                        let half = sprite_size / 2.0;
+                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
+                        let vx = match side {
+                            Side::Left  =>  cfg.water.swim_speed * 0.5,
+                            Side::Right => -cfg.water.swim_speed * 0.5,
+                        };
+                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
+                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3, resting: false });
+                        ch.anim_state = State::Walking {
+                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
+                            frame: 0,
+                            frame_elapsed: 0.0,
+                        };
+                    }
+                }
+            }
+        }
+
     // Save CG y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
 
-    // Update char_pos for Airborne / Walking states.
-    match &ch.anim_state {
-        State::Falling { vx, vy, .. } | State::Airborne { vx, vy, .. } => {
-            let (vx, vy) = (*vx, *vy);
-            let (cx, cy) = ch.char_pos;
-            ch.char_pos = (cx + vx * dt, cy + vy * dt);
-        }
-        State::Walking { dir, .. } | State::Running { dir, .. } => {
-            // Advance local position within the surface.
-            let speed = if matches!(&ch.anim_state, State::Running { .. }) {
-                cfg.floor.run_speed
-            } else {
-                cfg.floor.walk_speed
+    let psi = si.physics_screen();
+
+    // Sprite sizes needed by physics functions.
+    let stand_size = ch.assets.size("s-stand", false);
+    let jump_size  = ch.assets.size("s-jump", false);
+    let hang_h     = ch.assets.size("s-hang-wall-0", false).1;
+
+    physics::integrate_velocity(&ch.anim_state, &mut ch.surface, &mut ch.char_pos, cfg, &psi, sprite_size, dt, wins);
+    physics::apply_gravity(&mut ch.anim_state, cfg.jump.gravity, dt);
+    physics::check_airborne_arrival(&mut ch.anim_state, &mut ch.surface, &mut ch.char_pos, &mut ch.facing, wins, hang_h, stand_size.0, jump_size.1);
+    physics::check_off_screen(&mut ch.anim_state, &mut ch.surface, &mut ch.char_pos, &psi, stand_size, si.menu_bar_height);
+
+    // Landing detection (swept check).
+    if let Some(li) = physics::check_landing(&ch.anim_state, prev_cy, ch.char_pos, &psi, wins, sprite_size, jump_size) {
+        let new_anim = {
+            let ctx = BehaviorContext {
+                state: &ch.anim_state,
+                surface: &li.new_surface,
+                elapsed_secs: 0.0,
+                config: cfg,
+                rng01: 0.0,
+                surface_progress: 0.5,
+                facing: ch.facing,
+                at_edge: false,
+                surface_edge_info: SurfaceEdge::None,
+                jump_target: None,
+                attract_target: None,
             };
-            let delta = speed * dt;
-            match &mut ch.surface {
-                Surface::Desktop { x } => {
-                    *x += match dir { Dir::Left => -delta, Dir::Right => delta };
-                    // Clamp so the character never walks off the visible screen area.
-                    let half_w = sprite_size / 2.0;
-                    *x = x.clamp(half_w, si.width - half_w);
-                }
-                Surface::WindowTop { x_local, .. }
-                | Surface::WindowBottom { x_local, .. } => {
-                    *x_local += match dir { Dir::Left => -delta, Dir::Right => delta };
-                }
-                _ => {}
-            }
-        }
-        State::ClimbingUp { .. } => {
-            if let Surface::WindowWall { y_local, .. } = &mut ch.surface {
-                *y_local -= cfg.wall.climb_speed * dt;
-                *y_local = y_local.max(0.0);
-            }
-        }
-        State::ClimbingDown { .. } => {
-            // y_local update done via re-borrow below (borrow checker limitation)
-        }
-        _ => {}
-    }
-    // ClimbingDown separate borrow
-    if matches!(&ch.anim_state, State::ClimbingDown { .. }) {
-        if let Surface::WindowWall { win_id, y_local, .. } = &mut ch.surface {
-            if let Some(win) = wm::find_win(*win_id, wins) {
-                *y_local += cfg.wall.climb_speed * dt;
-                *y_local = y_local.min(win.h);
-            }
-        }
-    }
-
-    // Gravity for Falling / Airborne states (cap vy to prevent tunneling).
-    if let State::Falling { vy, .. } | State::Airborne { vy, .. } = &mut ch.anim_state {
-        *vy = (*vy + cfg.jump.gravity * 60.0 * dt).min(600.0);
-    }
-
-    // Airborne arrival: snap to wall when character reaches the target X.
-    if let State::Airborne { vx, vy, target_win_id, target_side, landing_mode, target_cx, .. }
-        = ch.anim_state.clone()
-    {
-        let arrived = if vx >= 0.0 { ch.char_pos.0 >= target_cx }
-                      else         { ch.char_pos.0 <= target_cx };
-        if arrived {
-            if let Some(win) = wm::find_win(target_win_id, wins) {
-                let hang_h = ch.assets.image("s-hang-wall-0", false)
-                    .map(|img| unsafe { img.size() }.height)
-                    .unwrap_or(150.0);
-                let stand_w = ch.assets.image("s-stand", false)
-                    .map(|img| unsafe { img.size() }.width)
-                    .unwrap_or(150.0);
-                match landing_mode {
-                    LandingMode::TopLanding => {
-                        let x_local = match target_side {
-                            Side::Left  => stand_w / 2.0 + 4.0,
-                            Side::Right => win.w - stand_w / 2.0 - 4.0,
-                        };
-                        ch.char_pos = (win.x + x_local, win.y);
-                        ch.facing   = match target_side {
-                            Side::Left  => Dir::Right,
-                            Side::Right => Dir::Left,
-                        };
-                        ch.surface    = Surface::WindowTop { win_id: win.id, x_local };
-                        ch.anim_state = State::Observing { elapsed: 0.0, duration: 3.0 };
-                    }
-                    LandingMode::ClimbFromCurrent | LandingMode::ClimbFromBottom => {
-                        let jump_h = ch.assets.image("s-jump", false)
-                            .map(|img| unsafe { img.size() }.height)
-                            .unwrap_or(hang_h);
-                        let y_local = (ch.char_pos.1 + jump_h / 2.0 - win.y).clamp(hang_h / 2.0, win.h - 4.0);
-                        ch.char_pos.0 = match target_side {
-                            Side::Right => win.right() - stand_w,
-                            Side::Left  => win.x,
-                        };
-                        ch.char_pos.1 = win.y + y_local;
-                        ch.facing     = match target_side {
-                            Side::Left  => Dir::Right,
-                            Side::Right => Dir::Left,
-                        };
-                        ch.surface    = Surface::WindowWall { win_id: win.id, side: target_side, y_local };
-                        ch.anim_state = State::WallEntry { elapsed: 0.0 };
-                    }
-                }
-            } else {
-                // Target window disappeared mid-flight — fall freely.
-                ch.anim_state = State::Falling { vx, vy: vy.max(0.0), shocked: 0.5 };
-            }
-        }
-    }
-
-    // Off-screen safeguard: if the character has fallen more than one
-    //     sprite-height below the screen bottom (or drifted far off the
-    //     sides), reset to a fresh startup drop so the run loop can
-    //     continue.
-    {
-        let (fw, fh) = ch.assets.image("s-stand", false)
-            .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-            .unwrap_or((150.0, 150.0));
-        let (cx, cy) = ch.char_pos;
-        let below_screen = cy > si.height + fh;
-        let off_sides    = cx < -(fw * 3.0) || cx > si.width + fw * 3.0;
-        if below_screen || off_sides {
-            let (drop_x, drop_y) = startup_drop(si, &ch.assets);
-            ch.char_pos  = (drop_x, drop_y);
-            ch.surface   = Surface::Airborne;
-            ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
-        }
-    }
-
-    // Landing detection (swept check: did foot cross a surface boundary?).
-    if let State::Falling { vy, .. } = &ch.anim_state {
-        if *vy >= 0.0 {
-            let (fw, fh) = ch.assets.image("s-jump", false)
-                .or_else(|| ch.assets.image("s-stand", false))
-                .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                .unwrap_or((150.0, 150.0));
-            let foot_x = ch.char_pos.0 + fw / 2.0;
-            let _foot_y_prev = prev_cy + fh;
-            let foot_y_now  = ch.char_pos.1 + fh;
-
-            let floor_y = si.floor_y();
-
-            let cy_prev = prev_cy;
-            let cy_now  = ch.char_pos.1;
-            let landed_win = wins.iter()
-                .filter(|win| {
-                    win.y < floor_y
-                        && foot_x >= win.x
-                        && foot_x <= win.right()
-                        && cy_prev < win.y
-                        && cy_now + fh >= win.y
-                })
-                .min_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
-            let landed_floor = landed_win.is_none()
-                && foot_y_now >= floor_y;
-
-            let new_surface = landed_win
-                .map(|win| Surface::WindowTop {
-                    win_id: win.id,
-                    x_local: (foot_x - win.x).clamp(0.0, win.w),
-                })
-                .or_else(|| landed_floor.then(|| {
-                let half_w = sprite_size / 2.0;
-                let clamped_x = foot_x.clamp(half_w, si.width - half_w);
-                Surface::Desktop { x: clamped_x }
-            }));
-
-            if let Some(new_surface) = new_surface {
-                let new_anim = {
-                    let ctx = BehaviorContext {
-                        state: &ch.anim_state,
-                        surface: &new_surface,
-                        elapsed_secs: 0.0,
-                        config: cfg,
-                        rng01: 0.0,
-                        surface_progress: 0.5,
-                        facing: ch.facing,
-                        at_edge: false,
-                        surface_edge_info: SurfaceEdge::None,
-                        jump_target: None,
-                        attract_target: None,
-                    };
-                    ch.behavior.on_landed(&ctx)
-                };
-                let stand_anchor = ch.assets.anchor("s-stand").unwrap_or(Anchor { x: 0.0, y: 0.0 });
-                let stand_h = ch.assets.image("s-stand", false)
-                    .map(|img| unsafe { img.size() }.height)
-                    .unwrap_or(fh);
-                let snap_y = match &new_surface {
-                    Surface::WindowTop { win_id, .. } =>
-                        wm::find_win(*win_id, wins).map(|w| w.y),
-                    Surface::Desktop { .. } => Some(floor_y),
-                    _ => None,
-                };
-                if let Some(surface_y) = snap_y {
-                    ch.char_pos = (
-                        foot_x - fw / 2.0,
-                        surface_y - stand_h + stand_anchor.y,
-                    );
-                }
-                ch.surface = new_surface;
-                ch.anim_state = new_anim;
-            }
-        }
+            ch.behavior.on_landed(&ctx)
+        };
+        let stand_anchor = ch.assets.anchor("s-stand").unwrap_or(Anchor { x: 0.0, y: 0.0 });
+        ch.char_pos    = (li.foot_x - jump_size.0 / 2.0, li.surface_y - stand_size.1 + stand_anchor.y);
+        ch.surface     = li.new_surface;
+        ch.anim_state  = new_anim;
     }
 
     // Compute surface_progress, at_edge, jump_target.
@@ -1852,14 +1676,13 @@ fn tick_char(
         }
         other => sprite_for_state(other, ch.facing, &ch.assets.animations),
     };
-    let sprite_sz = ch.assets.image(&sr_for_ctx.name, sr_for_ctx.mirror)
-        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-        .unwrap_or((150.0, 150.0));
+    let sprite_sz = ch.assets.size(&sr_for_ctx.name, sr_for_ctx.mirror);
     ch.last_sprite_w = sprite_sz.0;
-    let (surface_progress, at_edge, jump_target, attract_target) =
-        surface_context(&ch.surface, sprite_sz.0, ch.facing,
-                        cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
-                        cfg.jump.climb_attract_dist, cfg.corner.corner_jump_dist, wins, si);
+    let (surface_progress, at_edge, jump_target, attract_target) = physics::surface_context(
+        &ch.surface, sprite_sz.0, ch.facing,
+        cfg.jump.wall_jump_max_dist, cfg.jump.wall_jump_floor_margin,
+        cfg.jump.climb_attract_dist, cfg.corner.corner_jump_dist, wins, &psi,
+    );
 
     // Save to_dir if a TurningAround completes this tick.
     let turn_to_dir = if let State::TurningAround { to_dir, .. } = &ch.anim_state {
@@ -1889,215 +1712,20 @@ fn tick_char(
         Transition::Stay => {}
         Transition::To(new_state) => {
             let mut new_state = new_state;
-            // Complete a turn: update facing before entering the new state.
-            if let Some(dir) = turn_to_dir {
-                ch.facing = dir;
-            }
-            // When transitioning to Falling from a wall surface, compute
-            // char_pos (CG top-left of sprite) from the wall position now,
-            // before the surface is overwritten with Airborne.
-            if matches!(&new_state, State::Falling { .. }) {
-                let fall_pos: Option<(f64, f64)> = (|| {
-                    let (sw, sh) = ch.assets.image("s-jump", false)
-                        .or_else(|| ch.assets.image("s-stand", false))
-                        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                        .map(|sz| (sz.0, sz.1))
-                        .or(Some((150.0, 150.0)))?;
-                    match &ch.surface {
-                        Surface::WindowWall { win_id, side, y_local } => {
-                            let win = wm::find_win(*win_id, wins)?;
-                            let cg_y = win.y + y_local - sh / 2.0;
-                            let cg_x = match side {
-                                Side::Right => win.right() - sw,
-                                Side::Left  => win.x,
-                            };
-                            Some((cg_x, cg_y))
-                        }
-                        _ => None,
-                    }
-                })();
-                if let Some(pos) = fall_pos {
-                    ch.char_pos = pos;
-                }
-            }
-            // Keep ch.surface in sync when the new state implies a surface change.
-            let new_surface: Option<Surface> = match (&new_state, &ch.surface) {
-                // Falling always means the character is airborne, regardless of
-                // which surface it was on before.  Without this, the panel
-                // position would continue to be derived from wall coordinates
-                // (y_local) instead of char_pos, so the character would appear
-                // frozen despite physics updating char_pos.
-                (State::Falling { .. }, _) => Some(Surface::Airborne),
-                // Airborne: fill in physics from JumpRunup state, then go airborne.
-                (State::Airborne { .. }, _) => {
-                    if let State::JumpRunup { target_win_id, target_side, landing_mode, .. } = &ch.anim_state {
-                        if let Some(win) = wm::find_win(*target_win_id, wins) {
-                            let side = *target_side;
-                            let lm   = *landing_mode;
-                            let (target_cx, target_cy) = airborne_snap_target(
-                                &win, side, lm, &ch.assets, ch.last_screen_pos.1,
-                            );
-                            let dx = target_cx - ch.last_screen_pos.0;
-                            let dy = target_cy - ch.last_screen_pos.1;
-                            let g  = cfg.jump.gravity * 60.0;
-                            let t  = dx.abs().max(1.0) / cfg.jump.air_speed;
-                            let vx = dx / t;
-                            let vy = ((dy - 0.5 * g * t * t) / t).min(-cfg.jump.min_jump_vy);
-                            new_state = State::Airborne {
-                                vx, vy,
-                                target_win_id: *target_win_id,
-                                target_side: side,
-                                landing_mode: lm,
-                                target_cx,
-                                target_cy,
-                            };
-                        }
-                    }
-                    Some(Surface::Airborne)
-                }
-                (State::CornerTransitionSide { side, .. }, Surface::WindowTop { win_id, .. }) => {
-                    Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
-                }
-                (State::CornerTransitionSide { side, .. }, Surface::WindowWall { win_id, .. }) => {
-                    Some(Surface::WindowUpperCorner { win_id: *win_id, side: *side })
-                }
-                (State::ClimbingDown { .. }, Surface::WindowUpperCorner { win_id, side }) => {
-                    let y_local = ch.assets.image("s-hang-wall-0", false)
-                        .map(|img| unsafe { img.size() }.height / 2.0)
-                        .unwrap_or(4.0);
-                    Some(Surface::WindowWall { win_id: *win_id, side: *side, y_local })
-                }
-                (State::Walking { .. } | State::Running { .. }, Surface::WindowUpperCorner { win_id, side }) => {
-                    let walk_w = ch.assets.image("s-walk-0", false)
-                        .map(|img| unsafe { img.size() }.width)
-                        .unwrap_or(sprite_sz.0);
-                    let x_offset = walk_w / 2.0 + 3.0;
-                    let x = match side {
-                        Side::Left  => x_offset,
-                        Side::Right => wm::find_win(*win_id, wins)
-                            .map(|w| w.w - x_offset)
-                            .unwrap_or(400.0 - x_offset),
-                    };
-                    Some(Surface::WindowTop { win_id: *win_id, x_local: x })
-                }
-                (State::WallEntry { .. }, Surface::Desktop { .. })
-                | (State::WallEntry { .. }, Surface::WindowTop { .. })
-                | (State::WallEntry { .. }, Surface::WindowUpperCorner { .. }) => {
-                    if let State::JumpRunup { target_win_id, target_side, landing_mode, .. } = &ch.anim_state {
-                        if let Some(win) = wm::find_win(*target_win_id, wins) {
-                            let side = *target_side;
-                            let hang_h = ch.assets.image("s-hang-wall-0", false)
-                                .map(|img| unsafe { img.size() }.height)
-                                .unwrap_or(150.0);
-                            let stand_w = ch.assets.image("s-stand", false)
-                                .map(|img| unsafe { img.size() }.width)
-                                .unwrap_or(150.0);
-                            match landing_mode {
-                                LandingMode::TopLanding => {
-                                    // Step directly onto the target window's top edge.
-                                    // Arrive near the edge the character jumped from.
-                                    let x_local = match side {
-                                        Side::Left  => stand_w / 2.0 + 4.0,
-                                        Side::Right => win.w - stand_w / 2.0 - 4.0,
-                                    };
-                                    ch.char_pos.0 = win.x + x_local;
-                                    ch.char_pos.1 = win.y;
-                                    ch.facing = match side {
-                                        Side::Left  => Dir::Right,
-                                        Side::Right => Dir::Left,
-                                    };
-                                    // Override: go directly to Observing instead of WallEntry.
-                                    new_state = State::Observing { elapsed: 0.0, duration: 3.0 };
-                                    Some(Surface::WindowTop { win_id: win.id, x_local })
-                                }
-                                LandingMode::ClimbFromCurrent => {
-                                    // Snap to the character's current Y projected onto the target wall.
-                                    let cur_y = ch.last_screen_pos.1;
-                                    let y_local = (cur_y - win.y).clamp(hang_h / 2.0, win.h - 4.0);
-                                    ch.char_pos.0 = match side {
-                                        Side::Right => win.right() - stand_w,
-                                        Side::Left  => win.x,
-                                    };
-                                    ch.char_pos.1 = win.y + y_local;
-                                    ch.facing = match side {
-                                        Side::Left  => Dir::Right,
-                                        Side::Right => Dir::Left,
-                                    };
-                                    Some(Surface::WindowWall { win_id: win.id, side, y_local })
-                                }
-                                LandingMode::ClimbFromBottom => {
-                                    // Snap near the bottom of the target wall.
-                                    let y_local = (win.h - hang_h / 2.0).clamp(hang_h / 2.0, win.h - 4.0);
-                                    ch.char_pos.0 = match side {
-                                        Side::Right => win.right() - stand_w,
-                                        Side::Left  => win.x,
-                                    };
-                                    ch.char_pos.1 = win.y + y_local;
-                                    ch.facing = match side {
-                                        Side::Left  => Dir::Right,
-                                        Side::Right => Dir::Left,
-                                    };
-                                    Some(Surface::WindowWall { win_id: win.id, side, y_local })
-                                }
-                            }
-                        } else { None }
-                    } else { None }
-                }
-                // ClimbingDown reached the wall bottom: step onto WindowBottom.
-                (State::Walking { dir, .. } | State::Running { dir, .. }, Surface::WindowWall { win_id, side, y_local }) => {
-                    if let Some(win) = wm::find_win(*win_id, wins) {
-                        if *y_local >= win.h - 4.0 {
-                            if ch.assets.surfaces.window_bottom {
-                                let corner_offset = sprite_sz.0 / 2.0 + 4.0;
-                                let x_local = match side {
-                                    Side::Left  => corner_offset,
-                                    Side::Right => win.w - corner_offset,
-                                };
-                                ch.char_pos.0 = win.x + x_local;
-                                ch.char_pos.1 = win.bottom();
-                                ch.facing = *dir;
-                                Some(Surface::WindowBottom { win_id: *win_id, x_local })
-                            } else {
-                                // window_bottom is false: drop off the wall.
-                                // Assign to `new_state` (not ch.anim_state directly) so
-                                // the final `ch.anim_state = new_state` line uses Falling.
-                                // Seed char_pos from the wall position now, before the
-                                // surface is overwritten with Airborne.
-                                let (sw, sh) = ch.assets.image("s-jump", false)
-                                    .or_else(|| ch.assets.image("s-stand", false))
-                                    .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                                    .unwrap_or((sprite_sz.0, sprite_sz.1));
-                                ch.char_pos = (
-                                    match side { Side::Left => win.x, Side::Right => win.right() - sw },
-                                    win.y + *y_local - sh / 2.0,
-                                );
-                                new_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
-                                Some(Surface::Airborne)
-                            }
-                        } else { None }
-                    } else { None }
-                }
-                _ => None,
+            if let Some(dir) = turn_to_dir { ch.facing = dir; }
+            let sz = physics::TerrestrialSizes {
+                hang_h,
+                stand_w:  stand_size.0,
+                walk_w:   ch.assets.size("s-walk-0", false).0,
+                jump_w:   jump_size.0,
+                jump_h:   jump_size.1,
+                sprite_w: sprite_sz.0,
             };
-            if let Some(ns) = new_surface {
-                ch.surface = ns;
-            }
-            if matches!(&new_state, State::ClimbingUp { .. } | State::ClimbingDown { .. }) {
-                if let Surface::WindowWall { side, .. }
-                     | Surface::WindowUpperCorner { side, .. } = &ch.surface
-                {
-                    ch.facing = match side {
-                        Side::Left  => Dir::Right,
-                        Side::Right => Dir::Left,
-                    };
-                }
-            }
-            if let State::CornerTransitionSide { side, .. } = &new_state {
-                ch.facing = match side {
-                    Side::Left  => Dir::Right,
-                    Side::Right => Dir::Left,
-                };
-            }
+            physics::resolve_transition(
+                &mut new_state, &ch.anim_state, &mut ch.surface,
+                &mut ch.char_pos, &mut ch.facing, cfg, wins, &sz,
+                ch.assets.surfaces.water_affinity, ch.last_screen_pos,
+            );
             ch.anim_state = new_state;
         }
     }
@@ -2112,9 +1740,13 @@ fn tick_char(
         }
     }
 
-    // Keep facing in sync with Walking/Running direction.
-    if let State::Walking { dir, .. } | State::Running { dir, .. } = &ch.anim_state {
-        ch.facing = *dir;
+    } // end land physics (else branch)
+
+    // Keep facing in sync with Walking/Running direction (land only; water updates facing via vx).
+    if ch.aquatic.is_none() {
+        if let State::Walking { dir, .. } | State::Running { dir, .. } = &ch.anim_state {
+            ch.facing = *dir;
+        }
     }
 
     // Select sprite and update panel position.
@@ -2158,25 +1790,48 @@ fn tick_char(
     // read back where the character actually was last tick.
     ch.last_screen_pos = (origin.x, si.height - origin.y - sz.1);
 
-    // Z-order: only reorder when the host window changed.
-    if prev.map_or(true, |p| p.z_host_id != z_host) {
+    // Z-order: mirror the Windows GW_HWNDPREV approach.
+    //
+    // Read the first foreign window above the host from the cached wins list
+    // (front-to-back order).  The cache is refreshed at HIGH_FREQ so z-order
+    // changes are detected within ~500 ms — no extra IPC per tick.
+    // When above_id is Some: insert panel just below it (between it and host).
+    // When above_id is None: host is frontmost; panel goes directly above it.
+    // On Desktop/Airborne (z_host == None): panel comes to front.
+    // Only call into Cocoa when the relevant ids actually change.
+    let z_above_host_id: Option<u32> = z_host.and_then(|host_id| {
+        let host_pos = wins.iter().position(|w| w.id == host_id)?;
+        if host_pos == 0 { None } else { wins.get(host_pos - 1).map(|w| w.id) }
+    });
+
+    let host_changed  = prev.map_or(true, |p| p.z_host_id       != z_host);
+    let above_changed = prev.map_or(true, |p| p.z_above_host_id != z_above_host_id);
+    if host_changed || above_changed {
         unsafe {
-            if let Some(wid) = z_host {
-                // NSWindowAbove = 1; relativeTo: takes the CGWindowNumber of the target.
-                let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: wid as isize];
-            } else {
-                // Desktop (not jumping): bring to front within the normal level.
-                ch.panel.orderFront(None);
+            match (z_host, z_above_host_id) {
+                (None, _) => {
+                    ch.panel.orderFront(None);
+                }
+                (Some(host_id), None) => {
+                    // Host is the frontmost foreign window; place panel just above it.
+                    let (): () = msg_send![&*ch.panel, orderWindow: 1_isize relativeTo: host_id as isize];
+                }
+                (Some(_), Some(above_id)) => {
+                    // Place panel just below the foreign window that sits above the host.
+                    // NSWindowBelow = -1.
+                    let (): () = msg_send![&*ch.panel, orderWindow: -1_isize relativeTo: above_id as isize];
+                }
             }
         }
     }
 
     ch.last_rendered = Some(RenderedState {
-        sprite_name: sr.name.to_owned(),
-        mirror:      sr.mirror,
-        origin:      (origin.x, origin.y),
+        sprite_name:     sr.name.to_owned(),
+        mirror:          sr.mirror,
+        origin:          (origin.x, origin.y),
         y_offset,
-        z_host_id:   z_host,
+        z_host_id:       z_host,
+        z_above_host_id,
     });
 
     // Hover alpha.
@@ -2248,7 +1903,7 @@ fn tick() {
         }
 
         // Compute screen info once for all characters.
-        let si = wm::screen_info(mt).unwrap_or(ScreenInfo {
+        let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
         });
 
@@ -2256,7 +1911,7 @@ fn tick() {
         // Phase 1 — all mutations to win_cache happen here before we borrow wins.
         let full_refresh = app.win_cache.ticks_until_refresh == 0;
         if full_refresh {
-            wm::list_windows_into(&mut app.win_cache.wins, &si);
+            macos_wm::list_windows_into(&mut app.win_cache.wins, &si);
             let attract_dist = app.chars.first()
                 .map(|ch| ch.config.lock().unwrap().current.jump.climb_attract_dist)
                 .unwrap_or(600.0);
@@ -2269,7 +1924,7 @@ fn tick() {
             // the high-frequency interval.
             for i in 0..app.chars.len() {
                 if let Some(host_id) = surface_host_win_id(&app.chars[i].surface) {
-                    match wm::host_win_info(host_id) {
+                    match macos_wm::host_win_info(host_id) {
                         Some(fresh) => {
                             if let Some(entry) = app.win_cache.wins.iter_mut().find(|w| w.id == host_id) {
                                 *entry = fresh;
@@ -2302,7 +1957,7 @@ fn tick() {
                 }
             }
             let cfg = ch.effective_config.clone();
-            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size);
+            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size, &app.mode);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -2356,7 +2011,7 @@ fn tick() {
                                 *x = new_x;
                             }
                             Surface::WindowTop { win_id, x_local } => {
-                                let win_w = wm::find_win(*win_id, &wins)
+                                let win_w = macos_wm::find_win(*win_id, &wins)
                                     .map(|w| w.w)
                                     .unwrap_or(f64::MAX);
                                 *x_local = (*x_local + nudge).clamp(edge_buf, win_w - edge_buf);
@@ -2541,7 +2196,7 @@ pub fn run() {
     let pt_assets = Rc::new(SpriteAssets::load(&pt_cdir, &pt_mf, pt_display_w).expect("failed to load pond_turtle sprites"));
     let lg_assets = Rc::new(SpriteAssets::load(&lg_cdir, &lg_mf, lg_display_w).expect("failed to load leopard_gecko sprites"));
 
-    let si = wm::screen_info(mt)
+    let si = macos_wm::screen_info(mt)
         .unwrap_or(ScreenInfo { width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0 });
 
     let demo_mode = std::env::args().any(|a| a == "--demo");
@@ -2621,6 +2276,7 @@ pub fn run() {
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
             win_cache: WinListCache::new(),
+            mode: user_cfg.mode,
         });
     });
 

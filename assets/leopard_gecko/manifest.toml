@@ -1,7 +1,7 @@
 canonical_width = 512
 
 [surfaces]
-window_bottom = false
+water_affinity = 0.0
 
 [animations.walk]
 frames = 3

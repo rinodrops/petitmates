@@ -25,6 +25,7 @@ pub fn surface_name(surface: &Surface) -> &'static str {
             Side::Right => "WindowUpperCorner (Right)",
         },
         Surface::WindowBottom { .. }             => "WindowBottom",
+        Surface::WindowInterior { .. }           => "WindowInterior",
         Surface::Airborne => "Airborne",
     }
 }
@@ -212,8 +213,8 @@ pub fn trigger_targets(surface: &Surface, current: &State, facing: Dir, cfg: &Co
             }
         }
 
-        // No triggers when airborne.
-        Surface::Airborne => {}
+        // No triggers when in water zone or airborne.
+        Surface::WindowInterior { .. } | Surface::Airborne => {}
     }
 
     v

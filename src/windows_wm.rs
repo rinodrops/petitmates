@@ -16,6 +16,10 @@ use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::behavior::{Side, Surface};
+use crate::physics::PhysicsScreen;
+
+// Re-export shared geometry from physics so call sites can use `windows_wm::WinInfo` etc.
+pub use crate::physics::{WinInfo, find_win, surface_still_valid};
 
 // ---- Filter constants ----
 
@@ -36,26 +40,6 @@ const SNAP: f64 = 8.0;
 
 // ---- Types ----
 
-/// Information about one on-screen window in Windows screen coordinates
-/// (origin = top-left of primary monitor, Y increases downward).
-#[derive(Debug, Clone)]
-pub struct WinInfo {
-    /// Raw HWND truncated to u32 (safe — Windows user-object handles are
-    /// always ≤ 32 bits even in 64-bit processes).
-    pub id: u32,
-    /// Left edge (screen X).
-    pub x: f64,
-    /// Top edge (screen Y).
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-impl WinInfo {
-    pub fn right(&self) -> f64 { self.x + self.w }
-    pub fn bottom(&self) -> f64 { self.y + self.h }
-}
-
 /// Primary-monitor geometry in Windows screen coordinates.
 #[derive(Debug, Clone, Copy)]
 pub struct ScreenInfo {
@@ -72,6 +56,11 @@ impl ScreenInfo {
     /// coordinates. The character stands at this Y level.
     pub fn floor_y(&self) -> f64 {
         self.height - self.taskbar_height
+    }
+
+    /// Convert to the platform-independent view used by physics functions.
+    pub fn physics_screen(&self) -> PhysicsScreen {
+        PhysicsScreen { width: self.width, height: self.height, floor_y: self.floor_y() }
     }
 }
 
@@ -102,6 +91,7 @@ struct EnumCtx {
     // Raw pointer to the output buffer; valid for the duration of EnumWindows.
     wins: *mut Vec<WinInfo>,
     screen_w: f64,
+    screen_h: f64,
     usable_h: f64,
 }
 
@@ -178,10 +168,18 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lp: LPARAM) -> BOOL {
         return TRUE;
     }
 
+    // Exclude windows that don't overlap the primary monitor rectangle.
+    // This prevents characters from jumping to windows on secondary monitors.
+    let x = r.left as f64;
+    let y = r.top as f64;
+    if x + w <= 0.0 || x >= ctx.screen_w || y + h <= 0.0 || y >= ctx.screen_h {
+        return TRUE;
+    }
+
     wins.push(WinInfo {
         id: hwnd as u32,
-        x: r.left as f64,
-        y: r.top as f64,
+        x,
+        y,
         w,
         h,
     });
@@ -198,6 +196,7 @@ pub fn list_windows_into(buf: &mut Vec<WinInfo>, si: &ScreenInfo) {
         my_pid: unsafe { GetCurrentProcessId() },
         wins: buf_ptr,
         screen_w: si.width,
+        screen_h: si.height,
         usable_h: si.floor_y(),
     };
     unsafe { EnumWindows(Some(enum_proc), &mut ctx as *mut EnumCtx as LPARAM) };
@@ -232,11 +231,6 @@ pub fn host_win_info(hwnd_id: u32) -> Option<WinInfo> {
         w,
         h,
     })
-}
-
-/// Look up a window by ID.
-pub fn find_win(id: u32, wins: &[WinInfo]) -> Option<&WinInfo> {
-    wins.iter().find(|w| w.id == id)
 }
 
 // ---- Surface detection ----
@@ -332,14 +326,3 @@ pub fn find_surface_for_drop(
     None
 }
 
-/// Returns `false` when a window-attached surface's host window has closed
-/// or is no longer in the window list.
-pub fn surface_still_valid(surface: &Surface, wins: &[WinInfo]) -> bool {
-    match surface {
-        Surface::Desktop { .. } | Surface::Airborne => true,
-        Surface::WindowTop { win_id, .. }
-        | Surface::WindowWall { win_id, .. }
-        | Surface::WindowUpperCorner { win_id, .. }
-        | Surface::WindowBottom { win_id, .. } => find_win(*win_id, wins).is_some(),
-    }
-}

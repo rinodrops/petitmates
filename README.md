@@ -175,6 +175,14 @@ If no override file is present, built-in defaults derived from personality are u
 
 ## Release Notes
 
+### v0.7.1
+
+**Fixes**
+- Characters no longer warp to the wrong corner after turning around on `WindowTop` — fixed using position-based edge detection instead of facing direction
+- `⌥⌘+right-click` context menu now opens reliably on macOS — a `FlagsChanged` monitor eliminates the ≤100 ms polling delay that could prevent the menu from appearing
+- Surface candidates are now restricted to the primary screen, preventing characters from being placed on off-screen geometry in multi-monitor setups
+- macOS: panel z-order and floating window level corrected for characters sitting on window surfaces
+
 ### v0.7.0
 
 **macOS distribution**

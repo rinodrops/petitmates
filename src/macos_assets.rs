@@ -117,6 +117,13 @@ impl SpriteAssets {
     pub fn anchor(&self, name: &str) -> Option<Anchor> {
         self.anchors.get(name).copied()
     }
+
+    /// Returns `(width, height)` of `name` in display pixels, or `(150, 150)` as a fallback.
+    pub fn size(&self, name: &str, mirror: bool) -> (f64, f64) {
+        self.image(name, mirror)
+            .map(|img| { let s = unsafe { img.size() }; (s.width, s.height) })
+            .unwrap_or((150.0, 150.0))
+    }
 }
 
 // ---- Image helpers ----

@@ -8,6 +8,10 @@ use objc2_app_kit::NSScreen;
 use objc2_foundation::{MainThreadMarker, NSArray, NSDictionary, NSNumber, NSString};
 
 use crate::behavior::{Side, Surface};
+use crate::physics::PhysicsScreen;
+
+// Re-export shared geometry from physics so call sites can use `wm::WinInfo` etc.
+pub use crate::physics::{WinInfo, find_win, surface_still_valid};
 
 // ---- Window list filter constants ----
 
@@ -36,25 +40,6 @@ const NULL_WINDOW: u32 = 0;
 
 // ---- Types ----
 
-/// Information about one on-screen window in CG coordinates
-/// (origin = screen top-left, Y increases downward).
-#[derive(Debug, Clone)]
-pub struct WinInfo {
-    /// kCGWindowNumber
-    pub id: u32,
-    /// Left edge
-    pub x: f64,
-    /// Top edge
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-impl WinInfo {
-    pub fn right(&self) -> f64 { self.x + self.w }
-    pub fn bottom(&self) -> f64 { self.y + self.h }
-}
-
 /// Primary screen geometry (CG coordinate space).
 #[derive(Debug, Clone, Copy)]
 pub struct ScreenInfo {
@@ -71,6 +56,11 @@ impl ScreenInfo {
     /// Y coordinate of the desktop floor in CG space.
     pub fn floor_y(&self) -> f64 {
         self.height - self.dock_height
+    }
+
+    /// Convert to the platform-independent view used by physics functions.
+    pub fn physics_screen(&self) -> PhysicsScreen {
+        PhysicsScreen { width: self.width, height: self.height, floor_y: self.floor_y() }
     }
 }
 
@@ -155,6 +145,12 @@ pub fn list_windows_into(buf: &mut Vec<WinInfo>, si: &ScreenInfo) {
             continue;
         }
 
+        // Exclude windows that don't overlap the primary screen rectangle.
+        // This prevents characters from jumping to windows on secondary displays.
+        if x + w <= 0.0 || x >= si.width || y + h <= 0.0 || y >= si.height {
+            continue;
+        }
+
         buf.push(WinInfo { id, x, y, w, h });
     }
 }
@@ -224,19 +220,18 @@ pub fn host_win_info(win_id: u32) -> Option<WinInfo> {
     None
 }
 
-/// Look up a window by its CGWindowID.
-pub fn find_win(id: u32, wins: &[WinInfo]) -> Option<&WinInfo> {
-    wins.iter().find(|w| w.id == id)
-}
-
 // ---- Screen info ----
 
-/// Query screen dimensions and Dock height from the main NSScreen.
+/// Query screen dimensions and Dock height from the primary NSScreen.
+///
+/// Uses `NSScreen::screens()[0]` (the screen that always carries the menu bar)
+/// rather than `NSScreen::mainScreen()`, which tracks the key-window's screen
+/// and changes when the user activates a window on a secondary display.
 ///
 /// NSScreen uses bottom-left origin; `visibleFrame.origin.y` equals the Dock
 /// height when the Dock is positioned at the bottom.
 pub fn screen_info(mt: MainThreadMarker) -> Option<ScreenInfo> {
-    let screen = NSScreen::mainScreen(mt)?;
+    let screen = NSScreen::screens(mt).firstObject()?;
     let frame = screen.frame();
     let visible = screen.visibleFrame();
     let height = frame.size.height;
@@ -256,7 +251,8 @@ pub fn screen_info(mt: MainThreadMarker) -> Option<ScreenInfo> {
 pub fn screen_info_raw() -> f64 {
     unsafe {
         let mt = MainThreadMarker::new_unchecked();
-        NSScreen::mainScreen(mt)
+        NSScreen::screens(mt)
+            .firstObject()
             .map(|s| s.frame().size.height)
             .unwrap_or(800.0)
     }
@@ -330,18 +326,6 @@ pub fn find_surface_near(
     }
 
     None
-}
-
-/// Check whether a window-attached `Surface` is still valid given the current
-/// window list. Returns `false` if the window has been closed or moved away.
-pub fn surface_still_valid(surface: &Surface, wins: &[WinInfo]) -> bool {
-    match surface {
-        Surface::Desktop { .. } | Surface::Airborne => true,
-        Surface::WindowTop { win_id, .. }
-        | Surface::WindowWall { win_id, .. }
-        | Surface::WindowUpperCorner { win_id, .. }
-        | Surface::WindowBottom { win_id, .. } => find_win(*win_id, wins).is_some(),
-    }
 }
 
 // ---- Helpers ----

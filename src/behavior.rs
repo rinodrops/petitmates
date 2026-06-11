@@ -1,8 +1,7 @@
 /// Core types for the behavior state machine.
 ///
 /// `BehaviorScript` is the trait that drives state transitions.
-/// Currently, it uses `RustBehavior` (built-in).
-/// In the future, I will add `LuaBehavior` for user `.pmate` characters.
+/// Currently, it uses `TerrestrialBehavior` (built-in).
 
 use crate::config::Config;
 
@@ -93,8 +92,25 @@ pub enum Surface {
     /// Bottom edge of a window. `x_local` is offset from the window's left edge.
     /// Character stands below the window's bottom edge (hanging from the underside).
     WindowBottom { win_id: u32, x_local: f64 },
+    /// Interior of a window (water zone). Position is window-local: origin at
+    /// window top-left, Y increases downward. Used by aquatic characters.
+    WindowInterior { win_id: u32, x_local: f64, y_local: f64 },
     /// In the air (falling or jumping). Not bound to any surface.
     Airborne,
+}
+
+// ---- AquaticState ----
+
+/// Physics state for a character currently in `PhysicsWorld::Water`.
+/// Position is stored in `Surface::WindowInterior`; this struct holds velocity only.
+#[derive(Debug, Clone)]
+pub struct AquaticState {
+    pub vx: f64,
+    pub vy: f64,
+    /// When `true` the character is resting (low velocity, `LieIdle` animation).
+    /// Transitions between `false` (swimming) and `true` (resting) are driven by
+    /// probability in the runtime tick.
+    pub resting: bool,
 }
 
 // ---- State ----

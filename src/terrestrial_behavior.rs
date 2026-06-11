@@ -23,9 +23,9 @@ fn dir_to_side(dir: Dir) -> Side {
     }
 }
 
-// ---- RustBehavior ----
+// ---- TerrestrialBehavior ----
 
-pub struct RustBehavior {
+pub struct TerrestrialBehavior {
     rng: Mutex<SmallRng>,
     /// Instant of the last window-to-window jump (or app start).
     last_outing: Mutex<Instant>,
@@ -37,7 +37,7 @@ pub struct RustBehavior {
     next_run_secs: Mutex<f64>,
 }
 
-impl RustBehavior {
+impl TerrestrialBehavior {
     pub fn new() -> Self {
         Self {
             rng: Mutex::new(SmallRng::from_os_rng()),
@@ -168,7 +168,7 @@ impl RustBehavior {
     }
 }
 
-impl BehaviorScript for RustBehavior {
+impl BehaviorScript for TerrestrialBehavior {
     fn outing_info(&self, cfg: &crate::config::Config) -> Option<(f64, f64)> {
         let interval = cfg.corner.outing_interval;
         if interval[0] <= 0.0 && interval[1] <= 0.0 {
@@ -403,10 +403,15 @@ impl BehaviorScript for RustBehavior {
                         return if self.rnd_bool(cfg.floor.edge_stand_to_sit_prob) {
                             Transition::To(self.make_sit_idle(ctx))
                         } else {
+                            // Use surface_progress (position) rather than facing to determine
+                            // which corner to approach.  After TurningAround, facing can point
+                            // inward while the character is still at the opposite edge, which
+                            // would send it to the wrong corner.
+                            let side = if ctx.surface_progress < 0.5 { Side::Left } else { Side::Right };
                             Transition::To(State::CornerTransitionSide {
                                 elapsed: 0.0,
                                 going_up: false,
-                                side: dir_to_side(ctx.facing),
+                                side,
                             })
                         };
                     }
