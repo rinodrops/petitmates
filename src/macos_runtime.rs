@@ -1297,6 +1297,36 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
+    // FlagsChanged (global) — immediately update ignoresMouseEvents when ⌥⌘ is
+    // pressed or released. Without this, the 10 Hz tick creates a ≤100 ms window
+    // where the panel still ignores mouse events even though ⌥⌘ is held, causing
+    // the local RightMouseDown monitor to never fire.
+    let mask_flags = NSEventMask::FlagsChanged;
+    let blk_flags = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
+        let flags = unsafe { NSEvent::modifierFlags_class() };
+        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
+            && flags.contains(NSEventModifierFlags::Command);
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        APP.with(|cell| {
+            let b = cell.borrow();
+            let Some(app) = b.as_ref() else { return };
+            for ch in &app.chars {
+                let frame = unsafe { ch.panel.frame() };
+                let over = opt_cmd
+                    && mouse_ns.x >= frame.origin.x
+                    && mouse_ns.x < frame.origin.x + frame.size.width
+                    && mouse_ns.y >= frame.origin.y
+                    && mouse_ns.y < frame.origin.y + frame.size.height;
+                unsafe { ch.panel.setIgnoresMouseEvents(!over) };
+            }
+        });
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_flags, &*blk_flags)
+    } {
+        monitors.push(m);
+    }
+
     monitors
 }
 
