@@ -745,6 +745,51 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         }
     } else { // land physics
 
+        // Water entry: dive from WindowUpperCorner or the edge of WindowTop.
+        let wa = ch.assets.surfaces.water_affinity;
+        if wa > 0.0 {
+            let win_id_side: Option<(u32, Side)> = match ch.surface {
+                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
+                Surface::WindowTop { win_id, x_local } => {
+                    windows_wm::find_win(win_id, wins).and_then(|win| {
+                        let half = sprite_size / 2.0;
+                        let edge_margin = 2.0;
+                        if x_local <= edge_margin + half {
+                            Some((win_id, Side::Left))
+                        } else if x_local >= win.w - edge_margin - half {
+                            Some((win_id, Side::Right))
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            };
+            if let Some((win_id, side)) = win_id_side {
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(
+                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
+                );
+                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
+                if rng.gen_bool(dive_prob) {
+                    if let Some(&win) = windows_wm::find_win(win_id, wins) {
+                        let half = sprite_size / 2.0;
+                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
+                        let vx = match side {
+                            Side::Left  =>  cfg.water.swim_speed * 0.5,
+                            Side::Right => -cfg.water.swim_speed * 0.5,
+                        };
+                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
+                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3 });
+                        ch.anim_state = State::Walking {
+                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
+                            frame: 0,
+                            frame_elapsed: 0.0,
+                        };
+                    }
+                }
+            }
+        }
+
     // Save y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
 

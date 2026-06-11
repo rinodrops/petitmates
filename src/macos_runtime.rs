@@ -1547,10 +1547,28 @@ fn tick_char(
             else if aq2.vx > 1.0 { ch.facing = Dir::Right; }
         }
     } else {
-        // Water entry: dive at a WindowUpperCorner when water_affinity > 0.
+        // Water entry: dive from WindowUpperCorner or the edge of WindowTop.
         let wa = ch.assets.surfaces.water_affinity;
         if wa > 0.0 {
-            if let Surface::WindowUpperCorner { win_id, side } = ch.surface {
+            let win_id_side: Option<(u32, Side)> = match ch.surface {
+                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
+                Surface::WindowTop { win_id, x_local } => {
+                    // Entry from the left or right end of the window top.
+                    macos_wm::find_win(win_id, wins).and_then(|win| {
+                        let half = sprite_size / 2.0;
+                        let edge_margin = 2.0;
+                        if x_local <= edge_margin + half {
+                            Some((win_id, Side::Left))
+                        } else if x_local >= win.w - edge_margin - half {
+                            Some((win_id, Side::Right))
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            };
+            if let Some((win_id, side)) = win_id_side {
                 let mut rng = rand::rngs::SmallRng::seed_from_u64(
                     now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
                 );
