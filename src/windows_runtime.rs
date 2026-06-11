@@ -210,6 +210,8 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
+    mode: crate::user_config::Mode,
 }
 
 thread_local! {
@@ -690,7 +692,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
 
 // ---- Per-character tick ----
 
-fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64) {
+fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64, mode: &crate::user_config::Mode) {
     let assets: &SpriteAssets = &ch.assets;
     // While being dragged, skip the state machine and just render at the
     // position set by WM_MOUSEMOVE.
@@ -793,9 +795,9 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         }
     } else { // land physics
 
-        // Water entry: dive from WindowUpperCorner or the edge of WindowTop.
+        // Water entry: only in Vivarium mode.
         let wa = ch.assets.surfaces.water_affinity;
-        if wa > 0.0 {
+        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
             let win_id_side: Option<(u32, Side)> = match ch.surface {
                 Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
                 Surface::WindowTop { win_id, x_local } => {
@@ -1081,7 +1083,7 @@ fn tick_all() {
                 }
             }
             let cfg = app.chars[i].effective_config.clone();
-            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size);
+            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size, &app.mode);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -1938,6 +1940,7 @@ pub fn run() {
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
                 win_cache: WinListCache::new(),
+                mode: user_cfg.mode,
             });
         });
 

@@ -217,6 +217,8 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
+    mode: crate::user_config::Mode,
 }
 
 thread_local! {
@@ -1452,6 +1454,7 @@ fn tick_char(
     wins: &[WinInfo],
     _mt: MainThreadMarker,
     sprite_size: f64,
+    mode: &crate::user_config::Mode,
 ) {
     // While dragging, skip physics and state machine — panel position is
     // updated directly by the drag event monitor.
@@ -1580,9 +1583,9 @@ fn tick_char(
             }
         }
     } else {
-        // Water entry: dive from WindowUpperCorner or the edge of WindowTop.
+        // Water entry: only in Vivarium mode.
         let wa = ch.assets.surfaces.water_affinity;
-        if wa > 0.0 {
+        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
             let win_id_side: Option<(u32, Side)> = match ch.surface {
                 Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
                 Surface::WindowTop { win_id, x_local } => {
@@ -1954,7 +1957,7 @@ fn tick() {
                 }
             }
             let cfg = ch.effective_config.clone();
-            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size);
+            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size, &app.mode);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -2273,6 +2276,7 @@ pub fn run() {
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
             win_cache: WinListCache::new(),
+            mode: user_cfg.mode,
         });
     });
 
