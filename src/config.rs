@@ -297,6 +297,10 @@ pub struct WaterConfig {
     /// Probability per second of exiting water at a top corner.
     /// Multiplied by `(1 - water_affinity)` at runtime.
     pub exit_prob_per_sec: f64,
+    /// Probability per second of transitioning from swimming to resting (near bottom).
+    pub rest_prob_per_sec: f64,
+    /// Probability per second of waking from rest and resuming swimming.
+    pub wake_prob_per_sec: f64,
 }
 
 impl Default for WaterConfig {
@@ -306,6 +310,8 @@ impl Default for WaterConfig {
             swim_speed:         100.0,
             dive_prob_per_sec:  0.3,
             exit_prob_per_sec:  0.2,
+            rest_prob_per_sec:  0.08,
+            wake_prob_per_sec:  0.015,
         }
     }
 }

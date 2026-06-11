@@ -726,22 +726,70 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     // Advance per-state animation timers.
     let elapsed = advance_anim(&mut ch.anim_state, dt, cfg, &ch.assets.animations);
 
-    if ch.aquatic.is_some() {
-        // Water mode: tick_water physics.
+    if let Some(ref mut aq) = ch.aquatic {
+        // --- Water physics ---
+        let wa = ch.assets.surfaces.water_affinity;
         if let Surface::WindowInterior { win_id, .. } = ch.surface {
             if let Some(&win) = windows_wm::find_win(win_id, wins) {
                 let mut rng = rand::rngs::SmallRng::seed_from_u64(
                     now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
                 );
-                if let Some(ref mut aq) = ch.aquatic {
-                    physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, sprite_size / 2.0, dt, &mut rng);
+                physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, wa, sprite_size / 2.0, dt, &mut rng);
+
+                // Rest/wake transitions (resting only triggers near the bottom).
+                let was_resting = aq.resting;
+                if aq.resting {
+                    let wake_p = (cfg.water.wake_prob_per_sec * dt).clamp(0.0, 1.0);
+                    if rng.gen_bool(wake_p) { aq.resting = false; }
+                } else {
+                    let near_bottom = if let Surface::WindowInterior { y_local, .. } = ch.surface {
+                        y_local > win.h - cfg.water.thigmotaxis_margin
+                    } else { false };
+                    if near_bottom {
+                        let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
+                        if rng.gen_bool(rest_p) { aq.resting = true; }
+                    }
+                }
+                // Flip animation state when rest/swim mode changes.
+                if was_resting != aq.resting {
+                    if aq.resting {
+                        ch.anim_state = State::LieIdle {
+                            head_front: false, elapsed: 0.0,
+                            duration: f64::MAX, head_timer: 0.0,
+                        };
+                    } else {
+                        ch.anim_state = State::Walking { dir: ch.facing, frame: 0, frame_elapsed: 0.0 };
+                    }
+                }
+
+                // Exit water: only when swimming and near a top corner.
+                if let Surface::WindowInterior { win_id: eid, x_local: xl, y_local: yl } = ch.surface {
+                    if !aq.resting && yl < cfg.water.thigmotaxis_margin * 0.5 {
+                        let exit_prob = (cfg.water.exit_prob_per_sec * (1.0 - wa) * dt).clamp(0.0, 1.0);
+                        let side = if xl < win.w / 2.0 { Side::Left } else { Side::Right };
+                        let corner_x = match side { Side::Left => 0.0, Side::Right => win.w };
+                        if (xl - corner_x).abs() < sprite_size && rng.gen_bool(exit_prob) {
+                            ch.surface = Surface::WindowUpperCorner { win_id: eid, side };
+                            ch.aquatic = None;
+                            ch.anim_state = State::CornerTransitionFront {
+                                elapsed: 0.0, going_up: true, side,
+                            };
+                        }
+                    }
                 }
             }
         }
-        // Update facing to match swim direction.
-        if let Some(ref aq) = ch.aquatic {
-            if aq.vx < -1.0 { ch.facing = Dir::Left; }
-            else if aq.vx > 1.0 { ch.facing = Dir::Right; }
+        // Update facing and Walking dir to match swim velocity (swimming only).
+        if let Some(ref aq2) = ch.aquatic {
+            if !aq2.resting {
+                let new_dir = if aq2.vx < -1.0 { Some(Dir::Left) }
+                              else if aq2.vx > 1.0 { Some(Dir::Right) }
+                              else { None };
+                if let Some(d) = new_dir {
+                    ch.facing = d;
+                    if let State::Walking { ref mut dir, .. } = ch.anim_state { *dir = d; }
+                }
+            }
         }
     } else { // land physics
 
@@ -779,7 +827,7 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
                             Side::Right => -cfg.water.swim_speed * 0.5,
                         };
                         ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
-                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3 });
+                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3, resting: false });
                         ch.anim_state = State::Walking {
                             dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
                             frame: 0,

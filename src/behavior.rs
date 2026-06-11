@@ -107,6 +107,10 @@ pub enum Surface {
 pub struct AquaticState {
     pub vx: f64,
     pub vy: f64,
+    /// When `true` the character is resting (low velocity, `LieIdle` animation).
+    /// Transitions between `false` (swimming) and `true` (resting) are driven by
+    /// probability in the runtime tick.
+    pub resting: bool,
 }
 
 // ---- State ----
