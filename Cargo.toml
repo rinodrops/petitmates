@@ -69,3 +69,9 @@ image = "0.25"
 [[bin]]
 name = "petitmates"
 path = "src/main.rs"
+
+# Xcode 27 beta: dyld rejects stripped proc-macro dylibs with "mis-aligned
+# LINKEDIT string pool".  Disabling strip for build-override avoids the issue;
+# proc-macros are compile-time only so this has no effect on the final binary.
+[profile.release.build-override]
+strip = false
