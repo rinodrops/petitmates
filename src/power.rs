@@ -15,9 +15,24 @@ pub fn on_ac_power() -> bool {
     #[link(name = "IOKit", kind = "framework")]
     unsafe extern "C" {
         fn IOPSCopyPowerSourcesInfo() -> *mut std::ffi::c_void;
-        fn IOPSGetProvidingPowerSourceType(snapshot: *mut std::ffi::c_void) -> *const i8;
-        fn CFRelease(cf: *mut std::ffi::c_void);
+        // Returns CFStringRef (an opaque CF object pointer), NOT a C string.
+        fn IOPSGetProvidingPowerSourceType(snapshot: *mut std::ffi::c_void)
+            -> *mut std::ffi::c_void;
     }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *mut std::ffi::c_void);
+        fn CFStringGetCString(
+            s:        *mut std::ffi::c_void,
+            buf:      *mut i8,
+            buf_size: isize,
+            encoding: u32,
+        ) -> bool;
+    }
+
+    // kCFStringEncodingUTF8
+    const UTF8: u32 = 0x0800_0100;
 
     unsafe {
         let info = IOPSCopyPowerSourcesInfo();
@@ -29,7 +44,12 @@ pub fn on_ac_power() -> bool {
             true
         } else {
             // "AC Power" | "Battery Power" | "UPS Power"
-            CStr::from_ptr(src).to_string_lossy() != "Battery Power"
+            let mut buf = [0i8; 64];
+            if CFStringGetCString(src, buf.as_mut_ptr(), 64, UTF8) {
+                CStr::from_ptr(buf.as_ptr()).to_string_lossy() != "Battery Power"
+            } else {
+                true
+            }
         };
         CFRelease(info);
         result
