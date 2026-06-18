@@ -213,8 +213,9 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
-    /// Target animation fps read from user.toml. Base timer fires at 60 Hz;
-    /// ticks are skipped until 1/tick_rate seconds have elapsed.
+    /// Animation fps for the current power source (resolved at startup from
+    /// tick_rate_ac / tick_rate_battery). Base timer fires at 60 Hz; ticks are
+    /// skipped until 1/tick_rate seconds have elapsed.
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
     last_full_tick: Instant,
@@ -2165,7 +2166,11 @@ pub fn run() {
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
             win_cache: WinListCache::new(),
-            tick_rate: user_cfg.display.tick_rate.max(1),
+            tick_rate: if crate::power::on_ac_power() {
+                user_cfg.display.tick_rate_ac
+            } else {
+                user_cfg.display.tick_rate_battery
+            }.max(1),
             last_full_tick: Instant::now(),
         });
     });
