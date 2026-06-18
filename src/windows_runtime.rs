@@ -208,6 +208,16 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// fps configured for AC power (from user.toml).
+    tick_rate_ac: u32,
+    /// fps configured for battery power (from user.toml).
+    tick_rate_battery: u32,
+    /// Active animation fps (resolved from tick_rate_ac/battery at startup and
+    /// updated on WM_POWERBROADCAST). Base timer fires at ~60 Hz; ticks are
+    /// skipped until 1/tick_rate seconds have elapsed.
+    tick_rate: u32,
+    /// Timestamp of the last physics/rendering tick. Used for rate limiting.
+    last_full_tick: Instant,
 }
 
 thread_local! {
@@ -921,6 +931,15 @@ fn tick_all() {
             return;
         }
 
+        // Rate-limit: skip this callback when the target interval has not elapsed.
+        {
+            let target = 1.0 / app.tick_rate.max(1) as f64;
+            if app.last_full_tick.elapsed().as_secs_f64() < target {
+                return;
+            }
+            app.last_full_tick = Instant::now();
+        }
+
         let si = windows_wm::screen_info();
 
         // Tiered window-list refresh.
@@ -1355,6 +1374,21 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         }
                     });
                     tick_all();
+                }
+                0
+            }
+            WM_POWERBROADCAST => {
+                // PBT_APMPOWERSTATUSCHANGE (0xA): AC adapter plugged or unplugged.
+                if wp == 0xA {
+                    APP.with(|cell| {
+                        let mut b = cell.borrow_mut();
+                        let Some(app) = b.as_mut() else { return };
+                        app.tick_rate = if crate::power::on_ac_power() {
+                            app.tick_rate_ac
+                        } else {
+                            app.tick_rate_battery
+                        }.max(1);
+                    });
                 }
                 0
             }
@@ -1840,11 +1874,19 @@ pub fn run() {
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
                 win_cache: WinListCache::new(),
+                tick_rate_ac: user_cfg.display.tick_rate_ac.max(1),
+                tick_rate_battery: user_cfg.display.tick_rate_battery.max(1),
+                tick_rate: if crate::power::on_ac_power() {
+                    user_cfg.display.tick_rate_ac
+                } else {
+                    user_cfg.display.tick_rate_battery
+                }.max(1),
+                last_full_tick: Instant::now(),
             });
         });
 
         add_tray_icon(host_hwnd, hinstance);
-        SetTimer(host_hwnd, TIMER_TICK, 100, None);
+        SetTimer(host_hwnd, TIMER_TICK, 17, None);
 
         // Message loop.
         let mut msg: MSG = mem::zeroed();

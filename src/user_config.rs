@@ -67,6 +67,12 @@ pub struct DisplayConfig {
     /// Speech bubble display language: `"os"`, `"en"`, or `"ja"`.
     /// When absent or `"os"`, the OS preferred language is used (falls back to `"en"`).
     pub language: Option<String>,
+    /// Animation fps when running on AC power. Valid values: 10, 15, 30, 60.
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
+    pub tick_rate_ac: u32,
+    /// Animation fps when running on battery power. Valid values: 10, 15, 30, 60.
+    #[serde(deserialize_with = "deserialize_u32_lossy")]
+    pub tick_rate_battery: u32,
 }
 
 impl Default for DisplayConfig {
@@ -75,6 +81,8 @@ impl Default for DisplayConfig {
             sprite_size: 150,
             font_size: 14,
             language: None,
+            tick_rate_ac: 30,
+            tick_rate_battery: 15,
         }
     }
 }
@@ -281,8 +289,10 @@ fn detect_system_language() -> String {
 // ---- Load / save ----
 
 const DEFAULT_TOML: &str = r#"[display]
-sprite_size = 150   # character size in pixels
-font_size   = 14    # speech bubble font size in points
+sprite_size       = 150   # character size in pixels
+font_size         = 14    # speech bubble font size in points
+tick_rate_ac      = 30    # animation fps on AC power: 10, 15, 30, or 60
+tick_rate_battery = 15    # animation fps on battery: 10, 15, 30, or 60
 # language  = "os"   # "os" (default), "en", or "ja"
 
 [speech]
