@@ -208,8 +208,12 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
-    /// Animation fps for the current power source (resolved at startup from
-    /// tick_rate_ac / tick_rate_battery). Base timer fires at ~60 Hz; ticks are
+    /// fps configured for AC power (from user.toml).
+    tick_rate_ac: u32,
+    /// fps configured for battery power (from user.toml).
+    tick_rate_battery: u32,
+    /// Active animation fps (resolved from tick_rate_ac/battery at startup and
+    /// updated on WM_POWERBROADCAST). Base timer fires at ~60 Hz; ticks are
     /// skipped until 1/tick_rate seconds have elapsed.
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
@@ -1373,6 +1377,21 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 }
                 0
             }
+            WM_POWERBROADCAST => {
+                // PBT_APMPOWERSTATUSCHANGE (0xA): AC adapter plugged or unplugged.
+                if wp == 0xA {
+                    APP.with(|cell| {
+                        let mut b = cell.borrow_mut();
+                        let Some(app) = b.as_mut() else { return };
+                        app.tick_rate = if crate::power::on_ac_power() {
+                            app.tick_rate_ac
+                        } else {
+                            app.tick_rate_battery
+                        }.max(1);
+                    });
+                }
+                0
+            }
             WM_TIMER if wp == TIMER_TICK => {
                 tick_all();
                 0
@@ -1855,6 +1874,8 @@ pub fn run() {
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
                 win_cache: WinListCache::new(),
+                tick_rate_ac: user_cfg.display.tick_rate_ac.max(1),
+                tick_rate_battery: user_cfg.display.tick_rate_battery.max(1),
                 tick_rate: if crate::power::on_ac_power() {
                     user_cfg.display.tick_rate_ac
                 } else {

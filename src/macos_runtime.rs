@@ -213,9 +213,13 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
-    /// Animation fps for the current power source (resolved at startup from
-    /// tick_rate_ac / tick_rate_battery). Base timer fires at 60 Hz; ticks are
-    /// skipped until 1/tick_rate seconds have elapsed.
+    /// fps configured for AC power (from user.toml).
+    tick_rate_ac: u32,
+    /// fps configured for battery power (from user.toml).
+    tick_rate_battery: u32,
+    /// Active animation fps (resolved from tick_rate_ac/battery at startup and
+    /// updated by the IOKit power-source notification callback). Base timer fires
+    /// at 60 Hz; ticks are skipped until 1/tick_rate seconds have elapsed.
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
     last_full_tick: Instant,
@@ -223,6 +227,19 @@ struct AppState {
 
 thread_local! {
     static APP: RefCell<Option<AppState>> = RefCell::new(None);
+}
+
+/// IOKit power-source notification callback. Runs on the main thread.
+unsafe extern "C" fn power_source_changed(_: *mut std::ffi::c_void) {
+    APP.with(|cell| {
+        let mut b = cell.borrow_mut();
+        let Some(app) = b.as_mut() else { return };
+        app.tick_rate = if crate::power::on_ac_power() {
+            app.tick_rate_ac
+        } else {
+            app.tick_rate_battery
+        }.max(1);
+    });
 }
 
 // ---- Panel helpers ----
@@ -2142,6 +2159,9 @@ pub fn run() {
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, common);
     }
 
+    // IOKit notification: update tick_rate immediately when AC/battery changes.
+    crate::power::register_power_notification(power_source_changed);
+
     APP.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
             chars: initial_chars,
@@ -2166,6 +2186,8 @@ pub fn run() {
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
             win_cache: WinListCache::new(),
+            tick_rate_ac: user_cfg.display.tick_rate_ac.max(1),
+            tick_rate_battery: user_cfg.display.tick_rate_battery.max(1),
             tick_rate: if crate::power::on_ac_power() {
                 user_cfg.display.tick_rate_ac
             } else {

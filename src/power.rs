@@ -2,6 +2,11 @@
 ///
 /// Returns `true` on AC power or when the power source cannot be determined
 /// (fail-safe: prefer performance over saving).
+///
+/// # macOS
+/// Call [`register_power_notification`] once at startup to receive OS-level
+/// callbacks when the power source changes; re-query this function inside that
+/// callback to get the new state.
 
 #[cfg(target_os = "macos")]
 pub fn on_ac_power() -> bool {
@@ -28,6 +33,46 @@ pub fn on_ac_power() -> bool {
         };
         CFRelease(info);
         result
+    }
+}
+
+/// Register a callback that fires on the main run loop whenever the power
+/// source changes (AC plugged/unplugged). Call once at app startup.
+///
+/// The source is added to `kCFRunLoopCommonModes` and intentionally kept
+/// alive for the process lifetime (CFRunLoop retains it after `CFRelease`).
+#[cfg(target_os = "macos")]
+pub fn register_power_notification(
+    callback: unsafe extern "C" fn(*mut std::ffi::c_void),
+) {
+    use objc2_foundation::NSRunLoopCommonModes;
+
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOPSNotificationCreateRunLoopSource(
+            callback: unsafe extern "C" fn(*mut std::ffi::c_void),
+            context:  *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRunLoopGetMain() -> *mut std::ffi::c_void;
+        fn CFRunLoopAddSource(
+            rl:     *mut std::ffi::c_void,
+            source: *mut std::ffi::c_void,
+            mode:   *const std::ffi::c_void,
+        );
+        fn CFRelease(cf: *mut std::ffi::c_void);
+    }
+
+    unsafe {
+        let source = IOPSNotificationCreateRunLoopSource(callback, std::ptr::null_mut());
+        if source.is_null() { return; }
+        let mode = NSRunLoopCommonModes as *const _ as *const std::ffi::c_void;
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, mode);
+        // RunLoop retains the source; release our own reference.
+        CFRelease(source);
     }
 }
 
