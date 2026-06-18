@@ -984,24 +984,31 @@ fn update_hover_alpha(panel: &NSPanel, config: &crate::config::Config, dragging:
 
 /// Apply or clear a snap-zone highlight on the character's image view.
 ///
-/// A white CALayer border is drawn around the sprite bounding box when
-/// `active` is true, giving the user feedback that releasing the mouse
-/// here will snap the character to a surface.
+/// Uses `CIColorControls` (brightness boost) via `NSView.contentFilters`
+/// so the effect respects the sprite's alpha channel and follows the
+/// sprite shape rather than the rectangular bounding box.
 fn set_snap_highlight(image_view: &NSImageView, active: bool) {
     unsafe {
-        let _: () = msg_send![image_view, setWantsLayer: true];
-        let layer: *mut AnyObject = msg_send![image_view, layer];
-        if layer.is_null() {
-            return;
-        }
         if active {
-            let color: Retained<NSColor> = NSColor::whiteColor();
-            let cg_color: *const std::ffi::c_void = msg_send![&*color, CGColor];
-            let _: () = msg_send![layer, setBorderColor: cg_color];
-            let _: () = msg_send![layer, setBorderWidth: 3.0_f64];
-            let _: () = msg_send![layer, setCornerRadius: 6.0_f64];
+            // Layer-backing is required for contentFilters to take effect.
+            let _: () = msg_send![image_view, setWantsLayer: true];
+
+            let Some(ci_class) = objc2::runtime::AnyClass::get(c"CIFilter") else { return };
+            let filter_name = NSString::from_str("CIColorControls");
+            let filter: *mut AnyObject = msg_send![ci_class, filterWithName: &*filter_name];
+            if filter.is_null() { return; }
+            let _: () = msg_send![filter, setDefaults];
+            let key = NSString::from_str("inputBrightness");
+            let val = objc2_foundation::NSNumber::new_f64(0.4);
+            let _: () = msg_send![filter, setValue: &*val forKey: &*key];
+
+            let Some(arr_class) = objc2::runtime::AnyClass::get(c"NSArray") else { return };
+            let arr: *mut AnyObject = msg_send![arr_class, arrayWithObject: filter];
+            let _: () = msg_send![image_view, setContentFilters: arr];
         } else {
-            let _: () = msg_send![layer, setBorderWidth: 0.0_f64];
+            let Some(arr_class) = objc2::runtime::AnyClass::get(c"NSArray") else { return };
+            let empty: *mut AnyObject = msg_send![arr_class, array];
+            let _: () = msg_send![image_view, setContentFilters: empty];
         }
     }
 }
