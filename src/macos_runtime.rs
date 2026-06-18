@@ -982,6 +982,30 @@ fn update_hover_alpha(panel: &NSPanel, config: &crate::config::Config, dragging:
     }
 }
 
+/// Apply or clear a snap-zone highlight on the character's image view.
+///
+/// A white CALayer border is drawn around the sprite bounding box when
+/// `active` is true, giving the user feedback that releasing the mouse
+/// here will snap the character to a surface.
+fn set_snap_highlight(image_view: &NSImageView, active: bool) {
+    unsafe {
+        let _: () = msg_send![image_view, setWantsLayer: true];
+        let layer: *mut AnyObject = msg_send![image_view, layer];
+        if layer.is_null() {
+            return;
+        }
+        if active {
+            let color: Retained<NSColor> = NSColor::whiteColor();
+            let cg_color: *const std::ffi::c_void = msg_send![&*color, CGColor];
+            let _: () = msg_send![layer, setBorderColor: cg_color];
+            let _: () = msg_send![layer, setBorderWidth: 3.0_f64];
+            let _: () = msg_send![layer, setCornerRadius: 6.0_f64];
+        } else {
+            let _: () = msg_send![layer, setBorderWidth: 0.0_f64];
+        }
+    }
+}
+
 // ---- ⌘+drag event monitors ----
 
 /// Register global event monitors for ⌘+drag.
@@ -1038,8 +1062,15 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let new_ns_y = mouse_ns.y - off.1;
             unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
             let sz = unsafe { app.chars[drag_idx].panel.frame().size };
-            let si_height = macos_wm::screen_info_raw();
-            app.chars[drag_idx].char_pos = (new_ns_x, si_height - new_ns_y - sz.height);
+            let si = macos_wm::screen_info_raw_full();
+            app.chars[drag_idx].char_pos = (new_ns_x, si.height - new_ns_y - sz.height);
+
+            // Snap-zone feedback: highlight the sprite when a surface is nearby.
+            let foot_x = new_ns_x + sz.width / 2.0;
+            let foot_y = si.height - new_ns_y;
+            let wins: &[WinInfo] = &app.win_cache.wins;
+            let in_snap = macos_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some();
+            set_snap_highlight(&app.chars[drag_idx].image_view, in_snap);
         });
     });
     if let Some(m) = unsafe {
@@ -1057,6 +1088,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
                 else { return };
             app.chars[drag_idx].drag_offset = None;
+            set_snap_highlight(&app.chars[drag_idx].image_view, false);
 
             let si = macos_wm::screen_info_raw_full();
             let wins = macos_wm::list_windows(&si);
@@ -1072,8 +1104,8 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let foot_x = ch.char_pos.0 + fw / 2.0;
             let foot_y = ch.char_pos.1 + fh;
 
-            // Try to snap to a nearby surface.
-            let new_surface = macos_wm::find_surface_near(foot_x, foot_y, &wins, &si);
+            // Try to snap to a nearby surface (wider wall threshold for drag drops).
+            let new_surface = macos_wm::find_drop_surface(foot_x, foot_y, &wins, &si);
             match new_surface {
                 Some(surf) => {
                     let ctx = BehaviorContext {
