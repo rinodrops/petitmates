@@ -233,6 +233,8 @@ pub fn host_win_info(hwnd_id: u32) -> Option<WinInfo> {
     })
 }
 
+const WALL_DROP_SNAP: f64 = 60.0;
+
 // ---- Surface detection ----
 
 /// Given an anchor point in screen coordinates, return the best-matching
@@ -299,7 +301,31 @@ pub fn find_surface_for_drop(
         return Some(s);
     }
 
-    // 2. Broad fallback: closest window top within the x-range of the sprite centre.
+    // 2. Wider wall proximity: nearest wall edge within WALL_DROP_SNAP.
+    //    Checked before the window-top fallback so side walls take priority
+    //    when the user explicitly drops near an edge.
+    let mut best_wall: Option<(f64, Surface)> = None;
+    for win in wins {
+        let in_y = cy >= win.y && cy <= win.bottom();
+        if !in_y { continue; }
+        let dist_r = (cx - win.right()).abs();
+        let dist_l = (cx - win.x).abs();
+        if dist_r < WALL_DROP_SNAP && best_wall.as_ref().map_or(true, |(d, _)| dist_r < *d) {
+            best_wall = Some((dist_r, Surface::WindowWall {
+                win_id: win.id, side: Side::Right, y_local: cy - win.y,
+            }));
+        }
+        if dist_l < WALL_DROP_SNAP && best_wall.as_ref().map_or(true, |(d, _)| dist_l < *d) {
+            best_wall = Some((dist_l, Surface::WindowWall {
+                win_id: win.id, side: Side::Left, y_local: cy - win.y,
+            }));
+        }
+    }
+    if let Some((_, s)) = best_wall {
+        return Some(s);
+    }
+
+    // 3. Broad fallback: closest window top within the x-range of the sprite centre.
     //    We consider any window whose top is above cy (the foot) or at most
     //    300 px below it, so that "dropped slightly above" and "dropped inside"
     //    both resolve to that window's top edge.
@@ -318,11 +344,22 @@ pub fn find_surface_for_drop(
         return Some(Surface::WindowTop { win_id: win.id, x_local });
     }
 
-    // 3. Desktop floor fallback.
+    // 4. Desktop floor fallback.
     if cy >= si.floor_y() - 300.0 {
         return Some(Surface::Desktop { x: cx });
     }
 
     None
+}
+
+/// Like `find_surface_for_drop` but returns only what a drag-hover preview
+/// should highlight (same logic, used during WM_MOUSEMOVE).
+pub fn find_drop_surface(
+    cx: f64,
+    cy: f64,
+    wins: &[WinInfo],
+    si: &ScreenInfo,
+) -> Option<Surface> {
+    find_surface_for_drop(cx, cy, wins, si)
 }
 

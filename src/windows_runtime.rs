@@ -175,6 +175,8 @@ struct CharState {
     /// Width of the sprite rendered last tick (scaled display pixels).
     /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
     last_sprite_w: f64,
+    /// True while this character is within snap range of a surface during drag.
+    snap_highlight: bool,
 }
 
 struct AppState {
@@ -670,6 +672,22 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         bubble_state: None,
         bubble_hwnd: ptr::null_mut(),
         last_sprite_w: 150.0,
+        snap_highlight: false,
+    }
+}
+
+// ---- Snap-zone visual highlight ----
+
+/// Brighten a pre-multiplied BGRA buffer to indicate snap-zone proximity.
+fn brighten_bgra(bgra: &mut [u8], delta: u8) {
+    for chunk in bgra.chunks_mut(4) {
+        let a = chunk[3];
+        if a == 0 { continue; }
+        // Additive brightness scaled to alpha (pre-multiply invariant: channel ≤ alpha).
+        let add = (delta as u32 * a as u32 / 255) as u8;
+        chunk[0] = chunk[0].saturating_add(add).min(a); // B
+        chunk[1] = chunk[1].saturating_add(add).min(a); // G
+        chunk[2] = chunk[2].saturating_add(add).min(a); // R
     }
 }
 
@@ -684,7 +702,10 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
         let Some(sprite) = assets.sprite(&sr.name, sr.mirror) else { return };
         let (px, py) = (ch.char_pos.0 as i32, ch.char_pos.1 as i32);
-        let bgra = sprite.bgra.clone();
+        let mut bgra = sprite.bgra.clone();
+        if ch.snap_highlight {
+            brighten_bgra(&mut bgra, 80);
+        }
         unsafe { set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, 200); }
         return;
     }
@@ -1271,6 +1292,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                 if let Some((ox, oy)) = app.chars[i].drag_offset {
                                     app.chars[i].char_pos = (pt.x as f64 - ox, pt.y as f64 - oy);
                                 }
+                                // Snap-zone feedback.
+                                let sr = sprite_for_state(&app.chars[i].anim_state, app.chars[i].facing, &app.chars[i].assets.animations);
+                                let (sw, sh) = app.chars[i].assets.size(&sr.name, sr.mirror);
+                                let (cx, cy) = app.chars[i].char_pos;
+                                let foot_x = cx + sw / 2.0;
+                                let foot_y = cy + sh;
+                                let si = windows_wm::screen_info();
+                                let in_snap = {
+                                    let wins: &[_] = &app.win_cache.wins;
+                                    windows_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some()
+                                };
+                                app.chars[i].snap_highlight = in_snap;
                             }
                         }
                     });
@@ -1292,6 +1325,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             let idx = app.chars.iter().position(|c| c.hwnd == hwnd);
                             if let Some(i) = idx {
                                 app.chars[i].drag_offset = None;
+                                app.chars[i].snap_highlight = false;
                                 let si   = windows_wm::screen_info();
                                 let wins = windows_wm::list_windows(&si);
                                 let assets = Rc::clone(&app.chars[i].assets);
