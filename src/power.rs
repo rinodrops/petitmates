@@ -45,8 +45,6 @@ pub fn on_ac_power() -> bool {
 pub fn register_power_notification(
     callback: unsafe extern "C" fn(*mut std::ffi::c_void),
 ) {
-    use objc2_foundation::NSRunLoopCommonModes;
-
     #[link(name = "IOKit", kind = "framework")]
     unsafe extern "C" {
         fn IOPSNotificationCreateRunLoopSource(
@@ -64,14 +62,19 @@ pub fn register_power_notification(
             mode:   *const std::ffi::c_void,
         );
         fn CFRelease(cf: *mut std::ffi::c_void);
+        // Use the CoreFoundation constant directly to avoid ambiguity with
+        // the objc2_foundation re-export of NSRunLoopCommonModes.
+        static kCFRunLoopCommonModes: *const std::ffi::c_void;
     }
 
     unsafe {
         let source = IOPSNotificationCreateRunLoopSource(callback, std::ptr::null_mut());
-        if source.is_null() { return; }
-        let mode = NSRunLoopCommonModes as *const _ as *const std::ffi::c_void;
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, mode);
-        // RunLoop retains the source; release our own reference.
+        if source.is_null() {
+            eprintln!("[petitmates] IOPSNotificationCreateRunLoopSource returned null");
+            return;
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
+        // CFRunLoop retains the source; release our own reference.
         CFRelease(source);
     }
 }

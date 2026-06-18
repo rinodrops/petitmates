@@ -2159,9 +2159,6 @@ pub fn run() {
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, common);
     }
 
-    // IOKit notification: update tick_rate immediately when AC/battery changes.
-    crate::power::register_power_notification(power_source_changed);
-
     APP.with(|cell| {
         *cell.borrow_mut() = Some(AppState {
             chars: initial_chars,
@@ -2196,6 +2193,10 @@ pub fn run() {
             last_full_tick: Instant::now(),
         });
     });
+
+    // IOKit notification: update tick_rate immediately when AC/battery changes.
+    // Registered after APP is initialized so the callback can safely access it.
+    crate::power::register_power_notification(power_source_changed);
 
     unsafe { app.run() };
 }
