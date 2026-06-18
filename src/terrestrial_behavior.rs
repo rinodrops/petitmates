@@ -769,7 +769,11 @@ impl BehaviorScript for TerrestrialBehavior {
         State::Falling { vx: 0.0, vy: 0.0, shocked: ctx.config.floor.shocked_duration }
     }
 
-    fn on_landed(&self, _ctx: &BehaviorContext) -> State {
-        State::LandingStandUp { elapsed: 0.0 }
+    fn on_landed(&self, ctx: &BehaviorContext) -> State {
+        if matches!(ctx.surface, Surface::WindowWall { .. }) {
+            State::WallEntry { elapsed: 0.0 }
+        } else {
+            State::LandingStandUp { elapsed: 0.0 }
+        }
     }
 }
