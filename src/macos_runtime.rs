@@ -213,6 +213,11 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// Target animation fps read from user.toml. Base timer fires at 60 Hz;
+    /// ticks are skipped until 1/tick_rate seconds have elapsed.
+    tick_rate: u32,
+    /// Timestamp of the last physics/rendering tick. Used for rate limiting.
+    last_full_tick: Instant,
 }
 
 thread_local! {
@@ -1777,6 +1782,15 @@ fn tick() {
             return;
         }
 
+        // Rate-limit: skip this 60 Hz callback when the target interval has not elapsed.
+        {
+            let target = 1.0 / app.tick_rate.max(1) as f64;
+            if app.last_full_tick.elapsed().as_secs_f64() < target {
+                return;
+            }
+            app.last_full_tick = Instant::now();
+        }
+
         // Compute screen info once for all characters.
         let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
@@ -2118,10 +2132,10 @@ pub fn run() {
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();
 
-    // 10 Hz timer
+    // 60 Hz base timer; tick() skips frames to enforce the configured tick_rate.
     let blk = RcBlock::new(|_: NonNull<NSTimer>| tick());
     let timer =
-        unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.1, true, &blk) };
+        unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0 / 60.0, true, &blk) };
     unsafe {
         let common: &NSRunLoopMode = &*(NSRunLoopCommonModes as *const NSRunLoopMode);
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, common);
@@ -2151,6 +2165,8 @@ pub fn run() {
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
             win_cache: WinListCache::new(),
+            tick_rate: user_cfg.display.tick_rate.max(1),
+            last_full_tick: Instant::now(),
         });
     });
 

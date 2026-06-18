@@ -36,6 +36,15 @@ suffix    = " pt"
 max_width = 120
 
 [[tabs.fields]]
+key       = "display.tick_rate"
+label     = { en = "Frame rate", ja = "フレームレート" }
+sublabel  = { en = "fps", ja = "fps" }
+type      = "number"
+widget    = "segmented_control"
+options   = ["10", "15", "30", "60"]
+max_width = 280
+
+[[tabs.fields]]
 key       = "display.language"
 label     = { en = "Speech language", ja = "吹き出しの言語" }
 type      = "string"

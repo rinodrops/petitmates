@@ -208,6 +208,11 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// Target animation fps read from user.toml. Base timer fires at ~60 Hz;
+    /// ticks are skipped until 1/tick_rate seconds have elapsed.
+    tick_rate: u32,
+    /// Timestamp of the last physics/rendering tick. Used for rate limiting.
+    last_full_tick: Instant,
 }
 
 thread_local! {
@@ -919,6 +924,15 @@ fn tick_all() {
         if crate::user_config::take_restart_request() {
             unsafe { PostQuitMessage(0); }
             return;
+        }
+
+        // Rate-limit: skip this callback when the target interval has not elapsed.
+        {
+            let target = 1.0 / app.tick_rate.max(1) as f64;
+            if app.last_full_tick.elapsed().as_secs_f64() < target {
+                return;
+            }
+            app.last_full_tick = Instant::now();
         }
 
         let si = windows_wm::screen_info();
@@ -1840,11 +1854,13 @@ pub fn run() {
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
                 win_cache: WinListCache::new(),
+                tick_rate: user_cfg.display.tick_rate.max(1),
+                last_full_tick: Instant::now(),
             });
         });
 
         add_tray_icon(host_hwnd, hinstance);
-        SetTimer(host_hwnd, TIMER_TICK, 100, None);
+        SetTimer(host_hwnd, TIMER_TICK, 17, None);
 
         // Message loop.
         let mut msg: MSG = mem::zeroed();
