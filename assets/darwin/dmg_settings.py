@@ -15,7 +15,7 @@ icon_locations = {
 }
 
 # Background image (1320x780 @2x for Retina, logical window 660x390)
-background = 'assets/dmg-background.png'
+background = 'assets/darwin/dmg-background.png'
 
 # Finder window appearance
 show_status_bar  = False
