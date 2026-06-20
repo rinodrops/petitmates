@@ -2,6 +2,9 @@
 target/
 dist/
 
+# Generated assets
+assets/appicon.ico
+
 # macOS
 .DS_Store
 **/.DS_Store
