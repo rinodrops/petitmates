@@ -62,11 +62,22 @@ jobs:
           key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-macos-${{ matrix.arch }}-
 
-      - name: Check notarization credentials
+      - name: Sanitize notarization credentials
+        # GitHub Secrets pasted from a terminal often include a trailing newline,
+        # which makes notarytool return HTTP 401 (Invalid credentials).
         run: |
-          echo "APPLE_ID length: ${#APPLE_ID}"
-          echo "APPLE_DEVELOPER_TEAM_ID length: ${#APPLE_DEVELOPER_TEAM_ID}"
-          echo "APPLE_DEVELOPER_APP_PASSWORD length: ${#APPLE_DEVELOPER_APP_PASSWORD}"
+          trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+          echo "APPLE_ID=$(trim "$APPLE_ID")" >> "$GITHUB_ENV"
+          echo "APPLE_DEVELOPER_TEAM_ID=$(trim "$APPLE_DEVELOPER_TEAM_ID")" >> "$GITHUB_ENV"
+          echo "APPLE_DEVELOPER_APP_PASSWORD=$(trim "$APPLE_DEVELOPER_APP_PASSWORD")" >> "$GITHUB_ENV"
+
+      - name: Validate notarization credentials
+        run: |
+          test -n "$APPLE_ID" || { echo "APPLE_ID is empty" >&2; exit 1; }
+          test "${#APPLE_DEVELOPER_TEAM_ID}" -eq 10 || \
+            { echo "APPLE_DEVELOPER_TEAM_ID must be 10 characters (got ${#APPLE_DEVELOPER_TEAM_ID})" >&2; exit 1; }
+          test "${#APPLE_DEVELOPER_APP_PASSWORD}" -eq 19 || \
+            { echo "APPLE_DEVELOPER_APP_PASSWORD must be 19 characters (got ${#APPLE_DEVELOPER_APP_PASSWORD}); use an app-specific password from appleid.apple.com" >&2; exit 1; }
 
       - name: Build and notarize (${{ matrix.arch }})
         run: just darwin-notarize-${{ matrix.arch }}
