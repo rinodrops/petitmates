@@ -403,10 +403,15 @@ impl BehaviorScript for TerrestrialBehavior {
                         return if self.rnd_bool(cfg.floor.edge_stand_to_sit_prob) {
                             Transition::To(self.make_sit_idle(ctx))
                         } else {
+                            // Use surface_progress (position) rather than facing to determine
+                            // which corner to approach.  After TurningAround, facing can point
+                            // inward while the character is still at the opposite edge, which
+                            // would send it to the wrong corner.
+                            let side = if ctx.surface_progress < 0.5 { Side::Left } else { Side::Right };
                             Transition::To(State::CornerTransitionSide {
                                 elapsed: 0.0,
                                 going_up: false,
-                                side: dir_to_side(ctx.facing),
+                                side,
                             })
                         };
                     }
