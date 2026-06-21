@@ -127,6 +127,7 @@ install: darwin-build-arm64
 # ---------------------------------------------------------------------------
 
 win-build: _settings-win
+    just _ico
     CARGO_TARGET_DIR="{{win_target_dir}}" cargo build --release --target x86_64-pc-windows-gnu
     mkdir -p "dist/windows-x86_64"
     cp "{{win_target_dir}}/x86_64-pc-windows-gnu/release/{{exe_name}}.exe" \
@@ -223,6 +224,17 @@ _icns icns_out:
     ICNS_OUT_ABS="$(cd "$(dirname "{{icns_out}}")" && pwd)/$(basename "{{icns_out}}")"
     iconutil -c icns "${ICONSET}" -o "${ICNS_OUT_ABS}"
     rm -rf "${ICONSET_WORK}"
+
+_ico:
+    #!/usr/bin/env bash
+    if [ ! -f "assets/appicon.png" ]; then
+        echo "Note: assets/appicon.png not found — skipping .ico generation."
+        exit 0
+    fi
+    set -euo pipefail
+    magick "assets/appicon.png" \
+        -define icon:auto-resize=256,128,64,48,32,16 \
+        "assets/appicon.ico"
 
 _require-dmgbuild:
     #!/usr/bin/env bash
