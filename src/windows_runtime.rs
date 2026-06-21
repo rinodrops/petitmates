@@ -177,6 +177,8 @@ struct CharState {
     /// Width of the sprite rendered last tick (scaled display pixels).
     /// Used by the resting-overlap nudge to compute the correct at_edge buffer.
     last_sprite_w: f64,
+    /// True while this character is within snap range of a surface during drag.
+    snap_highlight: bool,
     /// Water-physics state; `Some` when character is in `Surface::WindowInterior`.
     aquatic: Option<crate::behavior::AquaticState>,
 }
@@ -210,6 +212,16 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// fps configured for AC power (from user.toml).
+    tick_rate_ac: u32,
+    /// fps configured for battery power (from user.toml).
+    tick_rate_battery: u32,
+    /// Active animation fps (resolved from tick_rate_ac/battery at startup and
+    /// updated on WM_POWERBROADCAST). Base timer fires at ~60 Hz; ticks are
+    /// skipped until 1/tick_rate seconds have elapsed.
+    tick_rate: u32,
+    /// Timestamp of the last physics/rendering tick. Used for rate limiting.
+    last_full_tick: Instant,
     /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
     mode: crate::user_config::Mode,
 }
@@ -686,7 +698,23 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         bubble_state: None,
         bubble_hwnd: ptr::null_mut(),
         last_sprite_w: 150.0,
+        snap_highlight: false,
         aquatic: None,
+    }
+}
+
+// ---- Snap-zone visual highlight ----
+
+/// Brighten a pre-multiplied BGRA buffer to indicate snap-zone proximity.
+fn brighten_bgra(bgra: &mut [u8], delta: u8) {
+    for chunk in bgra.chunks_mut(4) {
+        let a = chunk[3];
+        if a == 0 { continue; }
+        // Additive brightness scaled to alpha (pre-multiply invariant: channel ≤ alpha).
+        let add = (delta as u32 * a as u32 / 255) as u8;
+        chunk[0] = chunk[0].saturating_add(add).min(a); // B
+        chunk[1] = chunk[1].saturating_add(add).min(a); // G
+        chunk[2] = chunk[2].saturating_add(add).min(a); // R
     }
 }
 
@@ -701,7 +729,10 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
         let Some(sprite) = assets.sprite(&sr.name, sr.mirror) else { return };
         let (px, py) = (ch.char_pos.0 as i32, ch.char_pos.1 as i32);
-        let bgra = sprite.bgra.clone();
+        let mut bgra = sprite.bgra.clone();
+        if ch.snap_highlight {
+            brighten_bgra(&mut bgra, 80);
+        }
         unsafe { set_layered_content(ch.hwnd, &bgra, sprite.w, sprite.h, px, py, 200); }
         return;
     }
@@ -1032,6 +1063,15 @@ fn tick_all() {
         if crate::user_config::take_restart_request() {
             unsafe { PostQuitMessage(0); }
             return;
+        }
+
+        // Rate-limit: skip this callback when the target interval has not elapsed.
+        {
+            let target = 1.0 / app.tick_rate.max(1) as f64;
+            if app.last_full_tick.elapsed().as_secs_f64() < target {
+                return;
+            }
+            app.last_full_tick = Instant::now();
         }
 
         let si = windows_wm::screen_info();
@@ -1405,6 +1445,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                                 if let Some((ox, oy)) = app.chars[i].drag_offset {
                                     app.chars[i].char_pos = (pt.x as f64 - ox, pt.y as f64 - oy);
                                 }
+                                // Snap-zone feedback.
+                                let sr = sprite_for_state(&app.chars[i].anim_state, app.chars[i].facing, &app.chars[i].assets.animations);
+                                let (sw, sh) = app.chars[i].assets.size(&sr.name, sr.mirror);
+                                let (cx, cy) = app.chars[i].char_pos;
+                                let foot_x = cx + sw / 2.0;
+                                let foot_y = cy + sh;
+                                let si = windows_wm::screen_info();
+                                let in_snap = {
+                                    let wins: &[_] = &app.win_cache.wins;
+                                    windows_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some()
+                                };
+                                app.chars[i].snap_highlight = in_snap;
                             }
                         }
                     });
@@ -1426,6 +1478,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             let idx = app.chars.iter().position(|c| c.hwnd == hwnd);
                             if let Some(i) = idx {
                                 app.chars[i].drag_offset = None;
+                                app.chars[i].snap_highlight = false;
                                 let si   = windows_wm::screen_info();
                                 let wins = windows_wm::list_windows(&si);
                                 let assets = Rc::clone(&app.chars[i].assets);
@@ -1455,6 +1508,21 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         }
                     });
                     tick_all();
+                }
+                0
+            }
+            WM_POWERBROADCAST => {
+                // PBT_APMPOWERSTATUSCHANGE (0xA): AC adapter plugged or unplugged.
+                if wp == 0xA {
+                    APP.with(|cell| {
+                        let mut b = cell.borrow_mut();
+                        let Some(app) = b.as_mut() else { return };
+                        app.tick_rate = if crate::power::on_ac_power() {
+                            app.tick_rate_ac
+                        } else {
+                            app.tick_rate_battery
+                        }.max(1);
+                    });
                 }
                 0
             }
@@ -1940,12 +2008,20 @@ pub fn run() {
                 weather: weather_handle,
                 weather_cfg: user_cfg.weather,
                 win_cache: WinListCache::new(),
+                tick_rate_ac: user_cfg.display.tick_rate_ac.max(1),
+                tick_rate_battery: user_cfg.display.tick_rate_battery.max(1),
+                tick_rate: if crate::power::on_ac_power() {
+                    user_cfg.display.tick_rate_ac
+                } else {
+                    user_cfg.display.tick_rate_battery
+                }.max(1),
+                last_full_tick: Instant::now(),
                 mode: user_cfg.mode,
             });
         });
 
         add_tray_icon(host_hwnd, hinstance);
-        SetTimer(host_hwnd, TIMER_TICK, 100, None);
+        SetTimer(host_hwnd, TIMER_TICK, 17, None);
 
         // Message loop.
         let mut msg: MSG = mem::zeroed();

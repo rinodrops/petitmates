@@ -243,21 +243,6 @@ pub fn screen_info(mt: MainThreadMarker) -> Option<ScreenInfo> {
     Some(ScreenInfo { width, height, dock_height, menu_bar_height })
 }
 
-/// Screen height in NS points — usable without a `MainThreadMarker` token
-/// because it is only called from the main thread (event monitor callbacks).
-///
-/// # Safety
-/// Must be called on the main thread.
-pub fn screen_info_raw() -> f64 {
-    unsafe {
-        let mt = MainThreadMarker::new_unchecked();
-        NSScreen::screens(mt)
-            .firstObject()
-            .map(|s| s.frame().size.height)
-            .unwrap_or(800.0)
-    }
-}
-
 /// Full `ScreenInfo` without a `MainThreadMarker` token.
 ///
 /// # Safety
@@ -326,6 +311,53 @@ pub fn find_surface_near(
     }
 
     None
+}
+
+/// Wall snap tolerance for ⌘+drag placement (display px).
+/// Much wider than `SNAP` so the user can drop near a wall edge without
+/// pixel-precise aim.
+const WALL_DROP_SNAP: f64 = 60.0;
+
+/// Like `find_surface_near` but with a wider wall-proximity threshold.
+///
+/// Used at ⌘+drag release (and for hover preview during drag).
+/// Falls back to the exact `find_surface_near` first so that corners
+/// and top edges retain their original priority.
+pub fn find_drop_surface(
+    foot_x: f64,
+    foot_y: f64,
+    wins: &[WinInfo],
+    si: &ScreenInfo,
+) -> Option<Surface> {
+    // Exact snap: corners, top edges, 8 px wall edges, desktop floor.
+    if let Some(s) = find_surface_near(foot_x, foot_y, wins, si) {
+        return Some(s);
+    }
+    // Wider wall proximity: pick the nearest wall edge within WALL_DROP_SNAP.
+    let mut best: Option<(f64, Surface)> = None;
+    for win in wins {
+        let in_y = foot_y >= win.y && foot_y <= win.bottom();
+        if !in_y {
+            continue;
+        }
+        let dist_r = (foot_x - win.right()).abs();
+        let dist_l = (foot_x - win.x).abs();
+        if dist_r < WALL_DROP_SNAP && best.as_ref().map_or(true, |(d, _)| dist_r < *d) {
+            best = Some((dist_r, Surface::WindowWall {
+                win_id: win.id,
+                side: Side::Right,
+                y_local: foot_y - win.y,
+            }));
+        }
+        if dist_l < WALL_DROP_SNAP && best.as_ref().map_or(true, |(d, _)| dist_l < *d) {
+            best = Some((dist_l, Surface::WindowWall {
+                win_id: win.id,
+                side: Side::Left,
+                y_local: foot_y - win.y,
+            }));
+        }
+    }
+    best.map(|(_, s)| s)
 }
 
 // ---- Helpers ----

@@ -1,6 +1,6 @@
 [package]
 name = "petitmates"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 
 [dependencies]
@@ -58,6 +58,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_System_LibraryLoader",
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -69,3 +70,9 @@ image = "0.25"
 [[bin]]
 name = "petitmates"
 path = "src/main.rs"
+
+# Xcode 27 beta: dyld rejects stripped proc-macro dylibs with "mis-aligned
+# LINKEDIT string pool".  Disabling strip for build-override avoids the issue;
+# proc-macros are compile-time only so this has no effect on the final binary.
+[profile.release.build-override]
+strip = false

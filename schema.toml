@@ -36,6 +36,24 @@ suffix    = " pt"
 max_width = 120
 
 [[tabs.fields]]
+key       = "display.tick_rate_ac"
+label     = { en = "Frame rate (AC)", ja = "フレームレート (AC電源)" }
+sublabel  = { en = "fps", ja = "fps" }
+type      = "number"
+widget    = "segmented_control"
+options   = ["10", "15", "30", "60"]
+max_width = 280
+
+[[tabs.fields]]
+key       = "display.tick_rate_battery"
+label     = { en = "Frame rate (battery)", ja = "フレームレート (バッテリ)" }
+sublabel  = { en = "fps", ja = "fps" }
+type      = "number"
+widget    = "segmented_control"
+options   = ["10", "15", "30", "60"]
+max_width = 280
+
+[[tabs.fields]]
 key       = "display.language"
 label     = { en = "Speech language", ja = "吹き出しの言語" }
 type      = "string"

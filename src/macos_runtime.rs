@@ -217,12 +217,35 @@ struct AppState {
     weather_cfg: crate::user_config::WeatherConfig,
     /// Reusable window-list cache with tiered refresh schedule.
     win_cache: WinListCache,
+    /// fps configured for AC power (from user.toml).
+    tick_rate_ac: u32,
+    /// fps configured for battery power (from user.toml).
+    tick_rate_battery: u32,
+    /// Active animation fps (resolved from tick_rate_ac/battery at startup and
+    /// updated by the IOKit power-source notification callback). Base timer fires
+    /// at 60 Hz; ticks are skipped until 1/tick_rate seconds have elapsed.
+    tick_rate: u32,
+    /// Timestamp of the last physics/rendering tick. Used for rate limiting.
+    last_full_tick: Instant,
     /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
     mode: crate::user_config::Mode,
 }
 
 thread_local! {
     static APP: RefCell<Option<AppState>> = RefCell::new(None);
+}
+
+/// IOKit power-source notification callback. Runs on the main thread.
+unsafe extern "C" fn power_source_changed(_: *mut std::ffi::c_void) {
+    APP.with(|cell| {
+        let mut b = cell.borrow_mut();
+        let Some(app) = b.as_mut() else { return };
+        app.tick_rate = if crate::power::on_ac_power() {
+            app.tick_rate_ac
+        } else {
+            app.tick_rate_battery
+        }.max(1);
+    });
 }
 
 // ---- Panel helpers ----
@@ -989,6 +1012,37 @@ fn update_hover_alpha(panel: &NSPanel, config: &crate::config::Config, dragging:
     }
 }
 
+/// Apply or clear a snap-zone highlight on the character's image view.
+///
+/// Uses `CIColorControls` (brightness boost) via `NSView.contentFilters`
+/// so the effect respects the sprite's alpha channel and follows the
+/// sprite shape rather than the rectangular bounding box.
+fn set_snap_highlight(image_view: &NSImageView, active: bool) {
+    unsafe {
+        if active {
+            // Layer-backing is required for contentFilters to take effect.
+            let _: () = msg_send![image_view, setWantsLayer: true];
+
+            let Some(ci_class) = objc2::runtime::AnyClass::get(c"CIFilter") else { return };
+            let filter_name = NSString::from_str("CIColorControls");
+            let filter: *mut AnyObject = msg_send![ci_class, filterWithName: &*filter_name];
+            if filter.is_null() { return; }
+            let _: () = msg_send![filter, setDefaults];
+            let key = NSString::from_str("inputBrightness");
+            let val = objc2_foundation::NSNumber::new_f64(0.4);
+            let _: () = msg_send![filter, setValue: &*val forKey: &*key];
+
+            let Some(arr_class) = objc2::runtime::AnyClass::get(c"NSArray") else { return };
+            let arr: *mut AnyObject = msg_send![arr_class, arrayWithObject: filter];
+            let _: () = msg_send![image_view, setContentFilters: arr];
+        } else {
+            let Some(arr_class) = objc2::runtime::AnyClass::get(c"NSArray") else { return };
+            let empty: *mut AnyObject = msg_send![arr_class, array];
+            let _: () = msg_send![image_view, setContentFilters: empty];
+        }
+    }
+}
+
 // ---- ⌘+drag event monitors ----
 
 /// Register global event monitors for ⌘+drag.
@@ -1045,8 +1099,15 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let new_ns_y = mouse_ns.y - off.1;
             unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
             let sz = unsafe { app.chars[drag_idx].panel.frame().size };
-            let si_height = macos_wm::screen_info_raw();
-            app.chars[drag_idx].char_pos = (new_ns_x, si_height - new_ns_y - sz.height);
+            let si = macos_wm::screen_info_raw_full();
+            app.chars[drag_idx].char_pos = (new_ns_x, si.height - new_ns_y - sz.height);
+
+            // Snap-zone feedback: highlight the sprite when a surface is nearby.
+            let foot_x = new_ns_x + sz.width / 2.0;
+            let foot_y = si.height - new_ns_y;
+            let wins: &[WinInfo] = &app.win_cache.wins;
+            let in_snap = macos_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some();
+            set_snap_highlight(&app.chars[drag_idx].image_view, in_snap);
         });
     });
     if let Some(m) = unsafe {
@@ -1064,6 +1125,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
                 else { return };
             app.chars[drag_idx].drag_offset = None;
+            set_snap_highlight(&app.chars[drag_idx].image_view, false);
 
             let si = macos_wm::screen_info_raw_full();
             let wins = macos_wm::list_windows(&si);
@@ -1079,8 +1141,8 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
             let foot_x = ch.char_pos.0 + fw / 2.0;
             let foot_y = ch.char_pos.1 + fh;
 
-            // Try to snap to a nearby surface.
-            let new_surface = macos_wm::find_surface_near(foot_x, foot_y, &wins, &si);
+            // Try to snap to a nearby surface (wider wall threshold for drag drops).
+            let new_surface = macos_wm::find_drop_surface(foot_x, foot_y, &wins, &si);
             match new_surface {
                 Some(surf) => {
                     let ctx = BehaviorContext {
@@ -1902,6 +1964,15 @@ fn tick() {
             return;
         }
 
+        // Rate-limit: skip this 60 Hz callback when the target interval has not elapsed.
+        {
+            let target = 1.0 / app.tick_rate.max(1) as f64;
+            if app.last_full_tick.elapsed().as_secs_f64() < target {
+                return;
+            }
+            app.last_full_tick = Instant::now();
+        }
+
         // Compute screen info once for all characters.
         let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
             width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
@@ -2243,10 +2314,10 @@ pub fn run() {
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();
 
-    // 10 Hz timer
+    // 60 Hz base timer; tick() skips frames to enforce the configured tick_rate.
     let blk = RcBlock::new(|_: NonNull<NSTimer>| tick());
     let timer =
-        unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.1, true, &blk) };
+        unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0 / 60.0, true, &blk) };
     unsafe {
         let common: &NSRunLoopMode = &*(NSRunLoopCommonModes as *const NSRunLoopMode);
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, common);
@@ -2276,9 +2347,21 @@ pub fn run() {
             weather: weather_handle,
             weather_cfg: user_cfg.weather,
             win_cache: WinListCache::new(),
+            tick_rate_ac: user_cfg.display.tick_rate_ac.max(1),
+            tick_rate_battery: user_cfg.display.tick_rate_battery.max(1),
+            tick_rate: if crate::power::on_ac_power() {
+                user_cfg.display.tick_rate_ac
+            } else {
+                user_cfg.display.tick_rate_battery
+            }.max(1),
+            last_full_tick: Instant::now(),
             mode: user_cfg.mode,
         });
     });
+
+    // IOKit notification: update tick_rate immediately when AC/battery changes.
+    // Registered after APP is initialized so the callback can safely access it.
+    crate::power::register_power_notification(power_source_changed);
 
     unsafe { app.run() };
 }

@@ -11,6 +11,7 @@ mod manifest;
 mod terrestrial_behavior;
 mod speech;
 mod sprite_map;
+mod power;
 mod user_config;
 mod weather;
 
