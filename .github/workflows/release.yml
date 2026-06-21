@@ -62,6 +62,12 @@ jobs:
           key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-macos-${{ matrix.arch }}-
 
+      - name: Check notarization credentials
+        run: |
+          echo "APPLE_ID length: ${#APPLE_ID}"
+          echo "APPLE_DEVELOPER_TEAM_ID length: ${#APPLE_DEVELOPER_TEAM_ID}"
+          echo "APPLE_DEVELOPER_APP_PASSWORD length: ${#APPLE_DEVELOPER_APP_PASSWORD}"
+
       - name: Build and notarize (${{ matrix.arch }})
         run: just darwin-notarize-${{ matrix.arch }}
         env:
