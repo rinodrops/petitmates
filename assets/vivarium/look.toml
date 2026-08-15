@@ -1,0 +1,42 @@
+# Vivarium glass look — temporary tuning file.
+# Save this file while the app is running; the cage redraws on the next tick.
+# dim       = 0..1  absorption (0.05 ≈ 5% darker)
+# turquoise = 0..1  0 = neutral ND (black), 1 = saturated tank-edge teal
+#
+# blur = window-server backdrop radius in points (macOS CGS, like iTerm2).
+#        0 = off. No Screen Recording. Windows ignores this for now.
+# outline / outline_width = dark silhouette stroke (0..1 strength, width in cage pixels).
+#
+# Front-only extras:
+# spec_x / spec_width / spec_strength = pane reflection (x and width are 0..1 of the opening)
+
+blur = 5
+outline = 0.35
+outline_width = 1.35
+
+[back]
+dim       = 0.05
+turquoise = 0.45
+
+[front]
+dim           = 0.1
+turquoise     = 0.35
+spec_x        = 0.2
+spec_width    = 0.4
+spec_strength = 0.1
+
+[side]
+dim       = 0.3
+turquoise = 1.0
+
+# [back]
+# dim       = 0.1
+# turquoise = 0.35
+#
+# [front]
+# dim       = 0.05
+# turquoise = 0.45
+#
+# [side]
+# dim       = 0.24
+# turquoise = 1.00

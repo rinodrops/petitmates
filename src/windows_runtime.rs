@@ -37,6 +37,7 @@ use crate::terrestrial_behavior::TerrestrialBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
 use crate::windows_assets::{self, Anchor, SpriteAssets};
 use crate::windows_wm::{self, ScreenInfo, WinInfo};
+use crate::vivarium::{self, Affiliation, VivariumConfig, ZOrder};
 
 // ---- Constants ----
 
@@ -48,6 +49,11 @@ const IDM_REMOVE_CHAR: usize = 4;
 const IDM_ADD_PT: usize = 5;
 const IDM_SETTINGS: usize = 6;
 const IDM_ADD_LG: usize = 7;
+const IDM_VIVI_IN: usize = 20;
+const IDM_VIVI_OUT: usize = 21;
+const IDM_VIVI_Z_DESK: usize = 22;
+const IDM_VIVI_Z_NORM: usize = 23;
+const IDM_VIVI_Z_FRONT: usize = 24;
 const TIMER_TICK: usize = 1;
 /// Base command ID for debug trigger menu items (reserves 100–199).
 const IDM_DEBUG_BASE: usize = 100;
@@ -181,6 +187,9 @@ struct CharState {
     snap_highlight: bool,
     /// Water-physics state; `Some` when character is in `Surface::WindowInterior`.
     aquatic: Option<crate::behavior::AquaticState>,
+    affiliation: Affiliation,
+    vivi_x: f64,
+    species: &'static str,
 }
 
 struct AppState {
@@ -222,8 +231,32 @@ struct AppState {
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
     last_full_tick: Instant,
-    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
-    mode: crate::user_config::Mode,
+    vivarium: Option<VivariumWin>,
+    vivi_look: vivarium::LookLoader,
+}
+
+struct VivariumWin {
+    hwnd: HWND,
+    cfg: VivariumConfig,
+    x: i32,
+    y: i32,
+    dirty: bool,
+    layer_back: Option<vivarium::Framebuffer>,
+    layer_glass: Option<vivarium::Framebuffer>,
+    layers_look: Option<vivarium::LookConfig>,
+    last_blit: Vec<(i32, i32, u32, u32, String, bool)>,
+    interact: Option<ViviInteract>,
+}
+
+#[derive(Clone, Copy)]
+enum ViviInteract {
+    Move { grab: (f64, f64) },
+    Resize {
+        edge: u8,
+        start_mouse: (f64, f64),
+        orig_logical: (u32, u32),
+        orig_origin: (f64, f64),
+    },
 }
 
 thread_local! {
@@ -700,6 +733,486 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         last_sprite_w: 150.0,
         snap_highlight: false,
         aquatic: None,
+        affiliation: Affiliation::Desktop,
+        vivi_x: 0.0,
+        species: match char_name {
+            "pond_turtle" => "pond_turtle",
+            "leopard_gecko" => "leopard_gecko",
+            _ => "bearded_dragon",
+        },
+    }
+}
+
+fn set_vivi_z_win(z: ZOrder) {
+    APP.with(|cell| {
+        if let Some(app) = cell.borrow_mut().as_mut() {
+            if let Some(v) = app.vivarium.as_mut() {
+                v.cfg.z_order = z;
+                apply_vivi_z_win(v.hwnd, z);
+                crate::user_config::write_vivarium_z_order(z);
+            }
+        }
+    });
+}
+
+fn put_one_in_cage_win(app: &mut AppState, idx: usize) {
+    let Some(v) = app.vivarium.as_ref() else { return };
+    let inner = vivarium::inner_rect(v.cfg.logical_w, v.cfg.logical_h);
+    let Some(ch) = app.chars.get_mut(idx) else { return };
+    ch.affiliation = Affiliation::Vivarium;
+    ch.aquatic = None;
+    ch.vivi_x = inner.x as f64 + inner.w as f64 * 0.5;
+    ch.anim_state = State::LieIdle {
+        head_front: false,
+        elapsed: 0.0,
+        duration: 10.0,
+        head_timer: 0.0,
+    };
+    unsafe { ShowWindow(ch.hwnd, SW_HIDE); }
+    if let Some(v) = app.vivarium.as_mut() {
+        v.dirty = true;
+    }
+}
+
+fn ensure_pond_turtle_in_cage_win(app: &mut AppState, si: &ScreenInfo) {
+    if app.vivarium.is_none() {
+        return;
+    }
+    if !app.chars.iter().any(|c| c.species == "pond_turtle") {
+        let ch = unsafe {
+            spawn_char_hwnd(
+                si,
+                Rc::clone(&app.pt_assets),
+                app.pt_config.clone(),
+                "pond_turtle",
+            )
+        };
+        app.chars.push(ch);
+    }
+    if let Some(i) = app.chars.iter().position(|c| c.species == "pond_turtle") {
+        put_one_in_cage_win(app, i);
+    }
+}
+
+fn put_all_in_cage_win(app: &mut AppState) {
+    let Some(v) = app.vivarium.as_ref() else { return };
+    let inner = vivarium::inner_rect(v.cfg.logical_w, v.cfg.logical_h);
+    let n = app.chars.len().max(1) as f64;
+    for (i, ch) in app.chars.iter_mut().enumerate() {
+        ch.affiliation = Affiliation::Vivarium;
+        ch.aquatic = None;
+        ch.vivi_x = inner.x as f64 + inner.w as f64 * (i as f64 + 0.5) / n;
+        ch.anim_state = State::LieIdle {
+            head_front: false,
+            elapsed: 0.0,
+            duration: 10.0,
+            head_timer: 0.0,
+        };
+        unsafe { ShowWindow(ch.hwnd, SW_HIDE); }
+    }
+    if let Some(v) = app.vivarium.as_mut() {
+        v.dirty = true;
+    }
+}
+
+fn let_all_out_win(app: &mut AppState) {
+    let drop = app.vivarium.as_ref().map(|v| (v.x as f64, v.y as f64));
+    for ch in &mut app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        ch.affiliation = Affiliation::Desktop;
+        ch.aquatic = None;
+        ch.surface = Surface::Airborne;
+        ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+        if let Some((x, y)) = drop {
+            ch.char_pos = (x + 40.0, y);
+        }
+        unsafe { ShowWindow(ch.hwnd, SW_SHOWNOACTIVATE); }
+    }
+    if let Some(v) = app.vivarium.as_mut() {
+        v.dirty = true;
+    }
+}
+
+fn apply_vivi_z_win(hwnd: HWND, z: ZOrder) {
+    let after = match z {
+        ZOrder::Desktop => HWND_BOTTOM,
+        ZOrder::Normal => HWND_NOTOPMOST,
+        ZOrder::Front => HWND_TOPMOST,
+    };
+    unsafe {
+        SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+fn spawn_vivarium_hwnd(cfg: &VivariumConfig, si: &ScreenInfo) -> Option<VivariumWin> {
+    if !cfg.enabled {
+        return None;
+    }
+    let hinstance = unsafe { GetModuleHandleW(ptr::null()) };
+    let class_name = to_wide("PetitMatesOverlay");
+    let (pw, ph) = cfg.pixel_size();
+    let x = cfg.origin_x
+        .map(|v| v.round() as i32)
+        .unwrap_or(((si.width - pw as f64) * 0.55).max(40.0) as i32);
+    let y = cfg.origin_y
+        .map(|v| v.round() as i32)
+        .unwrap_or(((si.height - ph as f64) * 0.55).max(40.0) as i32);
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            class_name.as_ptr(),
+            ptr::null(),
+            WS_POPUP,
+            x, y, pw as i32, ph as i32,
+            ptr::null_mut(), ptr::null_mut(), hinstance, ptr::null(),
+        )
+    };
+    if hwnd.is_null() {
+        return None;
+    }
+    Some(VivariumWin {
+        hwnd,
+        cfg: cfg.clone(),
+        x,
+        y,
+        dirty: true,
+        layer_back: None,
+        layer_glass: None,
+        layers_look: None,
+        last_blit: Vec::new(),
+        interact: None,
+    })
+}
+
+fn persist_vivi_geometry_win(v: &mut VivariumWin) {
+    v.cfg.origin_x = Some(v.x as f64);
+    v.cfg.origin_y = Some(v.y as f64);
+    crate::user_config::write_vivarium_geometry(
+        v.x as f64,
+        v.y as f64,
+        v.cfg.logical_w,
+        v.cfg.logical_h,
+    );
+}
+
+fn clamp_all_vivi_mates_win(app: &mut AppState) {
+    let Some((logical_w, logical_h, ch_h, pw)) = app.vivarium.as_ref().map(|v| {
+        (
+            v.cfg.logical_w,
+            v.cfg.logical_h,
+            v.cfg.character_height as f64,
+            v.cfg.pixel_size().0,
+        )
+    }) else {
+        return;
+    };
+    let inner = vivarium::inner_rect(logical_w, logical_h);
+    for ch in &mut app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let orig = ch.assets.size(&sr.name, sr.mirror);
+        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
+        let logical_sprite_w = sprite_w * (logical_w as f64 / pw.max(1) as f64);
+        ch.vivi_x = vivarium::clamp_vivi_x(ch.vivi_x, inner, logical_sprite_w);
+    }
+}
+
+fn try_begin_vivi_interact_win(app: &mut AppState, hwnd: HWND, pt: POINT, alt: bool) -> bool {
+    let (enabled, vx, vy, pw, ph, orig_logical) = {
+        let Some(v) = app.vivarium.as_ref() else { return false };
+        if v.hwnd != hwnd {
+            return false;
+        }
+        let (pw, ph) = v.cfg.pixel_size();
+        (v.cfg.enabled, v.x, v.y, pw, ph, (v.cfg.logical_w, v.cfg.logical_h))
+    };
+    if !enabled {
+        return false;
+    }
+    let lx = pt.x as f64 - vx as f64;
+    let ly = pt.y as f64 - vy as f64;
+    let edge = if alt {
+        vivarium::hit_resize_edges(lx, ly, pw as f64, ph as f64, false)
+    } else {
+        0
+    };
+    let interact = if edge != 0 {
+        ViviInteract::Resize {
+            edge,
+            start_mouse: (pt.x as f64, pt.y as f64),
+            orig_logical,
+            orig_origin: (vx as f64, vy as f64),
+        }
+    } else {
+        ViviInteract::Move {
+            grab: (lx, ly),
+        }
+    };
+    if let Some(v) = app.vivarium.as_mut() {
+        v.interact = Some(interact);
+        v.dirty = true;
+    }
+    true
+}
+
+fn tick_vivi_interact_win(app: &mut AppState, pt: POINT) {
+    let Some(kind) = app.vivarium.as_ref().and_then(|v| v.interact) else {
+        return;
+    };
+    match kind {
+        ViviInteract::Move { grab } => {
+            if let Some(v) = app.vivarium.as_mut() {
+                v.x = (pt.x as f64 - grab.0).round() as i32;
+                v.y = (pt.y as f64 - grab.1).round() as i32;
+            }
+        }
+        ViviInteract::Resize {
+            edge,
+            start_mouse,
+            orig_logical,
+            orig_origin,
+        } => {
+            let (scale, grid, cur) = {
+                let Some(v) = app.vivarium.as_ref() else { return };
+                (
+                    v.cfg.display_scale,
+                    v.cfg.grid,
+                    (v.cfg.logical_w, v.cfg.logical_h, v.cfg.origin_x, v.cfg.origin_y),
+                )
+            };
+            let (nw, nh, ox, oy) = vivarium::resize_from_drag(
+                edge,
+                pt.x as f64 - start_mouse.0,
+                pt.y as f64 - start_mouse.1,
+                orig_logical.0,
+                orig_logical.1,
+                orig_origin.0,
+                orig_origin.1,
+                scale,
+                false,
+                grid,
+            );
+            if nw == cur.0 && nh == cur.1 && cur.2 == Some(ox) && cur.3 == Some(oy) {
+                return;
+            }
+            if let Some(v) = app.vivarium.as_mut() {
+                v.cfg.logical_w = nw;
+                v.cfg.logical_h = nh;
+                v.cfg.origin_x = Some(ox);
+                v.cfg.origin_y = Some(oy);
+                v.x = ox.round() as i32;
+                v.y = oy.round() as i32;
+                v.dirty = true;
+            }
+            clamp_all_vivi_mates_win(app);
+        }
+    }
+}
+
+fn end_vivi_interact_win(app: &mut AppState) {
+    let Some(v) = app.vivarium.as_mut() else { return };
+    if v.interact.is_none() {
+        return;
+    }
+    v.interact = None;
+    v.dirty = true;
+    persist_vivi_geometry_win(v);
+}
+
+fn vivi_hwnd_interacting(hwnd: HWND) -> bool {
+    APP.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|a| a.vivarium.as_ref())
+            .map(|v| v.hwnd == hwnd && v.interact.is_some())
+            .unwrap_or(false)
+    })
+}
+
+fn tick_and_present_vivarium(app: &mut AppState) {
+    if app.vivi_look.reload_if_changed() {
+        if let Some(v) = app.vivarium.as_mut() {
+            if !v.layers_look.as_ref().is_some_and(|old| old.raster_eq(&app.vivi_look.current)) {
+                v.dirty = true;
+            }
+        }
+    }
+    let Some(v) = app.vivarium.as_ref() else { return };
+    if !v.cfg.enabled {
+        unsafe { ShowWindow(v.hwnd, SW_HIDE); }
+        return;
+    }
+    let cfg = v.cfg.clone();
+    let inner = vivarium::inner_rect(cfg.logical_w, cfg.logical_h);
+    let (pw, ph) = cfg.pixel_size();
+    let sx = pw as f64 / cfg.logical_w.max(1) as f64;
+    let sy = ph as f64 / cfg.logical_h.max(1) as f64;
+    let ch_h = cfg.character_height as f64;
+    let dt = 1.0 / app.tick_rate.max(1) as f64;
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1),
+    );
+    for ch in &mut app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let orig = ch.assets.size(&sr.name, sr.mirror);
+        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
+        let logical_sprite_w = sprite_w * (cfg.logical_w as f64 / pw.max(1) as f64);
+        let r1: f64 = rng.random();
+        let r2: f64 = rng.random();
+        vivarium::tick_rest(
+            &mut ch.anim_state,
+            &mut ch.facing,
+            &mut ch.vivi_x,
+            dt,
+            inner,
+            logical_sprite_w,
+            r1,
+            r2,
+        );
+        let _ = crate::engine::advance_anim(&mut ch.anim_state, dt, &ch.effective_config, &ch.assets.animations);
+        unsafe { ShowWindow(ch.hwnd, SW_HIDE); }
+    }
+    let look = app.vivi_look.current.clone();
+    let mut blit_key = Vec::new();
+    for ch in &app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let Some(sprite) = ch.assets.sprite(&sr.name, sr.mirror) else { continue };
+        if sprite.h <= 0 {
+            continue;
+        }
+        let scale = ch_h / sprite.h as f64;
+        let dw = (sprite.w as f64 * scale).round().max(1.0) as u32;
+        let dh = (sprite.h as f64 * scale).round().max(1.0) as u32;
+        let dx = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
+        let dy = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
+        blit_key.push((dx, dy, dw, dh, sr.name.to_string(), sr.mirror));
+    }
+    let layers_ok = app.vivarium.as_ref().is_some_and(|v| {
+        v.layer_back.is_some() && v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
+    });
+    let interacting = app.vivarium.as_ref().is_some_and(|v| v.interact.is_some());
+    let skip = !app.vivarium.as_ref().map(|v| v.dirty).unwrap_or(true)
+        && layers_ok
+        && app.vivarium.as_ref().map(|v| v.last_blit == blit_key).unwrap_or(false);
+    if skip && !interacting {
+        return;
+    }
+    let mut mate_pix = Vec::new();
+    for ch in &app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let Some(sprite) = ch.assets.sprite(&sr.name, sr.mirror) else { continue };
+        if sprite.h <= 0 {
+            continue;
+        }
+        let scale = ch_h / sprite.h as f64;
+        let dw = (sprite.w as f64 * scale).round().max(1.0) as u32;
+        let dh = (sprite.h as f64 * scale).round().max(1.0) as u32;
+        let dx = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
+        let dy = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
+        let rgba = vivarium::bgra_premul_to_rgba(&sprite.bgra);
+        mate_pix.push((dx, dy, dw, dh, sprite.w as u32, sprite.h as u32, rgba));
+    }
+    let mates: Vec<vivarium::MateBlit<'_>> = mate_pix
+        .iter()
+        .map(|(x, y, w, h, sw, sh, rgba)| vivarium::MateBlit {
+            x: *x,
+            y: *y,
+            w: *w,
+            h: *h,
+            src_w: *sw,
+            src_h: *sh,
+            rgba,
+        })
+        .collect();
+    let v = app.vivarium.as_mut().unwrap();
+    if v.layer_back.is_none() || !v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look)) {
+        let (back, glass) = vivarium::static_layers(&cfg, &look);
+        v.layer_back = Some(back);
+        v.layer_glass = Some(glass);
+        v.layers_look = Some(look.clone());
+    }
+    let fb = vivarium::composite_layers(
+        &cfg,
+        &look,
+        v.layer_back.as_ref().unwrap(),
+        v.layer_glass.as_ref().unwrap(),
+        &mates,
+    );
+    let mut bgra = vivarium::rgba_to_bgra_premul(&fb.rgba);
+    if v.interact.is_some() {
+        brighten_bgra(&mut bgra, 80);
+    }
+    if v.interact.is_none() {
+        let mut rc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        unsafe { GetWindowRect(v.hwnd, &mut rc); }
+        v.x = rc.left;
+        v.y = rc.top;
+    }
+    if v.dirty {
+        apply_vivi_z_win(v.hwnd, cfg.z_order);
+    }
+    v.last_blit = blit_key;
+    v.dirty = false;
+    unsafe {
+        ShowWindow(v.hwnd, SW_SHOWNOACTIVATE);
+        set_layered_content(v.hwnd, &bgra, pw as i32, ph as i32, v.x, v.y, 255);
+    }
+}
+
+#[allow(dead_code)]
+fn blit_bgra_nn(
+    dst: &mut [u8], dw: i32, dh: i32,
+    src: &[u8], sw: i32, sh: i32,
+    dx: i32, dy: i32, ow: i32, oh: i32,
+) {
+    if sw <= 0 || sh <= 0 || ow <= 0 || oh <= 0 {
+        return;
+    }
+    for y in 0..oh {
+        let sy = y * sh / oh;
+        let dyi = dy + y;
+        if dyi < 0 || dyi >= dh {
+            continue;
+        }
+        for x in 0..ow {
+            let sx = x * sw / ow;
+            let dxi = dx + x;
+            if dxi < 0 || dxi >= dw {
+                continue;
+            }
+            let si = ((sy * sw + sx) * 4) as usize;
+            let di = ((dyi * dw + dxi) * 4) as usize;
+            if si + 3 >= src.len() || di + 3 >= dst.len() {
+                continue;
+            }
+            let sa = src[si + 3] as u16;
+            if sa == 0 {
+                continue;
+            }
+            let da = dst[di + 3] as u16;
+            // src and dst are premul BGRA
+            let inv = 255 - sa;
+            dst[di] = ((src[si] as u16 + (dst[di] as u16 * inv) / 255) as u8).min(255);
+            dst[di + 1] = ((src[si + 1] as u16 + (dst[di + 1] as u16 * inv) / 255) as u8).min(255);
+            dst[di + 2] = ((src[si + 2] as u16 + (dst[di + 2] as u16 * inv) / 255) as u8).min(255);
+            dst[di + 3] = (sa + (da * inv) / 255).min(255) as u8;
+        }
     }
 }
 
@@ -720,7 +1233,7 @@ fn brighten_bgra(bgra: &mut [u8], delta: u8) {
 
 // ---- Per-character tick ----
 
-fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64, mode: &crate::user_config::Mode) {
+fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64) {
     let assets: &SpriteAssets = &ch.assets;
     // While being dragged, skip the state machine and just render at the
     // position set by WM_MOUSEMOVE.
@@ -825,51 +1338,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             }
         }
     } else { // land physics
-
-        // Water entry: only in Vivarium mode.
-        let wa = ch.assets.surfaces.water_affinity;
-        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
-            let win_id_side: Option<(u32, Side)> = match ch.surface {
-                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
-                Surface::WindowTop { win_id, x_local } => {
-                    windows_wm::find_win(win_id, wins).and_then(|win| {
-                        let half = sprite_size / 2.0;
-                        let edge_margin = 2.0;
-                        if x_local <= edge_margin + half {
-                            Some((win_id, Side::Left))
-                        } else if x_local >= win.w - edge_margin - half {
-                            Some((win_id, Side::Right))
-                        } else {
-                            None
-                        }
-                    })
-                }
-                _ => None,
-            };
-            if let Some((win_id, side)) = win_id_side {
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(
-                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
-                );
-                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
-                if rng.gen_bool(dive_prob) {
-                    if let Some(&win) = windows_wm::find_win(win_id, wins) {
-                        let half = sprite_size / 2.0;
-                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
-                        let vx = match side {
-                            Side::Left  =>  cfg.water.swim_speed * 0.5,
-                            Side::Right => -cfg.water.swim_speed * 0.5,
-                        };
-                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
-                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3, resting: false });
-                        ch.anim_state = State::Walking {
-                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
-                            frame: 0,
-                            frame_elapsed: 0.0,
-                        };
-                    }
-                }
-            }
-        }
+        // Water entry into foreign windows is disabled (cage water is a later slice).
+    }
 
     // Save y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -974,8 +1444,6 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             ch.anim_state = target;
         }
     }
-
-    } // end land physics (else branch)
 
     // Keep facing in sync with Walking/Running direction (land only).
     if ch.aquatic.is_none() {
@@ -1123,7 +1591,10 @@ fn tick_all() {
                 }
             }
             let cfg = app.chars[i].effective_config.clone();
-            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size, &app.mode);
+            if app.chars[i].affiliation == Affiliation::Vivarium {
+                continue;
+            }
+            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -1297,6 +1768,7 @@ fn tick_all() {
         if let Some(host) = app.chars.first() {
             update_tray_countdown(host.hwnd, min_remaining);
         }
+        tick_and_present_vivarium(app);
     });
 }
 
@@ -1334,8 +1806,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_LBUTTONDOWN => {
                 let mut pt = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut pt);
+                let alt = GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000 != 0;
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
+                        if try_begin_vivi_interact_win(app, hwnd, pt, alt) {
+                            return;
+                        }
                         let idx = app.chars.iter().position(|c| c.hwnd == hwnd);
                         if let Some(i) = idx {
                             let (lx, ly) = app.chars[i].last_screen_pos;
@@ -1429,6 +1905,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 0
             }
             WM_MOUSEMOVE => {
+                if vivi_hwnd_interacting(hwnd) {
+                    let mut pt = POINT { x: 0, y: 0 };
+                    GetCursorPos(&mut pt);
+                    APP.with(|cell| {
+                        if let Some(app) = cell.borrow_mut().as_mut() {
+                            tick_vivi_interact_win(app, pt);
+                        }
+                    });
+                    tick_all();
+                    return 0;
+                }
                 let dragging = APP.with(|cell| {
                     cell.borrow().as_ref()
                         .and_then(|app| app.chars.iter().find(|c| c.hwnd == hwnd))
@@ -1465,6 +1952,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 0
             }
             WM_LBUTTONUP => {
+                if vivi_hwnd_interacting(hwnd) {
+                    ReleaseCapture();
+                    APP.with(|cell| {
+                        if let Some(app) = cell.borrow_mut().as_mut() {
+                            end_vivi_interact_win(app);
+                        }
+                    });
+                    tick_all();
+                    return 0;
+                }
                 let was_dragging = APP.with(|cell| {
                     cell.borrow().as_ref()
                         .and_then(|app| app.chars.iter().find(|c| c.hwnd == hwnd))
@@ -1569,6 +2066,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     AppendMenuW(menu, MF_STRING, IDM_ADD_LG, add_lg_str.as_ptr());
                     let remove_flags = if char_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
                     AppendMenuW(menu, remove_flags, IDM_REMOVE_CHAR, remove_str.as_ptr());
+                    AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+                    let in_str = to_wide(if ja { "水槽に入れる" } else { "Put in Vivarium" });
+                    let out_str = to_wide(if ja { "デスクトップに出す" } else { "Let out to Desktop" });
+                    let zd = to_wide(if ja { "水槽: ウィンドウの後ろ" } else { "Vivarium: Behind Windows" });
+                    let zn = to_wide(if ja { "水槽: 通常" } else { "Vivarium: Normal" });
+                    let zf = to_wide(if ja { "水槽: 最前面" } else { "Vivarium: Front" });
+                    AppendMenuW(menu, MF_STRING, IDM_VIVI_IN, in_str.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_VIVI_OUT, out_str.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_VIVI_Z_DESK, zd.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_VIVI_Z_NORM, zn.as_ptr());
+                    AppendMenuW(menu, MF_STRING, IDM_VIVI_Z_FRONT, zf.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
                     AppendMenuW(menu, MF_STRING,    IDM_SETTINGS, settings_str.as_ptr());
                     // Non-interactive info items: location + weather.
@@ -1759,6 +2267,31 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 }
                 DestroyWindow(info.old_hwnd);
                 0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_VIVI_IN => {
+                APP.with(|cell| {
+                    if let Some(app) = cell.borrow_mut().as_mut() {
+                        put_all_in_cage_win(app);
+                    }
+                });
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_VIVI_OUT => {
+                APP.with(|cell| {
+                    if let Some(app) = cell.borrow_mut().as_mut() {
+                        let_all_out_win(app);
+                    }
+                });
+                0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_VIVI_Z_DESK => {
+                set_vivi_z_win(ZOrder::Desktop); 0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_VIVI_Z_NORM => {
+                set_vivi_z_win(ZOrder::Normal); 0
+            }
+            WM_COMMAND if (wp & 0xFFFF) == IDM_VIVI_Z_FRONT => {
+                set_vivi_z_win(ZOrder::Front); 0
             }
             WM_COMMAND if (wp & 0xFFFF) == IDM_SETTINGS => {
                 let alt = unsafe {
@@ -1988,6 +2521,10 @@ pub fn run() {
             .expect("startup_species_ids always returns at least one character")
             .hwnd;
 
+        let mut vivi_cfg = user_cfg.vivarium.clone();
+        vivi_cfg.clamp();
+        let vivarium = spawn_vivarium_hwnd(&vivi_cfg, &si);
+
         APP.with(|cell| {
             *cell.borrow_mut() = Some(AppState {
                 chars:     initial_chars,
@@ -2016,8 +2553,15 @@ pub fn run() {
                     user_cfg.display.tick_rate_battery
                 }.max(1),
                 last_full_tick: Instant::now(),
-                mode: user_cfg.mode,
+                vivarium,
+                vivi_look: vivarium::LookLoader::load(),
             });
+        });
+
+        APP.with(|cell| {
+            if let Some(app) = cell.borrow_mut().as_mut() {
+                ensure_pond_turtle_in_cage_win(app, &si);
+            }
         });
 
         add_tray_icon(host_hwnd, hinstance);

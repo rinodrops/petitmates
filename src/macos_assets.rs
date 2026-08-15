@@ -25,6 +25,7 @@
 //! context horizontally before drawing when `SpriteRef::mirror` is `true`
 //! (see `sprite_map.rs`).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -59,6 +60,7 @@ pub struct SpriteAssets {
     images: HashMap<String, Retained<NSImage>>,
     mirrored: HashMap<String, Retained<NSImage>>,
     anchors: HashMap<String, Anchor>,
+    rgba: RefCell<HashMap<(String, bool), (u32, u32, Vec<u8>)>>,
     pub animations: HashMap<String, AnimationDef>,
     pub surfaces: SurfaceConfig,
 }
@@ -101,7 +103,14 @@ impl SpriteAssets {
             anchors.insert(name.clone(), anchor);
         }
 
-        Some(SpriteAssets { images, mirrored, anchors, animations: manifest.animations.clone(), surfaces: manifest.surfaces.clone() })
+        Some(SpriteAssets {
+            images,
+            mirrored,
+            anchors,
+            rgba: RefCell::new(HashMap::new()),
+            animations: manifest.animations.clone(),
+            surfaces: manifest.surfaces.clone(),
+        })
     }
 
     /// Returns the (optionally mirrored) NSImage for `name`.
@@ -118,11 +127,63 @@ impl SpriteAssets {
         self.anchors.get(name).copied()
     }
 
+    /// Straight RGBA pixels for compose (cached).
+    pub fn rgba(&self, name: &str, mirror: bool) -> Option<(u32, u32, Vec<u8>)> {
+        {
+            let cache = self.rgba.borrow();
+            if let Some(v) = cache.get(&(name.to_string(), mirror)) {
+                return Some(v.clone());
+            }
+        }
+        let img = self.image(name, mirror)?;
+        let decoded = nsimage_to_rgba(img)?;
+        self.rgba
+            .borrow_mut()
+            .insert((name.to_string(), mirror), decoded.clone());
+        Some(decoded)
+    }
+
     /// Returns `(width, height)` of `name` in display pixels, or `(150, 150)` as a fallback.
     pub fn size(&self, name: &str, mirror: bool) -> (f64, f64) {
         self.image(name, mirror)
             .map(|img| { let s = unsafe { img.size() }; (s.width, s.height) })
             .unwrap_or((150.0, 150.0))
+    }
+}
+
+fn nsimage_to_rgba(img: &NSImage) -> Option<(u32, u32, Vec<u8>)> {
+    unsafe {
+        let tiff: *mut AnyObject = msg_send![img, TIFFRepresentation];
+        if tiff.is_null() {
+            return None;
+        }
+        let tiff = Retained::retain(tiff)?;
+        let cls = AnyClass::get(c"NSBitmapImageRep")?;
+        let alloc: *mut AnyObject = msg_send![cls, alloc];
+        let rep: *mut AnyObject = msg_send![alloc, initWithData: &*tiff];
+        let rep = Retained::from_raw(rep)?;
+        let w: isize = msg_send![&*rep, pixelsWide];
+        let h: isize = msg_send![&*rep, pixelsHigh];
+        let spp: isize = msg_send![&*rep, samplesPerPixel];
+        if w < 1 || h < 1 || spp < 3 {
+            return None;
+        }
+        let data: *mut u8 = msg_send![&*rep, bitmapData];
+        if data.is_null() {
+            return None;
+        }
+        let n = (w * h) as usize;
+        let src = std::slice::from_raw_parts(data, n * spp as usize);
+        let mut out = vec![0u8; n * 4];
+        for i in 0..n {
+            let s = i * spp as usize;
+            let d = i * 4;
+            out[d] = src[s];
+            out[d + 1] = src[s + 1];
+            out[d + 2] = src[s + 2];
+            out[d + 3] = if spp >= 4 { src[s + 3] } else { 255 };
+        }
+        Some((w as u32, h as u32, out))
     }
 }
 
@@ -169,6 +230,9 @@ pub fn make_image_view(image: &NSImage, mt: MainThreadMarker) -> Retained<NSImag
             NSRect::new(NSPoint::ZERO, sz),
         );
         iv.setImage(Some(image));
+        // Keep per-pixel alpha (default bezel/background would look opaque).
+        let _: () = msg_send![&*iv, setImageFrameStyle: 0u64];
+        iv.setWantsLayer(true);
         iv
     }
 }
