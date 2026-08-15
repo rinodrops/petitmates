@@ -14,6 +14,21 @@ pub struct Framebuffer {
     pub h: u32,
 }
 
+/// Triangle (bilinear) resize of straight RGBA. Identity when sizes match.
+pub fn scale_rgba_triangle(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    let sw = sw.max(1);
+    let sh = sh.max(1);
+    let dw = dw.max(1);
+    let dh = dh.max(1);
+    if sw == dw && sh == dh {
+        return src.to_vec();
+    }
+    let Some(img) = image::RgbaImage::from_raw(sw, sh, src.to_vec()) else {
+        return src.to_vec();
+    };
+    image::imageops::resize(&img, dw, dh, image::imageops::FilterType::Triangle).into_raw()
+}
+
 /// Sprite blit: `rgba` is `src_w * src_h` straight RGBA; drawn into `w * h`.
 pub struct MateBlit<'a> {
     pub x: i32,
@@ -498,6 +513,13 @@ mod tests {
         let a = fb.rgba[i + 3] as u16;
         let pr = (fb.rgba[i] as u16 * a) / 255;
         (pr + dst as u16 * (255 - a) / 255) as u8
+    }
+
+    #[test]
+    fn scale_rgba_triangle_is_identity_when_same_size() {
+        let src = vec![10u8, 20, 30, 255, 40, 50, 60, 128];
+        let out = scale_rgba_triangle(&src, 2, 1, 2, 1);
+        assert_eq!(out, src);
     }
 
     #[test]

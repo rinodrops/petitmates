@@ -17,7 +17,7 @@ use objc2::{define_class, msg_send, AnyThread, ClassType, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBezierPath,
     NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSFont, NSImage, NSImageView, NSMenu,
-    NSMenuDelegate, NSMenuItem, NSPanel, NSStatusBar, NSWindowCollectionBehavior,
+    NSMenuDelegate, NSMenuItem, NSPanel, NSScreen, NSStatusBar, NSWindowCollectionBehavior,
     NSWindowStyleMask,
 };
 use objc2_foundation::{
@@ -335,14 +335,14 @@ fn make_vivarium_panel(
     cfg: &VivariumConfig,
     si: &ScreenInfo,
 ) -> (Retained<NSPanel>, Retained<NSImageView>) {
-    let (pw, ph) = cfg.pixel_size();
+    let (ptw, pth) = cfg.point_size();
     let fb = vivarium::compose(cfg, &vivarium::LookConfig::default(), &[]);
-    let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h);
+    let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h, ptw, pth);
     let iv = make_image_view(&img, mt);
     let panel = unsafe {
         let p = NSPanel::initWithContentRect_styleMask_backing_defer(
             NSPanel::alloc(mt),
-            NSRect::new(NSPoint::ZERO, NSSize::new(pw as f64, ph as f64)),
+            NSRect::new(NSPoint::ZERO, NSSize::new(ptw, pth)),
             NSWindowStyleMask::from_bits_retain(128), // Borderless | NonactivatingPanel
             NSBackingStoreType::Buffered,
             false,
@@ -365,7 +365,7 @@ fn make_vivarium_panel(
         p.setAlphaValue(1.0);
         p.setAcceptsMouseMovedEvents(true);
         p.setContentView(Some(&*iv));
-        let ox = cfg.origin_x.unwrap_or((si.width - pw as f64).max(40.0) * 0.55);
+        let ox = cfg.origin_x.unwrap_or((si.width - ptw).max(40.0) * 0.55);
         let oy = cfg.origin_y.unwrap_or(si.dock_height + 48.0);
         p.setFrameOrigin(NSPoint::new(ox, oy));
         p
@@ -390,13 +390,8 @@ fn persist_vivi_geometry(v: &mut VivariumWindow) {
 }
 
 fn clamp_all_vivi_mates(app: &mut AppState) {
-    let Some((logical_w, logical_h, ch_h, pw)) = app.vivarium.as_ref().map(|v| {
-        (
-            v.cfg.logical_w,
-            v.cfg.logical_h,
-            v.cfg.character_height as f64,
-            v.cfg.pixel_size().0,
-        )
+    let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
+        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
     }) else {
         return;
     };
@@ -406,9 +401,9 @@ fn clamp_all_vivi_mates(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let orig = ch.assets.size(&sr.name, sr.mirror);
-        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
-        let logical_sprite_w = sprite_w * (logical_w as f64 / pw.max(1) as f64);
+        let (nsw, _) = ch.assets.native_size(&sr.name);
+        let logical_sprite_w =
+            vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
         ch.vivi_x = vivarium::clamp_vivi_x(ch.vivi_x, inner, logical_sprite_w);
     }
 }
@@ -501,11 +496,11 @@ fn tick_vivi_interact(app: &mut AppState, mouse: NSPoint) {
                 v.cfg.origin_x = Some(ox);
                 v.cfg.origin_y = Some(oy);
                 v.dirty = true;
-                let (pw, ph) = v.cfg.pixel_size();
+                let (ptw, pth) = v.cfg.point_size();
                 unsafe {
                     v.panel.setFrameOrigin(NSPoint::new(ox, oy));
-                    v.panel.setContentSize(NSSize::new(pw as f64, ph as f64));
-                    let _: () = msg_send![&*v.image_view, setFrameSize: NSSize::new(pw as f64, ph as f64)];
+                    v.panel.setContentSize(NSSize::new(ptw, pth));
+                    let _: () = msg_send![&*v.image_view, setFrameSize: NSSize::new(ptw, pth)];
                 }
             }
             clamp_all_vivi_mates(app);
@@ -715,6 +710,9 @@ fn apply_vivarium_backdrop_blur(v: &mut VivariumWindow, blur: f64) {
 }
 
 fn write_premul_rgba(dst: &mut [u8], rgba: &[u8], n: usize) {
+    if rgba.len() < n * 4 || dst.len() < n * 4 {
+        return;
+    }
     for i in 0..n {
         let o = i * 4;
         let a = rgba[o + 3] as u16;
@@ -725,9 +723,9 @@ fn write_premul_rgba(dst: &mut [u8], rgba: &[u8], n: usize) {
     }
 }
 
-fn rgba_to_nsimage(rgba: &[u8], w: u32, h: u32) -> Retained<NSImage> {
+fn rgba_to_nsimage(rgba: &[u8], w: u32, h: u32, pt_w: f64, pt_h: f64) -> Retained<NSImage> {
     unsafe {
-        let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(w as f64, h as f64));
+        let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(pt_w, pt_h));
         let cls = objc2::runtime::AnyClass::get(c"NSBitmapImageRep").expect("NSBitmapImageRep");
         let alloc: *mut AnyObject = msg_send![cls, alloc];
         let cs = NSString::from_str("NSCalibratedRGBColorSpace");
@@ -751,6 +749,7 @@ fn rgba_to_nsimage(rgba: &[u8], w: u32, h: u32) -> Retained<NSImage> {
                 let n = (w as usize) * (h as usize);
                 write_premul_rgba(std::slice::from_raw_parts_mut(data, n * 4), rgba, n);
             }
+            let _: () = msg_send![&*rep, setSize: NSSize::new(pt_w, pt_h)];
             let _: () = msg_send![&*img, addRepresentation: &*rep];
         }
         img
@@ -790,6 +789,14 @@ fn present_vivarium(app: &mut AppState) {
             }
         }
     }
+    if let Some(v) = app.vivarium.as_mut() {
+        let backing = unsafe { v.panel.backingScaleFactor() }.max(1.0);
+        if (v.cfg.backing_scale - backing).abs() > 0.01 {
+            v.cfg.backing_scale = backing;
+            v.dirty = true;
+            v.layer_back = None;
+        }
+    }
     let Some(cfg) = app.vivarium.as_ref().map(|v| v.cfg.clone()) else { return };
     if !cfg.enabled {
         if let Some(v) = app.vivarium.as_mut() {
@@ -799,9 +806,9 @@ fn present_vivarium(app: &mut AppState) {
     }
     let inner = vivarium::inner_rect(cfg.logical_w, cfg.logical_h);
     let (pw, ph) = cfg.pixel_size();
+    let (ptw, pth) = cfg.point_size();
     let sx = pw as f64 / cfg.logical_w.max(1) as f64;
     let sy = ph as f64 / cfg.logical_h.max(1) as f64;
-    let ch_h = cfg.character_height as f64;
     let has_mates = app.chars.iter().any(|c| c.affiliation == Affiliation::Vivarium);
     if !has_mates {
         if let Some(vivi) = app.vivarium.as_ref() {
@@ -820,13 +827,18 @@ fn present_vivarium(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let (sw, sh) = ch.assets.size(&sr.name, sr.mirror);
-        if sh < 1.0 {
+        let (nsw, nsh) = ch.assets.native_size(&sr.name);
+        if nsh < 1.0 {
             continue;
         }
-        let scale = ch_h / sh;
-        let dw = (sw * scale).round().max(1.0) as u32;
-        let dh = (sh * scale).round().max(1.0) as u32;
+        let (dw, dh) = vivarium::mate_dest_size(
+            nsw,
+            nsh,
+            cfg.sprite_size,
+            ch.assets.canonical_width,
+            cfg.display_scale,
+            cfg.backing_scale,
+        );
         let px = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
         let py = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
         blit_key.push((px, py, dw, dh, sr.name.to_string(), sr.mirror));
@@ -849,13 +861,21 @@ fn present_vivarium(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let Some((sw, sh, rgba)) = ch.assets.rgba(&sr.name, sr.mirror) else { continue };
-        if sh < 1 {
+        let (nsw, nsh) = ch.assets.native_size(&sr.name);
+        if nsh < 1.0 {
             continue;
         }
-        let scale = ch_h / sh as f64;
-        let dw = (sw as f64 * scale).round().max(1.0) as u32;
-        let dh = (sh as f64 * scale).round().max(1.0) as u32;
+        let (dw, dh) = vivarium::mate_dest_size(
+            nsw,
+            nsh,
+            cfg.sprite_size,
+            ch.assets.canonical_width,
+            cfg.display_scale,
+            cfg.backing_scale,
+        );
+        let Some((sw, sh, rgba)) = ch.assets.cage_rgba(&sr.name, sr.mirror, dw, dh) else {
+            continue;
+        };
         let px = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
         let py = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
         mate_pix.push((px, py, dw, dh, sw, sh, rgba));
@@ -896,14 +916,14 @@ fn present_vivarium(app: &mut AppState) {
             .is_some_and(|img| update_nsimage_pixels(img, &fb.rgba, fb.w, fb.h));
         unsafe {
             if !reused {
-                let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h);
+                let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h, ptw, pth);
                 vivi.image_view.setImage(Some(&img));
                 vivi.cage_img = Some(img);
                 vivi.cage_size = (fb.w, fb.h);
             } else {
                 let _: () = msg_send![&*vivi.image_view, setNeedsDisplay: true];
             }
-            let sz = NSSize::new(pw as f64, ph as f64);
+            let sz = NSSize::new(ptw, pth);
             let cur = vivi.panel.frame().size;
             if (cur.width - sz.width).abs() > 0.5 || (cur.height - sz.height).abs() > 0.5 {
                 vivi.panel.setContentSize(sz);
@@ -1013,8 +1033,8 @@ fn let_all_out(app: &mut AppState, si: &ScreenInfo) {
 }
 
 fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
-    let Some((enabled, logical_w, logical_h, ch_h, pix_w)) = app.vivarium.as_ref().map(|v| {
-        (v.cfg.enabled, v.cfg.logical_w, v.cfg.logical_h, v.cfg.character_height as f64, v.cfg.pixel_size().0)
+    let Some((enabled, logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
+        (v.cfg.enabled, v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
     }) else {
         return;
     };
@@ -1033,9 +1053,9 @@ fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let orig = ch.assets.size(&sr.name, sr.mirror);
-        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
-        let logical_sprite_w = sprite_w * (logical_w as f64 / pix_w.max(1) as f64);
+        let (nsw, _) = ch.assets.native_size(&sr.name);
+        let logical_sprite_w =
+            vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
         let r1: f64 = rng.random();
         let r2: f64 = rng.random();
         vivarium::tick_rest(
@@ -1963,7 +1983,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let mask_drag = NSEventMask::LeftMouseDragged;
     let blk_drag = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
-            let mut b = cell.borrow_mut();
+            let Ok(mut b) = cell.try_borrow_mut() else { return };
             let Some(app) = b.as_mut() else { return };
             let mouse_ns = unsafe { NSEvent::mouseLocation() };
             handle_left_dragged(app, mouse_ns);
@@ -1978,7 +1998,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let mask_up = NSEventMask::LeftMouseUp;
     let blk_up = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
-            let mut b = cell.borrow_mut();
+            let Ok(mut b) = cell.try_borrow_mut() else { return };
             let Some(app) = b.as_mut() else { return };
             handle_left_up(app);
         });
@@ -2016,7 +2036,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let blk_local_drag = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
         let mouse_ns = unsafe { NSEvent::mouseLocation() };
         let handled = APP.with(|cell| {
-            let mut b = cell.borrow_mut();
+            let Ok(mut b) = cell.try_borrow_mut() else { return false };
             b.as_mut().is_some_and(|app| handle_left_dragged(app, mouse_ns))
         });
         if handled { std::ptr::null_mut() } else { ev.as_ptr() }
@@ -2029,7 +2049,7 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
 
     let blk_local_up = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
         let handled = APP.with(|cell| {
-            let mut b = cell.borrow_mut();
+            let Ok(mut b) = cell.try_borrow_mut() else { return false };
             b.as_mut().is_some_and(|app| handle_left_up(app))
         });
         if handled { std::ptr::null_mut() } else { ev.as_ptr() }
@@ -3125,6 +3145,9 @@ pub fn run() {
 
     let mut vivi_cfg = user_cfg.vivarium.clone();
     vivi_cfg.clamp();
+    if let Some(screen) = NSScreen::mainScreen(mt) {
+        vivi_cfg.backing_scale = screen.backingScaleFactor().max(1.0);
+    }
     let vivarium = if vivi_cfg.enabled {
         let (panel, image_view) = make_vivarium_panel(mt, &vivi_cfg, &si);
         unsafe { panel.orderFront(None) };

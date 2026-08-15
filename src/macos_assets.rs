@@ -60,7 +60,10 @@ pub struct SpriteAssets {
     images: HashMap<String, Retained<NSImage>>,
     mirrored: HashMap<String, Retained<NSImage>>,
     anchors: HashMap<String, Anchor>,
-    rgba: RefCell<HashMap<(String, bool), (u32, u32, Vec<u8>)>>,
+    native: HashMap<String, (u32, u32, Vec<u8>)>,
+    native_mirrored: HashMap<String, (u32, u32, Vec<u8>)>,
+    cage: RefCell<HashMap<(String, bool, u32, u32), (u32, u32, Vec<u8>)>>,
+    pub canonical_width: f64,
     pub animations: HashMap<String, AnimationDef>,
     pub surfaces: SurfaceConfig,
 }
@@ -79,6 +82,8 @@ impl SpriteAssets {
         let mut images = HashMap::new();
         let mut mirrored = HashMap::new();
         let mut anchors = HashMap::new();
+        let mut native = HashMap::new();
+        let mut native_mirrored = HashMap::new();
 
         for (name, info) in &manifest.sprites {
             // Reject names that could escape the sprite directory (groundwork
@@ -93,11 +98,15 @@ impl SpriteAssets {
             let orig =
                 unsafe { NSImage::initWithContentsOfFile(NSImage::alloc(), &ns_path) }?;
             let orig_h = unsafe { orig.size() }.height;
+            let (nw, nh, native_rgba) = nsimage_to_rgba(&orig)?;
+            let native_flip = mirror_rgba(&native_rgba, nw, nh);
 
             let scaled = scale_image(&orig, scale);
             let anchor = compute_anchor(info.x, info.y, orig_h, scale, &info.attachment);
             let mirror = unsafe { make_mirrored_image(&scaled) };
 
+            native.insert(name.clone(), (nw, nh, native_rgba));
+            native_mirrored.insert(name.clone(), (nw, nh, native_flip));
             mirrored.insert(name.clone(), mirror);
             images.insert(name.clone(), scaled);
             anchors.insert(name.clone(), anchor);
@@ -107,7 +116,10 @@ impl SpriteAssets {
             images,
             mirrored,
             anchors,
-            rgba: RefCell::new(HashMap::new()),
+            native,
+            native_mirrored,
+            cage: RefCell::new(HashMap::new()),
+            canonical_width: manifest.canonical_width,
             animations: manifest.animations.clone(),
             surfaces: manifest.surfaces.clone(),
         })
@@ -127,20 +139,32 @@ impl SpriteAssets {
         self.anchors.get(name).copied()
     }
 
-    /// Straight RGBA pixels for compose (cached).
-    pub fn rgba(&self, name: &str, mirror: bool) -> Option<(u32, u32, Vec<u8>)> {
+    /// Native PNG size in source pixels.
+    pub fn native_size(&self, name: &str) -> (f64, f64) {
+        self.native
+            .get(name)
+            .map(|(w, h, _)| (*w as f64, *h as f64))
+            .unwrap_or((512.0, 512.0))
+    }
+
+    /// Cage blit source: native PNG scaled once to `dw×dh` with Triangle.
+    pub fn cage_rgba(&self, name: &str, mirror: bool, dw: u32, dh: u32) -> Option<(u32, u32, Vec<u8>)> {
+        let key = (name.to_string(), mirror, dw, dh);
         {
-            let cache = self.rgba.borrow();
-            if let Some(v) = cache.get(&(name.to_string(), mirror)) {
+            let cache = self.cage.borrow();
+            if let Some(v) = cache.get(&key) {
                 return Some(v.clone());
             }
         }
-        let img = self.image(name, mirror)?;
-        let decoded = nsimage_to_rgba(img)?;
-        self.rgba
-            .borrow_mut()
-            .insert((name.to_string(), mirror), decoded.clone());
-        Some(decoded)
+        let (sw, sh, src) = if mirror {
+            self.native_mirrored.get(name)?
+        } else {
+            self.native.get(name)?
+        };
+        let scaled = crate::vivarium::scale_rgba_triangle(src, *sw, *sh, dw, dh);
+        let out = (dw, dh, scaled);
+        self.cage.borrow_mut().insert(key, out.clone());
+        Some(out)
     }
 
     /// Returns `(width, height)` of `name` in display pixels, or `(150, 150)` as a fallback.
@@ -185,6 +209,20 @@ fn nsimage_to_rgba(img: &NSImage) -> Option<(u32, u32, Vec<u8>)> {
         }
         Some((w as u32, h as u32, out))
     }
+}
+
+fn mirror_rgba(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let mut out = vec![0u8; rgba.len()];
+    for row in 0..h {
+        for col in 0..w {
+            let src = (row * w + col) * 4;
+            let dst = (row * w + (w - 1 - col)) * 4;
+            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+        }
+    }
+    out
 }
 
 // ---- Image helpers ----

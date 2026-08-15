@@ -191,13 +191,13 @@ max    = 2.0
 step   = 0.05
 
 [[tabs.fields]]
-key    = "vivarium.character_height"
-label  = { en = "Character height in cage", ja = "水槽内のキャラクターの高さ" }
+key    = "vivarium.sprite_size"
+label  = { en = "Character size", ja = "キャラクターサイズ" }
 type   = "number"
 widget = "slider"
-min    = 32
-max    = 150
-step   = 1
+min    = 80
+max    = 300
+step   = 10
 suffix = " px"
 
 [[tabs.fields]]
