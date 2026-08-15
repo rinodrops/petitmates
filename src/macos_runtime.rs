@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::process::Command;
+use std::ptr;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
@@ -34,12 +35,25 @@ use crate::physics;
 use crate::terrestrial_behavior::TerrestrialBehavior;
 use crate::sprite_map::{sprite_for_state, sprite_for_turn};
 use crate::macos_wm::{self, ScreenInfo, WinInfo};
+use crate::vivarium::{self, Affiliation, VivariumConfig, ZOrder};
 
 // ---- FFI ----
 
 #[link(name = "Foundation", kind = "framework")]
 unsafe extern "C" {
     static NSRunLoopCommonModes: *const std::ffi::c_void;
+}
+
+// Private SkyLight symbols, resolved through the CoreGraphics stub (same path
+// as iTerm2 / winit). Backdrop blur; no Screen Recording.
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGSMainConnectionID() -> *mut AnyObject;
+    fn CGSSetWindowBackgroundBlurRadius(
+        connection_id: *mut AnyObject,
+        window_id: isize,
+        radius: i64,
+    ) -> i32;
 }
 
 // ---- Surface helpers ----
@@ -179,6 +193,39 @@ struct CharState {
     last_rendered: Option<RenderedState>,
     /// Present when the character is in `PhysicsWorld::Water`; `None` on land.
     aquatic: Option<crate::behavior::AquaticState>,
+    #[allow(dead_code)]
+    species: &'static str,
+    affiliation: Affiliation,
+    /// Horizontal position in Vivarium logical pixels (foot center).
+    vivi_x: f64,
+}
+
+struct VivariumWindow {
+    panel: Retained<NSPanel>,
+    image_view: Retained<NSImageView>,
+    cfg: VivariumConfig,
+    dirty: bool,
+    /// Reused so we do not alloc/leak a bitmap every tick.
+    cage_img: Option<Retained<NSImage>>,
+    cage_size: (u32, u32),
+    layer_back: Option<vivarium::Framebuffer>,
+    layer_glass: Option<vivarium::Framebuffer>,
+    layers_look: Option<vivarium::LookConfig>,
+    last_blit: Vec<(i32, i32, u32, u32, String, bool)>,
+    /// Last CGS backdrop-blur radius actually applied (`None` = not yet).
+    backdrop_blur: Option<i64>,
+    interact: Option<ViviInteract>,
+}
+
+#[derive(Clone, Copy)]
+enum ViviInteract {
+    Move { grab: (f64, f64) },
+    Resize {
+        edge: u8,
+        start_mouse: (f64, f64),
+        orig_logical: (u32, u32),
+        orig_origin: (f64, f64),
+    },
 }
 
 // ---- App-wide state (singletons) ----
@@ -227,8 +274,8 @@ struct AppState {
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
     last_full_tick: Instant,
-    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
-    mode: crate::user_config::Mode,
+    vivarium: Option<VivariumWindow>,
+    vivi_look: vivarium::LookLoader,
 }
 
 thread_local! {
@@ -264,7 +311,9 @@ fn make_char_panel(
             NSBackingStoreType::Buffered,
             false,
         );
-        p.setBackgroundColor(Some(&NSColor::clearColor()));
+        // Tiny alpha so WindowServer hit-tests the full frame when we accept
+        // mouse events. Fully clear pixels otherwise fall through to Finder.
+        p.setBackgroundColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.01)));
         p.setOpaque(false);
         p.setHasShadow(false);
         p.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
@@ -273,11 +322,734 @@ fn make_char_panel(
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
         p.setIgnoresMouseEvents(true);
+        p.setAcceptsMouseMovedEvents(true);
         p.setAlphaValue(1.0);
         p.setContentView(Some(&*iv));
         p
     };
     (panel, iv)
+}
+
+fn make_vivarium_panel(
+    mt: MainThreadMarker,
+    cfg: &VivariumConfig,
+    si: &ScreenInfo,
+) -> (Retained<NSPanel>, Retained<NSImageView>) {
+    let (pw, ph) = cfg.pixel_size();
+    let fb = vivarium::compose(cfg, &vivarium::LookConfig::default(), &[]);
+    let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h);
+    let iv = make_image_view(&img, mt);
+    let panel = unsafe {
+        let p = NSPanel::initWithContentRect_styleMask_backing_defer(
+            NSPanel::alloc(mt),
+            NSRect::new(NSPoint::ZERO, NSSize::new(pw as f64, ph as f64)),
+            NSWindowStyleMask::from_bits_retain(128), // Borderless | NonactivatingPanel
+            NSBackingStoreType::Buffered,
+            false,
+        );
+        // Tiny alpha so WindowServer hit-tests the full frame when we accept
+        // mouse events. Fully clear pixels otherwise fall through to Finder.
+        p.setBackgroundColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.01)));
+        p.setOpaque(false);
+        // Shadow forces an opaque window backing and can hide the accessory
+        // status item; character panels stay shadowless for the same reason.
+        p.setHasShadow(false);
+        p.setLevel(vivarium::ns_window_level(cfg.z_order));
+        p.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::IgnoresCycle,
+        );
+        p.setIgnoresMouseEvents(true);
+        p.setHidesOnDeactivate(false);
+        p.setAlphaValue(1.0);
+        p.setAcceptsMouseMovedEvents(true);
+        p.setContentView(Some(&*iv));
+        let ox = cfg.origin_x.unwrap_or((si.width - pw as f64).max(40.0) * 0.55);
+        let oy = cfg.origin_y.unwrap_or(si.dock_height + 48.0);
+        p.setFrameOrigin(NSPoint::new(ox, oy));
+        p
+    };
+    (panel, iv)
+}
+
+fn apply_vivarium_z(panel: &NSPanel, z: ZOrder) {
+    unsafe { panel.setLevel(vivarium::ns_window_level(z)); }
+}
+
+fn persist_vivi_geometry(v: &mut VivariumWindow) {
+    let frame = unsafe { v.panel.frame() };
+    v.cfg.origin_x = Some(frame.origin.x);
+    v.cfg.origin_y = Some(frame.origin.y);
+    crate::user_config::write_vivarium_geometry(
+        frame.origin.x,
+        frame.origin.y,
+        v.cfg.logical_w,
+        v.cfg.logical_h,
+    );
+}
+
+fn clamp_all_vivi_mates(app: &mut AppState) {
+    let Some((logical_w, logical_h, ch_h, pw)) = app.vivarium.as_ref().map(|v| {
+        (
+            v.cfg.logical_w,
+            v.cfg.logical_h,
+            v.cfg.character_height as f64,
+            v.cfg.pixel_size().0,
+        )
+    }) else {
+        return;
+    };
+    let inner = vivarium::inner_rect(logical_w, logical_h);
+    for ch in &mut app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let orig = ch.assets.size(&sr.name, sr.mirror);
+        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
+        let logical_sprite_w = sprite_w * (logical_w as f64 / pw.max(1) as f64);
+        ch.vivi_x = vivarium::clamp_vivi_x(ch.vivi_x, inner, logical_sprite_w);
+    }
+}
+
+fn try_begin_vivi_interact(app: &mut AppState, mouse: NSPoint, option: bool) -> bool {
+    let (enabled, frame, orig_logical) = {
+        let Some(v) = app.vivarium.as_ref() else { return false };
+        (v.cfg.enabled, unsafe { v.panel.frame() }, (v.cfg.logical_w, v.cfg.logical_h))
+    };
+    if !enabled {
+        return false;
+    }
+    if mouse.x < frame.origin.x
+        || mouse.x >= frame.origin.x + frame.size.width
+        || mouse.y < frame.origin.y
+        || mouse.y >= frame.origin.y + frame.size.height
+    {
+        return false;
+    }
+    let lx = mouse.x - frame.origin.x;
+    let ly = mouse.y - frame.origin.y;
+    let edge = if option {
+        vivarium::hit_resize_edges(lx, ly, frame.size.width, frame.size.height, true)
+    } else {
+        0
+    };
+    let interact = if edge != 0 {
+        ViviInteract::Resize {
+            edge,
+            start_mouse: (mouse.x, mouse.y),
+            orig_logical,
+            orig_origin: (frame.origin.x, frame.origin.y),
+        }
+    } else {
+        ViviInteract::Move {
+            grab: (mouse.x - frame.origin.x, mouse.y - frame.origin.y),
+        }
+    };
+    if let Some(v) = app.vivarium.as_mut() {
+        set_snap_highlight(&v.image_view, true);
+        v.interact = Some(interact);
+    }
+    true
+}
+
+fn tick_vivi_interact(app: &mut AppState, mouse: NSPoint) {
+    let Some(kind) = app.vivarium.as_ref().and_then(|v| v.interact) else {
+        return;
+    };
+    match kind {
+        ViviInteract::Move { grab } => {
+            if let Some(v) = app.vivarium.as_mut() {
+                unsafe {
+                    v.panel.setFrameOrigin(NSPoint::new(mouse.x - grab.0, mouse.y - grab.1));
+                }
+            }
+        }
+        ViviInteract::Resize {
+            edge,
+            start_mouse,
+            orig_logical,
+            orig_origin,
+        } => {
+            let (scale, grid, cur) = {
+                let Some(v) = app.vivarium.as_ref() else { return };
+                (
+                    v.cfg.display_scale,
+                    v.cfg.grid,
+                    (v.cfg.logical_w, v.cfg.logical_h, v.cfg.origin_x, v.cfg.origin_y),
+                )
+            };
+            let (nw, nh, ox, oy) = vivarium::resize_from_drag(
+                edge,
+                mouse.x - start_mouse.0,
+                mouse.y - start_mouse.1,
+                orig_logical.0,
+                orig_logical.1,
+                orig_origin.0,
+                orig_origin.1,
+                scale,
+                true,
+                grid,
+            );
+            if nw == cur.0 && nh == cur.1 && cur.2 == Some(ox) && cur.3 == Some(oy) {
+                return;
+            }
+            if let Some(v) = app.vivarium.as_mut() {
+                v.cfg.logical_w = nw;
+                v.cfg.logical_h = nh;
+                v.cfg.origin_x = Some(ox);
+                v.cfg.origin_y = Some(oy);
+                v.dirty = true;
+                let (pw, ph) = v.cfg.pixel_size();
+                unsafe {
+                    v.panel.setFrameOrigin(NSPoint::new(ox, oy));
+                    v.panel.setContentSize(NSSize::new(pw as f64, ph as f64));
+                    let _: () = msg_send![&*v.image_view, setFrameSize: NSSize::new(pw as f64, ph as f64)];
+                }
+            }
+            clamp_all_vivi_mates(app);
+        }
+    }
+}
+
+fn end_vivi_interact(app: &mut AppState) {
+    let Some(v) = app.vivarium.as_mut() else { return };
+    if v.interact.is_none() {
+        return;
+    }
+    v.interact = None;
+    set_snap_highlight(&v.image_view, false);
+    persist_vivi_geometry(v);
+}
+
+fn point_in_ns_rect(frame: NSRect, p: NSPoint) -> bool {
+    p.x >= frame.origin.x
+        && p.x < frame.origin.x + frame.size.width
+        && p.y >= frame.origin.y
+        && p.y < frame.origin.y + frame.size.height
+}
+
+fn handle_cmd_left_down(app: &mut AppState, mouse: NSPoint, option: bool) -> bool {
+    if app.vivarium.as_ref().is_some_and(|v| v.interact.is_some())
+        || app.chars.iter().any(|c| c.drag_offset.is_some())
+    {
+        return true;
+    }
+    for ch in &mut app.chars {
+        if ch.affiliation == Affiliation::Vivarium {
+            continue;
+        }
+        let frame = unsafe { ch.panel.frame() };
+        if point_in_ns_rect(frame, mouse) {
+            let offset = (mouse.x - frame.origin.x, mouse.y - frame.origin.y);
+            ch.drag_offset = Some(offset);
+            ch.anim_state = State::Grabbed;
+            ch.surface = Surface::Airborne;
+            update_cmd_hit_participation(app);
+            return true;
+        }
+    }
+    let started = try_begin_vivi_interact(app, mouse, option);
+    if started {
+        update_cmd_hit_participation(app);
+    }
+    started
+}
+
+/// While ⌘ is held over a mate or the cage (or a ⌘-drag is in progress),
+/// accept mouse events so Finder / the desktop do not see the drag. Without
+/// ⌘, panels stay click-through.
+fn update_cmd_hit_participation(app: &mut AppState) {
+    let flags = unsafe { NSEvent::modifierFlags_class() };
+    let command = flags.contains(NSEventModifierFlags::Command);
+    let mouse = unsafe { NSEvent::mouseLocation() };
+    let mut over_desktop_char = false;
+    for ch in &mut app.chars {
+        if ch.affiliation == Affiliation::Vivarium {
+            continue;
+        }
+        let frame = unsafe { ch.panel.frame() };
+        let over = point_in_ns_rect(frame, mouse);
+        if over {
+            over_desktop_char = true;
+        }
+        let accept = ch.drag_offset.is_some() || (command && over);
+        unsafe { ch.panel.setIgnoresMouseEvents(!accept) };
+    }
+    let Some(v) = app.vivarium.as_mut() else { return };
+    if !v.cfg.enabled {
+        unsafe { v.panel.setIgnoresMouseEvents(true) };
+        return;
+    }
+    let over_cage = point_in_ns_rect(unsafe { v.panel.frame() }, mouse);
+    let accept = v.interact.is_some() || (command && over_cage && !over_desktop_char);
+    unsafe { v.panel.setIgnoresMouseEvents(!accept) };
+}
+
+fn handle_left_dragged(app: &mut AppState, mouse: NSPoint) -> bool {
+    if app.vivarium.as_ref().is_some_and(|v| v.interact.is_some()) {
+        tick_vivi_interact(app, mouse);
+        update_cmd_hit_participation(app);
+        return true;
+    }
+    let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some()) else {
+        return false;
+    };
+    let off = app.chars[drag_idx].drag_offset.unwrap();
+    let new_ns_x = mouse.x - off.0;
+    let new_ns_y = mouse.y - off.1;
+    unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
+    let sz = unsafe { app.chars[drag_idx].panel.frame().size };
+    let si = macos_wm::screen_info_raw_full();
+    app.chars[drag_idx].char_pos = (new_ns_x, si.height - new_ns_y - sz.height);
+    let foot_x = new_ns_x + sz.width / 2.0;
+    let foot_y = si.height - new_ns_y;
+    let wins: &[WinInfo] = &app.win_cache.wins;
+    let in_snap = macos_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some();
+    set_snap_highlight(&app.chars[drag_idx].image_view, in_snap);
+    update_cmd_hit_participation(app);
+    true
+}
+
+fn handle_left_up(app: &mut AppState) -> bool {
+    if app.vivarium.as_ref().is_some_and(|v| v.interact.is_some()) {
+        end_vivi_interact(app);
+        update_cmd_hit_participation(app);
+        return true;
+    }
+    let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some()) else {
+        return false;
+    };
+    app.chars[drag_idx].drag_offset = None;
+    set_snap_highlight(&app.chars[drag_idx].image_view, false);
+
+    let si = macos_wm::screen_info_raw_full();
+    let wins = macos_wm::list_windows(&si);
+    let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
+    let ch = &mut app.chars[drag_idx];
+
+    let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+    let (fw, fh) = ch.assets.image(&sr.name, sr.mirror)
+        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+        .unwrap_or((150.0, 150.0));
+    let foot_x = ch.char_pos.0 + fw / 2.0;
+    let foot_y = ch.char_pos.1 + fh;
+
+    let new_surface = macos_wm::find_drop_surface(foot_x, foot_y, &wins, &si);
+    match new_surface {
+        Some(surf) => {
+            let ctx = BehaviorContext {
+                state: &ch.anim_state,
+                surface: &surf,
+                elapsed_secs: 0.0,
+                config: &cfg,
+                rng01: 0.0,
+                surface_progress: 0.5,
+                facing: ch.facing,
+                at_edge: false,
+                surface_edge_info: SurfaceEdge::None,
+                jump_target: None,
+                attract_target: None,
+            };
+            let new_anim = ch.behavior.on_landed(&ctx);
+            let stand_anchor = ch.assets.anchor("s-stand")
+                .unwrap_or(Anchor { x: 0.0, y: 0.0 });
+            let stand_h = ch.assets.image("s-stand", false)
+                .map(|img| unsafe { img.size() }.height)
+                .unwrap_or(fh);
+            let snap_y = match &surf {
+                Surface::WindowTop { win_id, .. } =>
+                    macos_wm::find_win(*win_id, &wins).map(|w| w.y),
+                Surface::Desktop { .. } => {
+                    let si2 = macos_wm::screen_info_raw_full();
+                    Some(si2.floor_y())
+                }
+                _ => None,
+            };
+            if let Some(surface_y) = snap_y {
+                ch.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
+            }
+            ch.surface = surf;
+            if let Some(react_anim) = ch.behavior_engine.on_interaction(
+                crate::anim_trigger::ReactionTrigger::Dropped,
+            ) {
+                ch.anim_state = crate::behavior::State::OneShot {
+                    animation: react_anim,
+                    frame: 0,
+                    frame_elapsed: 0.0,
+                    done: false,
+                    return_to: Box::new(new_anim),
+                };
+            } else {
+                ch.anim_state = new_anim;
+            }
+        }
+        None => {
+            ch.surface = Surface::Airborne;
+            ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+        }
+    }
+    update_cmd_hit_participation(app);
+    true
+}
+
+/// iTerm2-style window-server blur. `radius` is points; 0 clears it.
+fn apply_vivarium_backdrop_blur(v: &mut VivariumWindow, blur: f64) {
+    let radius = blur.round().clamp(0.0, 100.0) as i64;
+    if v.backdrop_blur == Some(radius) {
+        return;
+    }
+    unsafe {
+        let wid: isize = msg_send![&*v.panel, windowNumber];
+        if wid == 0 {
+            return;
+        }
+        let conn = CGSMainConnectionID();
+        if conn.is_null() {
+            return;
+        }
+        let _ = CGSSetWindowBackgroundBlurRadius(conn, wid, radius);
+    }
+    v.backdrop_blur = Some(radius);
+}
+
+fn write_premul_rgba(dst: &mut [u8], rgba: &[u8], n: usize) {
+    for i in 0..n {
+        let o = i * 4;
+        let a = rgba[o + 3] as u16;
+        dst[o] = ((rgba[o] as u16 * a) / 255) as u8;
+        dst[o + 1] = ((rgba[o + 1] as u16 * a) / 255) as u8;
+        dst[o + 2] = ((rgba[o + 2] as u16 * a) / 255) as u8;
+        dst[o + 3] = rgba[o + 3];
+    }
+}
+
+fn rgba_to_nsimage(rgba: &[u8], w: u32, h: u32) -> Retained<NSImage> {
+    unsafe {
+        let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(w as f64, h as f64));
+        let cls = objc2::runtime::AnyClass::get(c"NSBitmapImageRep").expect("NSBitmapImageRep");
+        let alloc: *mut AnyObject = msg_send![cls, alloc];
+        let cs = NSString::from_str("NSCalibratedRGBColorSpace");
+        let planes: *mut *mut u8 = std::ptr::null_mut();
+        let rep: *mut AnyObject = msg_send![alloc,
+            initWithBitmapDataPlanes: planes
+            pixelsWide: w as isize
+            pixelsHigh: h as isize
+            bitsPerSample: 8isize
+            samplesPerPixel: 4isize
+            hasAlpha: true
+            isPlanar: false
+            colorSpaceName: &*cs
+            bytesPerRow: (w * 4) as isize
+            bitsPerPixel: 32isize
+        ];
+        // alloc/init is +1; wrap so addRepresentation's retain is the only leftover.
+        if let Some(rep) = Retained::from_raw(rep) {
+            let data: *mut u8 = msg_send![&*rep, bitmapData];
+            if !data.is_null() {
+                let n = (w as usize) * (h as usize);
+                write_premul_rgba(std::slice::from_raw_parts_mut(data, n * 4), rgba, n);
+            }
+            let _: () = msg_send![&*img, addRepresentation: &*rep];
+        }
+        img
+    }
+}
+
+fn update_nsimage_pixels(img: &NSImage, rgba: &[u8], w: u32, h: u32) -> bool {
+    unsafe {
+        let reps: *mut AnyObject = msg_send![img, representations];
+        if reps.is_null() {
+            return false;
+        }
+        let rep: *mut AnyObject = msg_send![reps, firstObject];
+        if rep.is_null() {
+            return false;
+        }
+        let rw: isize = msg_send![rep, pixelsWide];
+        let rh: isize = msg_send![rep, pixelsHigh];
+        if rw != w as isize || rh != h as isize {
+            return false;
+        }
+        let data: *mut u8 = msg_send![rep, bitmapData];
+        if data.is_null() {
+            return false;
+        }
+        let n = (w as usize) * (h as usize);
+        write_premul_rgba(std::slice::from_raw_parts_mut(data, n * 4), rgba, n);
+        true
+    }
+}
+
+fn present_vivarium(app: &mut AppState) {
+    if app.vivi_look.reload_if_changed() {
+        if let Some(v) = app.vivarium.as_mut() {
+            if !v.layers_look.as_ref().is_some_and(|old| old.raster_eq(&app.vivi_look.current)) {
+                v.dirty = true;
+            }
+        }
+    }
+    let Some(cfg) = app.vivarium.as_ref().map(|v| v.cfg.clone()) else { return };
+    if !cfg.enabled {
+        if let Some(v) = app.vivarium.as_mut() {
+            unsafe { v.panel.orderOut(None) };
+        }
+        return;
+    }
+    let inner = vivarium::inner_rect(cfg.logical_w, cfg.logical_h);
+    let (pw, ph) = cfg.pixel_size();
+    let sx = pw as f64 / cfg.logical_w.max(1) as f64;
+    let sy = ph as f64 / cfg.logical_h.max(1) as f64;
+    let ch_h = cfg.character_height as f64;
+    let has_mates = app.chars.iter().any(|c| c.affiliation == Affiliation::Vivarium);
+    if !has_mates {
+        if let Some(vivi) = app.vivarium.as_ref() {
+            if !vivi.dirty {
+                return;
+            }
+        }
+    }
+    let look = app.vivi_look.current.clone();
+    if let Some(v) = app.vivarium.as_mut() {
+        apply_vivarium_backdrop_blur(v, look.blur);
+    }
+    let mut blit_key = Vec::new();
+    for ch in &app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let (sw, sh) = ch.assets.size(&sr.name, sr.mirror);
+        if sh < 1.0 {
+            continue;
+        }
+        let scale = ch_h / sh;
+        let dw = (sw * scale).round().max(1.0) as u32;
+        let dh = (sh * scale).round().max(1.0) as u32;
+        let px = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
+        let py = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
+        blit_key.push((px, py, dw, dh, sr.name.to_string(), sr.mirror));
+    }
+    let layers_ok = app.vivarium.as_ref().is_some_and(|v| {
+        v.layer_back.is_some()
+            && v.cage_size == (pw, ph)
+            && v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
+    });
+    let skip = !app.vivarium.as_ref().map(|v| v.dirty).unwrap_or(true)
+        && layers_ok
+        && app.vivarium.as_ref().map(|v| v.last_blit == blit_key).unwrap_or(false);
+    if skip {
+        return;
+    }
+
+    let mut mate_pix = Vec::new();
+    for ch in &app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let Some((sw, sh, rgba)) = ch.assets.rgba(&sr.name, sr.mirror) else { continue };
+        if sh < 1 {
+            continue;
+        }
+        let scale = ch_h / sh as f64;
+        let dw = (sw as f64 * scale).round().max(1.0) as u32;
+        let dh = (sh as f64 * scale).round().max(1.0) as u32;
+        let px = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
+        let py = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
+        mate_pix.push((px, py, dw, dh, sw, sh, rgba));
+    }
+    let mates: Vec<vivarium::MateBlit<'_>> = mate_pix
+        .iter()
+        .map(|(x, y, w, h, sw, sh, rgba)| vivarium::MateBlit {
+            x: *x,
+            y: *y,
+            w: *w,
+            h: *h,
+            src_w: *sw,
+            src_h: *sh,
+            rgba,
+        })
+        .collect();
+    if let Some(vivi) = app.vivarium.as_mut() {
+        let rebuild = vivi.layer_back.is_none()
+            || vivi.cage_size != (pw, ph)
+            || !vivi.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look));
+        if rebuild {
+            let (back, glass) = vivarium::static_layers(&cfg, &look);
+            vivi.layer_back = Some(back);
+            vivi.layer_glass = Some(glass);
+            vivi.layers_look = Some(look.clone());
+        }
+        let fb = vivarium::composite_layers(
+            &cfg,
+            &look,
+            vivi.layer_back.as_ref().unwrap(),
+            vivi.layer_glass.as_ref().unwrap(),
+            &mates,
+        );
+        let reused = vivi
+            .cage_img
+            .as_ref()
+            .filter(|_| vivi.cage_size == (fb.w, fb.h))
+            .is_some_and(|img| update_nsimage_pixels(img, &fb.rgba, fb.w, fb.h));
+        unsafe {
+            if !reused {
+                let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h);
+                vivi.image_view.setImage(Some(&img));
+                vivi.cage_img = Some(img);
+                vivi.cage_size = (fb.w, fb.h);
+            } else {
+                let _: () = msg_send![&*vivi.image_view, setNeedsDisplay: true];
+            }
+            let sz = NSSize::new(pw as f64, ph as f64);
+            let cur = vivi.panel.frame().size;
+            if (cur.width - sz.width).abs() > 0.5 || (cur.height - sz.height).abs() > 0.5 {
+                vivi.panel.setContentSize(sz);
+                let _: () = msg_send![&*vivi.image_view, setFrameSize: sz];
+            }
+            if vivi.dirty {
+                apply_vivarium_z(&vivi.panel, cfg.z_order);
+            }
+        }
+        vivi.last_blit = blit_key;
+        vivi.dirty = false;
+    }
+}
+
+fn put_one_in_cage(app: &mut AppState, idx: usize) {
+    let Some(vivi) = app.vivarium.as_ref() else { return };
+    let inner = vivarium::inner_rect(vivi.cfg.logical_w, vivi.cfg.logical_h);
+    let Some(ch) = app.chars.get_mut(idx) else { return };
+    ch.affiliation = Affiliation::Vivarium;
+    ch.aquatic = None;
+    ch.vivi_x = inner.x as f64 + inner.w as f64 * 0.5;
+    ch.anim_state = State::LieIdle {
+        head_front: false,
+        elapsed: 0.0,
+        duration: 10.0,
+        head_timer: 0.0,
+    };
+    unsafe {
+        ch.panel.orderOut(None);
+        if let Some(bp) = &ch.bubble_panel {
+            bp.orderOut(None);
+        }
+    }
+    ch.bubble_state = None;
+    if let Some(v) = app.vivarium.as_mut() {
+        v.dirty = true;
+    }
+}
+
+fn ensure_pond_turtle_in_cage(app: &mut AppState, mt: MainThreadMarker, si: &ScreenInfo) {
+    if app.vivarium.is_none() {
+        return;
+    }
+    if !app.chars.iter().any(|c| c.species == "pond_turtle") {
+        let ch = spawn_char(
+            Rc::clone(&app.pt_assets),
+            app.pt_config.clone(),
+            si,
+            mt,
+            false,
+            "pond_turtle",
+        );
+        app.chars.push(ch);
+    }
+    if let Some(i) = app.chars.iter().position(|c| c.species == "pond_turtle") {
+        put_one_in_cage(app, i);
+    }
+}
+
+fn put_all_in_cage(app: &mut AppState) {
+    let Some(vivi) = app.vivarium.as_ref() else { return };
+    let inner = vivarium::inner_rect(vivi.cfg.logical_w, vivi.cfg.logical_h);
+    let n = app.chars.len().max(1) as f64;
+    for (i, ch) in app.chars.iter_mut().enumerate() {
+        ch.affiliation = Affiliation::Vivarium;
+        ch.aquatic = None;
+        ch.vivi_x = inner.x as f64 + inner.w as f64 * (i as f64 + 0.5) / n;
+        ch.anim_state = State::LieIdle {
+            head_front: false,
+            elapsed: 0.0,
+            duration: 10.0,
+            head_timer: 0.0,
+        };
+        unsafe {
+            ch.panel.orderOut(None);
+            if let Some(bp) = &ch.bubble_panel {
+                bp.orderOut(None);
+            }
+        }
+        ch.bubble_state = None;
+    }
+    if let Some(v) = app.vivarium.as_mut() {
+        v.dirty = true;
+    }
+}
+
+fn let_all_out(app: &mut AppState, si: &ScreenInfo) {
+    let drop = app.vivarium.as_ref().map(|v| unsafe { v.panel.frame() });
+    for ch in &mut app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        ch.affiliation = Affiliation::Desktop;
+        ch.aquatic = None;
+        ch.surface = Surface::Airborne;
+        ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+        if let Some(frame) = drop {
+            let cx = frame.origin.x + frame.size.width * 0.5 - 40.0;
+            let cy = si.height - (frame.origin.y + frame.size.height);
+            ch.char_pos = (cx, cy);
+        }
+        unsafe { ch.panel.orderFront(None) };
+    }
+    if let Some(v) = app.vivarium.as_mut() {
+        v.dirty = true;
+    }
+}
+
+fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
+    let Some((enabled, logical_w, logical_h, ch_h, pix_w)) = app.vivarium.as_ref().map(|v| {
+        (v.cfg.enabled, v.cfg.logical_w, v.cfg.logical_h, v.cfg.character_height as f64, v.cfg.pixel_size().0)
+    }) else {
+        return;
+    };
+    if !enabled {
+        return;
+    }
+    let inner = vivarium::inner_rect(logical_w, logical_h);
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1),
+    );
+    for ch in &mut app.chars {
+        if ch.affiliation != Affiliation::Vivarium {
+            continue;
+        }
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let orig = ch.assets.size(&sr.name, sr.mirror);
+        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
+        let logical_sprite_w = sprite_w * (logical_w as f64 / pix_w.max(1) as f64);
+        let r1: f64 = rng.random();
+        let r2: f64 = rng.random();
+        vivarium::tick_rest(
+            &mut ch.anim_state,
+            &mut ch.facing,
+            &mut ch.vivi_x,
+            dt,
+            inner,
+            logical_sprite_w,
+            r1,
+            r2,
+        );
+        let _ = crate::engine::advance_anim(&mut ch.anim_state, dt, &ch.effective_config, &ch.assets.animations);
+    }
 }
 
 /// Update the sprite shown in the character's reusable NSImageView.
@@ -550,6 +1322,15 @@ fn status_location_label(
     format!("\u{1f4cd} {}", body)  // 📍
 }
 
+fn bundled_app() -> bool {
+    unsafe {
+        NSBundle::mainBundle()
+            .bundleIdentifier()
+            .map(|id| id.to_string() == "jp.emotiongraphics.petitmates")
+            .unwrap_or(false)
+    }
+}
+
 fn make_status_item(
     handler: &MenuDelegate,
     mt: MainThreadMarker,
@@ -560,10 +1341,16 @@ fn make_status_item(
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(-2.0); // NSSquareStatusItemLength
-        // Fix autosave name to a stable string so Control Center does not
-        // create a new entry on every launch (PID-based auto-generated names).
-        let autosave_name = NSString::from_str("PetitMates");
-        let (): () = objc2::msg_send![&*item, setAutosaveName: &*autosave_name];
+        // Show first. `setAutosaveName` restores Control Center visibility and
+        // can hide the item (and make `button` nil) before we set the icon.
+        // Unpackaged `cargo run` has no bundle id — skip autosave so it does
+        // not share the Release app's Control Center slot.
+        let (): () = msg_send![&*item, setVisible: true];
+        if bundled_app() {
+            let autosave_name = NSString::from_str("PetitMates");
+            let (): () = objc2::msg_send![&*item, setAutosaveName: &*autosave_name];
+            let (): () = msg_send![&*item, setVisible: true];
+        }
         if let Some(btn) = item.button(mt) {
             if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str("lizard.fill"),
@@ -627,6 +1414,51 @@ fn make_status_item(
         let (): () = unsafe { objc2::msg_send![&*settings, setTarget: handler] };
         let (): () = unsafe { objc2::msg_send![&*settings, setTag: 2_isize] };
         menu.addItem(&settings);
+
+        menu.addItem(&NSMenuItem::separatorItem(mt));
+
+        let put_in = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "水槽に入れる" } else { "Put in Vivarium" }),
+            Some(objc2::sel!(putInVivarium:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*put_in, setTarget: handler] };
+        menu.addItem(&put_in);
+
+        let let_out = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "デスクトップに出す" } else { "Let out to Desktop" }),
+            Some(objc2::sel!(letOutVivarium:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*let_out, setTarget: handler] };
+        menu.addItem(&let_out);
+
+        let z_desk = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "水槽: ウィンドウの後ろ" } else { "Vivarium: Behind Windows" }),
+            Some(objc2::sel!(viviZDesktop:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*z_desk, setTarget: handler] };
+        menu.addItem(&z_desk);
+        let z_norm = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "水槽: 通常" } else { "Vivarium: Normal" }),
+            Some(objc2::sel!(viviZNormal:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*z_norm, setTarget: handler] };
+        menu.addItem(&z_norm);
+        let z_front = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mt),
+            &NSString::from_str(if ja { "水槽: 最前面" } else { "Vivarium: Front" }),
+            Some(objc2::sel!(viviZFront:)),
+            &NSString::from_str(""),
+        );
+        let (): () = unsafe { objc2::msg_send![&*z_front, setTarget: handler] };
+        menu.addItem(&z_front);
 
         menu.addItem(&NSMenuItem::separatorItem(mt));
 
@@ -769,6 +1601,13 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_screen_pos: (start_cx, start_cy),
         last_rendered: None,
         aquatic: None,
+        species: match char_name {
+            "pond_turtle" => "pond_turtle",
+            "leopard_gecko" => "leopard_gecko",
+            _ => "bearded_dragon",
+        },
+        affiliation: Affiliation::Desktop,
+        vivi_x: 0.0,
     }
 }
 
@@ -911,6 +1750,41 @@ define_class!(
             }
         }
 
+        #[unsafe(method(putInVivarium:))]
+        fn put_in_vivarium(&self, _sender: &AnyObject) {
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                put_all_in_cage(app);
+            });
+        }
+
+        #[unsafe(method(letOutVivarium:))]
+        fn let_out_vivarium(&self, _sender: &AnyObject) {
+            let mt = self.mtm();
+            APP.with(|cell| {
+                let mut b = cell.borrow_mut();
+                let Some(app) = b.as_mut() else { return };
+                let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
+                    width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
+                });
+                let_all_out(app, &si);
+            });
+        }
+
+        #[unsafe(method(viviZDesktop:))]
+        fn vivi_z_desktop(&self, _sender: &AnyObject) {
+            set_vivi_z(ZOrder::Desktop);
+        }
+        #[unsafe(method(viviZNormal:))]
+        fn vivi_z_normal(&self, _sender: &AnyObject) {
+            set_vivi_z(ZOrder::Normal);
+        }
+        #[unsafe(method(viviZFront:))]
+        fn vivi_z_front(&self, _sender: &AnyObject) {
+            set_vivi_z(ZOrder::Front);
+        }
+
         /// Remove the most recently added character (minimum 1 remains).
         #[unsafe(method(removeCharacter:))]
         fn remove_character(&self, _sender: &AnyObject) {
@@ -990,6 +1864,18 @@ impl MenuDelegate {
     }
 }
 
+fn set_vivi_z(z: ZOrder) {
+    APP.with(|cell| {
+        let mut b = cell.borrow_mut();
+        let Some(app) = b.as_mut() else { return };
+        if let Some(v) = app.vivarium.as_mut() {
+            v.cfg.z_order = z;
+            apply_vivarium_z(&v.panel, z);
+            crate::user_config::write_vivarium_z_order(z);
+        }
+    });
+}
+
 // ---- Hover alpha ----
 
 fn update_hover_alpha(panel: &NSPanel, config: &crate::config::Config, dragging: bool) {
@@ -1045,12 +1931,14 @@ fn set_snap_highlight(image_view: &NSImageView, active: bool) {
 
 // ---- ⌘+drag event monitors ----
 
-/// Register global event monitors for ⌘+drag.
+/// Register global + local monitors for ⌘-drag and hit-testing.
 /// Returns the monitor handles that must be kept alive.
 fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let mut monitors = Vec::new();
 
-    // LeftMouseDown — decide whether to start a drag.
+    // Global monitors still run when the panel is click-through (⌘ not yet
+    // applied, or the pointer raced ahead of FlagsChanged). Once a panel
+    // accepts events, only local monitors see the same buttons.
     let mask_down = NSEventMask::LeftMouseDown;
     let blk_down = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| {
         let ev = unsafe { ev.as_ref() };
@@ -1058,25 +1946,12 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         if !flags.contains(NSEventModifierFlags::Command) {
             return;
         }
+        let option = flags.contains(NSEventModifierFlags::Option);
         let mouse_ns = unsafe { NSEvent::mouseLocation() };
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
             let Some(app) = b.as_mut() else { return };
-            // Find the first panel that contains the click.
-            for ch in &mut app.chars {
-                let frame = unsafe { ch.panel.frame() };
-                if mouse_ns.x >= frame.origin.x
-                    && mouse_ns.x < frame.origin.x + frame.size.width
-                    && mouse_ns.y >= frame.origin.y
-                    && mouse_ns.y < frame.origin.y + frame.size.height
-                {
-                    let offset = (mouse_ns.x - frame.origin.x, mouse_ns.y - frame.origin.y);
-                    ch.drag_offset = Some(offset);
-                    ch.anim_state = State::Grabbed;
-                    ch.surface = Surface::Airborne;
-                    break; // only grab the topmost hit
-                }
-            }
+            handle_cmd_left_down(app, mouse_ns, option);
         });
     });
     if let Some(m) = unsafe {
@@ -1085,29 +1960,13 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
-    // LeftMouseDragged — follow the mouse.
     let mask_drag = NSEventMask::LeftMouseDragged;
     let blk_drag = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
             let Some(app) = b.as_mut() else { return };
-            let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
-                else { return };
-            let off = app.chars[drag_idx].drag_offset.unwrap();
             let mouse_ns = unsafe { NSEvent::mouseLocation() };
-            let new_ns_x = mouse_ns.x - off.0;
-            let new_ns_y = mouse_ns.y - off.1;
-            unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
-            let sz = unsafe { app.chars[drag_idx].panel.frame().size };
-            let si = macos_wm::screen_info_raw_full();
-            app.chars[drag_idx].char_pos = (new_ns_x, si.height - new_ns_y - sz.height);
-
-            // Snap-zone feedback: highlight the sprite when a surface is nearby.
-            let foot_x = new_ns_x + sz.width / 2.0;
-            let foot_y = si.height - new_ns_y;
-            let wins: &[WinInfo] = &app.win_cache.wins;
-            let in_snap = macos_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some();
-            set_snap_highlight(&app.chars[drag_idx].image_view, in_snap);
+            handle_left_dragged(app, mouse_ns);
         });
     });
     if let Some(m) = unsafe {
@@ -1116,87 +1975,12 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
-    // LeftMouseUp — release: find surface or start falling.
     let mask_up = NSEventMask::LeftMouseUp;
     let blk_up = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
             let Some(app) = b.as_mut() else { return };
-            let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
-                else { return };
-            app.chars[drag_idx].drag_offset = None;
-            set_snap_highlight(&app.chars[drag_idx].image_view, false);
-
-            let si = macos_wm::screen_info_raw_full();
-            let wins = macos_wm::list_windows(&si);
-            let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
-
-            let ch = &mut app.chars[drag_idx];
-
-            // Sprite dimensions for foot position.
-            let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-            let (fw, fh) = ch.assets.image(&sr.name, sr.mirror)
-                .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                .unwrap_or((150.0, 150.0));
-            let foot_x = ch.char_pos.0 + fw / 2.0;
-            let foot_y = ch.char_pos.1 + fh;
-
-            // Try to snap to a nearby surface (wider wall threshold for drag drops).
-            let new_surface = macos_wm::find_drop_surface(foot_x, foot_y, &wins, &si);
-            match new_surface {
-                Some(surf) => {
-                    let ctx = BehaviorContext {
-                        state: &ch.anim_state,
-                        surface: &surf,
-                        elapsed_secs: 0.0,
-                        config: &cfg,
-                        rng01: 0.0,
-                        surface_progress: 0.5,
-                        facing: ch.facing,
-                        at_edge: false,
-                        surface_edge_info: SurfaceEdge::None,
-                        jump_target: None,
-                        attract_target: None,
-                    };
-                    let new_anim = ch.behavior.on_landed(&ctx);
-                    let stand_anchor = ch.assets.anchor("s-stand")
-                        .unwrap_or(Anchor { x: 0.0, y: 0.0 });
-                    let stand_h = ch.assets.image("s-stand", false)
-                        .map(|img| unsafe { img.size() }.height)
-                        .unwrap_or(fh);
-                    let snap_y = match &surf {
-                        Surface::WindowTop { win_id, .. } =>
-                            macos_wm::find_win(*win_id, &wins).map(|w| w.y),
-                        Surface::Desktop { .. } => {
-                            let si2 = macos_wm::screen_info_raw_full();
-                            Some(si2.floor_y())
-                        }
-                        _ => None,
-                    };
-                    if let Some(surface_y) = snap_y {
-                        ch.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
-                    }
-                    ch.surface = surf;
-                    // Wrap landing animation in a OneShot reaction if one is defined.
-                    if let Some(react_anim) = ch.behavior_engine.on_interaction(
-                        crate::anim_trigger::ReactionTrigger::Dropped,
-                    ) {
-                        ch.anim_state = crate::behavior::State::OneShot {
-                            animation: react_anim,
-                            frame: 0,
-                            frame_elapsed: 0.0,
-                            done: false,
-                            return_to: Box::new(new_anim),
-                        };
-                    } else {
-                        ch.anim_state = new_anim;
-                    }
-                }
-                None => {
-                    ch.surface = Surface::Airborne;
-                    ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
-                }
-            }
+            handle_left_up(app);
         });
     });
     if let Some(m) = unsafe {
@@ -1205,12 +1989,63 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
+    let blk_local_down = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let flags = unsafe { ev.as_ref().modifierFlags() };
+        if !flags.contains(NSEventModifierFlags::Command) {
+            return ev.as_ptr();
+        }
+        let option = flags.contains(NSEventModifierFlags::Option);
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            if let Some(app) = b.as_mut() {
+                handle_cmd_left_down(app, mouse_ns, option);
+            }
+        });
+        // Do not consume mouse-down: the panel must become the tracking window
+        // so subsequent dragged / up events stay in-app. Finder never sees this
+        // click because ignoresMouseEvents is already false.
+        ev.as_ptr()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_down, &*blk_local_down)
+    } {
+        monitors.push(m);
+    }
+
+    let blk_local_drag = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        let handled = APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            b.as_mut().is_some_and(|app| handle_left_dragged(app, mouse_ns))
+        });
+        if handled { std::ptr::null_mut() } else { ev.as_ptr() }
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_drag, &*blk_local_drag)
+    } {
+        monitors.push(m);
+    }
+
+    let blk_local_up = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let handled = APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            b.as_mut().is_some_and(|app| handle_left_up(app))
+        });
+        if handled { std::ptr::null_mut() } else { ev.as_ptr() }
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_up, &*blk_local_up)
+    } {
+        monitors.push(m);
+    }
+
     // RightMouseDown (local monitor) — captures right-clicks on our panels when ⌥⌘ is held.
     //
     // Using a LOCAL monitor (not global) is essential: local monitors can return nil to
     // consume the event, preventing it from reaching the underlying app (Finder/Desktop).
-    // The tick loop polls ⌥⌘ state and sets ignoresMouseEvents=false on panels under the
-    // cursor so that right-clicks are delivered to our app rather than passing through.
+    // update_cmd_hit_participation sets ignoresMouseEvents=false while ⌘ is held over
+    // a panel, so Option+Command right-clicks are delivered here rather than to Finder.
     let mask_rdown = NSEventMask::RightMouseDown;
     let blk_rdown = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
         let flags = unsafe { _ev.as_ref().modifierFlags() };
@@ -1361,32 +2196,60 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
-    // FlagsChanged (global) — immediately update ignoresMouseEvents when ⌥⌘ is
-    // pressed or released. Without this, the 10 Hz tick creates a ≤100 ms window
-    // where the panel still ignores mouse events even though ⌥⌘ is held, causing
-    // the local RightMouseDown monitor to never fire.
+    // FlagsChanged / MouseMoved — flip ignoresMouseEvents as soon as ⌘ is held
+    // over a mate or the cage, so the subsequent mouse-down never reaches Finder.
     let mask_flags = NSEventMask::FlagsChanged;
     let blk_flags = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
-        let flags = unsafe { NSEvent::modifierFlags_class() };
-        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
-            && flags.contains(NSEventModifierFlags::Command);
-        let mouse_ns = unsafe { NSEvent::mouseLocation() };
         APP.with(|cell| {
-            let b = cell.borrow();
-            let Some(app) = b.as_ref() else { return };
-            for ch in &app.chars {
-                let frame = unsafe { ch.panel.frame() };
-                let over = opt_cmd
-                    && mouse_ns.x >= frame.origin.x
-                    && mouse_ns.x < frame.origin.x + frame.size.width
-                    && mouse_ns.y >= frame.origin.y
-                    && mouse_ns.y < frame.origin.y + frame.size.height;
-                unsafe { ch.panel.setIgnoresMouseEvents(!over) };
-            }
+            let mut b = cell.borrow_mut();
+            let Some(app) = b.as_mut() else { return };
+            update_cmd_hit_participation(app);
         });
     });
     if let Some(m) = unsafe {
         NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_flags, &*blk_flags)
+    } {
+        monitors.push(m);
+    }
+    let blk_local_flags = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            if let Some(app) = b.as_mut() {
+                update_cmd_hit_participation(app);
+            }
+        });
+        ev.as_ptr()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_flags, &*blk_local_flags)
+    } {
+        monitors.push(m);
+    }
+
+    let mask_move = NSEventMask::MouseMoved;
+    let blk_move = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            let Some(app) = b.as_mut() else { return };
+            update_cmd_hit_participation(app);
+        });
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_move, &*blk_move)
+    } {
+        monitors.push(m);
+    }
+    let blk_local_move = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            if let Some(app) = b.as_mut() {
+                update_cmd_hit_participation(app);
+            }
+        });
+        ev.as_ptr()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_move, &*blk_local_move)
     } {
         monitors.push(m);
     }
@@ -1516,7 +2379,6 @@ fn tick_char(
     wins: &[WinInfo],
     _mt: MainThreadMarker,
     sprite_size: f64,
-    mode: &crate::user_config::Mode,
 ) {
     // While dragging, skip physics and state machine — panel position is
     // updated directly by the drag event monitor.
@@ -1645,51 +2507,8 @@ fn tick_char(
             }
         }
     } else {
-        // Water entry: only in Vivarium mode.
-        let wa = ch.assets.surfaces.water_affinity;
-        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
-            let win_id_side: Option<(u32, Side)> = match ch.surface {
-                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
-                Surface::WindowTop { win_id, x_local } => {
-                    // Entry from the left or right end of the window top.
-                    macos_wm::find_win(win_id, wins).and_then(|win| {
-                        let half = sprite_size / 2.0;
-                        let edge_margin = 2.0;
-                        if x_local <= edge_margin + half {
-                            Some((win_id, Side::Left))
-                        } else if x_local >= win.w - edge_margin - half {
-                            Some((win_id, Side::Right))
-                        } else {
-                            None
-                        }
-                    })
-                }
-                _ => None,
-            };
-            if let Some((win_id, side)) = win_id_side {
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(
-                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
-                );
-                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
-                if rng.gen_bool(dive_prob) {
-                    if let Some(&win) = macos_wm::find_win(win_id, wins) {
-                        let half = sprite_size / 2.0;
-                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
-                        let vx = match side {
-                            Side::Left  =>  cfg.water.swim_speed * 0.5,
-                            Side::Right => -cfg.water.swim_speed * 0.5,
-                        };
-                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
-                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3, resting: false });
-                        ch.anim_state = State::Walking {
-                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
-                            frame: 0,
-                            frame_elapsed: 0.0,
-                        };
-                    }
-                }
-            }
-        }
+        // Water entry into foreign windows is disabled (cage water is a later slice).
+    }
 
     // Save CG y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -1801,8 +2620,6 @@ fn tick_char(
             ch.anim_state = target;
         }
     }
-
-    } // end land physics (else branch)
 
     // Keep facing in sync with Walking/Running direction (land only; water updates facing via vx).
     if ch.aquatic.is_none() {
@@ -2028,7 +2845,10 @@ fn tick() {
                 }
             }
             let cfg = ch.effective_config.clone();
-            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size, &app.mode);
+            if ch.affiliation == Affiliation::Vivarium {
+                continue;
+            }
+            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -2126,6 +2946,9 @@ fn tick() {
             // Check for new speech lines.
             let weather_info = app.weather.get();
             for i in 0..app.chars.len() {
+                if app.chars[i].affiliation == Affiliation::Vivarium {
+                    continue;
+                }
                 let state = app.chars[i].anim_state.clone();
                 if let Some(line) = app.chars[i].speech_engine.tick(&state, lock, weather_info.as_ref()) {
                     app.speech_lock_remaining = lock_sec;
@@ -2213,24 +3036,13 @@ fn tick() {
             }
         }
 
-        // ⌥⌘ hover tracking: when Option+Command is held and the cursor is
-        // directly over a character panel, temporarily stop ignoring mouse events
-        // so that the local RightMouseDown monitor can intercept the right-click
-        // before it reaches the underlying app (Finder / Desktop).
-        // All other panels (and this panel outside ⌥⌘) stay transparent to clicks.
-        let flags: NSEventModifierFlags = unsafe { msg_send![NSEvent::class(), modifierFlags] };
-        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
-            && flags.contains(NSEventModifierFlags::Command);
-        let mouse_ns = unsafe { NSEvent::mouseLocation() };
-        for ch in &app.chars {
-            let frame = unsafe { ch.panel.frame() };
-            let over = opt_cmd
-                && mouse_ns.x >= frame.origin.x
-                && mouse_ns.x < frame.origin.x + frame.size.width
-                && mouse_ns.y >= frame.origin.y
-                && mouse_ns.y < frame.origin.y + frame.size.height;
-            unsafe { ch.panel.setIgnoresMouseEvents(!over) };
-        }
+        // ⌘ over a mate / cage (or an in-progress ⌘-drag) makes that panel
+        // accept events so Finder never sees the click. Without ⌘, click-through.
+        update_cmd_hit_participation(app);
+
+        let dt = 1.0 / app.tick_rate.max(1) as f64;
+        tick_vivarium_chars(app, dt);
+        present_vivarium(app);
     });
 }
 
@@ -2311,6 +3123,29 @@ pub fn run() {
 
     let weather_handle = crate::weather::spawn(&user_cfg.weather);
 
+    let mut vivi_cfg = user_cfg.vivarium.clone();
+    vivi_cfg.clamp();
+    let vivarium = if vivi_cfg.enabled {
+        let (panel, image_view) = make_vivarium_panel(mt, &vivi_cfg, &si);
+        unsafe { panel.orderFront(None) };
+        Some(VivariumWindow {
+            panel,
+            image_view,
+            cfg: vivi_cfg,
+            dirty: true,
+            cage_img: None,
+            cage_size: (0, 0),
+            layer_back: None,
+            layer_glass: None,
+            layers_look: None,
+            last_blit: Vec::new(),
+            backdrop_blur: None,
+            interact: None,
+        })
+    } else {
+        None
+    };
+
     // Register ⌘+drag event monitors.
     let event_monitors = setup_drag_monitors();
 
@@ -2321,6 +3156,11 @@ pub fn run() {
     unsafe {
         let common: &NSRunLoopMode = &*(NSRunLoopCommonModes as *const NSRunLoopMode);
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, common);
+    }
+
+    unsafe {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let (): () = msg_send![&*status_item, setVisible: true];
     }
 
     APP.with(|cell| {
@@ -2355,8 +3195,15 @@ pub fn run() {
                 user_cfg.display.tick_rate_battery
             }.max(1),
             last_full_tick: Instant::now(),
-            mode: user_cfg.mode,
+            vivarium,
+            vivi_look: vivarium::LookLoader::load(),
         });
+    });
+
+    APP.with(|cell| {
+        if let Some(app) = cell.borrow_mut().as_mut() {
+            ensure_pond_turtle_in_cage(app, mt, &si);
+        }
     });
 
     // IOKit notification: update tick_rate immediately when AC/battery changes.
