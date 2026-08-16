@@ -373,7 +373,7 @@ leopard_gecko  = 1
 enabled         = true    # show the glass-cage home window
 z_order         = "normal"  # "desktop" (behind windows), "normal", or "front"
 display_scale   = 0.5
-character_height = 72
+sprite_size     = 150     # size at display_scale 1.0; same formula as display.sprite_size
 logical_w       = 960     # snapped to 16 px
 logical_h       = 640
 # origin_x / origin_y are written by dragging the cage (native screen points)

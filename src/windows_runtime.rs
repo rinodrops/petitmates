@@ -300,7 +300,16 @@ unsafe fn set_layered_content(
 
         let mut bits: *mut c_void = ptr::null_mut();
         let hbmp = CreateDIBSection(hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
-        ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, bgra.len());
+        let need = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+        if bits.is_null() || hbmp.is_null() || bgra.len() < need {
+            if !hbmp.is_null() {
+                DeleteObject(hbmp);
+            }
+            DeleteDC(hdc_mem);
+            ReleaseDC(ptr::null_mut(), hdc_screen);
+            return;
+        }
+        ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, need);
 
         let old   = SelectObject(hdc_mem, hbmp);
         let pt_dst = POINT { x, y };
@@ -898,13 +907,8 @@ fn persist_vivi_geometry_win(v: &mut VivariumWin) {
 }
 
 fn clamp_all_vivi_mates_win(app: &mut AppState) {
-    let Some((logical_w, logical_h, ch_h, pw)) = app.vivarium.as_ref().map(|v| {
-        (
-            v.cfg.logical_w,
-            v.cfg.logical_h,
-            v.cfg.character_height as f64,
-            v.cfg.pixel_size().0,
-        )
+    let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
+        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
     }) else {
         return;
     };
@@ -914,9 +918,9 @@ fn clamp_all_vivi_mates_win(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let orig = ch.assets.size(&sr.name, sr.mirror);
-        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
-        let logical_sprite_w = sprite_w * (logical_w as f64 / pw.max(1) as f64);
+        let (nsw, _) = ch.assets.native_size(&sr.name);
+        let logical_sprite_w =
+            vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
         ch.vivi_x = vivarium::clamp_vivi_x(ch.vivi_x, inner, logical_sprite_w);
     }
 }
@@ -1051,7 +1055,6 @@ fn tick_and_present_vivarium(app: &mut AppState) {
     let (pw, ph) = cfg.pixel_size();
     let sx = pw as f64 / cfg.logical_w.max(1) as f64;
     let sy = ph as f64 / cfg.logical_h.max(1) as f64;
-    let ch_h = cfg.character_height as f64;
     let dt = 1.0 / app.tick_rate.max(1) as f64;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(
         std::time::SystemTime::now()
@@ -1064,9 +1067,9 @@ fn tick_and_present_vivarium(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let orig = ch.assets.size(&sr.name, sr.mirror);
-        let sprite_w = if orig.1 > 0.0 { orig.0 * (ch_h / orig.1) } else { ch_h };
-        let logical_sprite_w = sprite_w * (cfg.logical_w as f64 / pw.max(1) as f64);
+        let (nsw, _) = ch.assets.native_size(&sr.name);
+        let logical_sprite_w =
+            vivarium::mate_logical_width(nsw, cfg.sprite_size, ch.assets.canonical_width);
         let r1: f64 = rng.random();
         let r2: f64 = rng.random();
         vivarium::tick_rest(
@@ -1089,19 +1092,25 @@ fn tick_and_present_vivarium(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let Some(sprite) = ch.assets.sprite(&sr.name, sr.mirror) else { continue };
-        if sprite.h <= 0 {
+        let (nsw, nsh) = ch.assets.native_size(&sr.name);
+        if nsh < 1.0 {
             continue;
         }
-        let scale = ch_h / sprite.h as f64;
-        let dw = (sprite.w as f64 * scale).round().max(1.0) as u32;
-        let dh = (sprite.h as f64 * scale).round().max(1.0) as u32;
+        let (dw, dh) = vivarium::mate_dest_size(
+            nsw,
+            nsh,
+            cfg.sprite_size,
+            ch.assets.canonical_width,
+            cfg.display_scale,
+            cfg.backing_scale,
+        );
         let dx = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
         let dy = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
         blit_key.push((dx, dy, dw, dh, sr.name.to_string(), sr.mirror));
     }
     let layers_ok = app.vivarium.as_ref().is_some_and(|v| {
-        v.layer_back.is_some() && v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
+        v.layer_back.as_ref().is_some_and(|b| b.w == pw && b.h == ph)
+            && v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
     });
     let interacting = app.vivarium.as_ref().is_some_and(|v| v.interact.is_some());
     let skip = !app.vivarium.as_ref().map(|v| v.dirty).unwrap_or(true)
@@ -1116,17 +1125,24 @@ fn tick_and_present_vivarium(app: &mut AppState) {
             continue;
         }
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-        let Some(sprite) = ch.assets.sprite(&sr.name, sr.mirror) else { continue };
-        if sprite.h <= 0 {
+        let (nsw, nsh) = ch.assets.native_size(&sr.name);
+        if nsh < 1.0 {
             continue;
         }
-        let scale = ch_h / sprite.h as f64;
-        let dw = (sprite.w as f64 * scale).round().max(1.0) as u32;
-        let dh = (sprite.h as f64 * scale).round().max(1.0) as u32;
+        let (dw, dh) = vivarium::mate_dest_size(
+            nsw,
+            nsh,
+            cfg.sprite_size,
+            ch.assets.canonical_width,
+            cfg.display_scale,
+            cfg.backing_scale,
+        );
+        let Some((sw, sh, rgba)) = ch.assets.cage_rgba(&sr.name, sr.mirror, dw, dh) else {
+            continue;
+        };
         let dx = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
         let dy = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
-        let rgba = vivarium::bgra_premul_to_rgba(&sprite.bgra);
-        mate_pix.push((dx, dy, dw, dh, sprite.w as u32, sprite.h as u32, rgba));
+        mate_pix.push((dx, dy, dw, dh, sw, sh, rgba));
     }
     let mates: Vec<vivarium::MateBlit<'_>> = mate_pix
         .iter()
@@ -1141,7 +1157,8 @@ fn tick_and_present_vivarium(app: &mut AppState) {
         })
         .collect();
     let v = app.vivarium.as_mut().unwrap();
-    if v.layer_back.is_none() || !v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look)) {
+    let size_ok = v.layer_back.as_ref().is_some_and(|b| b.w == pw && b.h == ph);
+    if !size_ok || !v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look)) {
         let (back, glass) = vivarium::static_layers(&cfg, &look);
         v.layer_back = Some(back);
         v.layer_glass = Some(glass);

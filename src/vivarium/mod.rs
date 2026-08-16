@@ -3,7 +3,9 @@
 mod compose;
 mod look;
 
-pub use compose::{compose, composite_layers, static_layers, Framebuffer, MateBlit};
+pub use compose::{
+    compose, composite_layers, scale_rgba_triangle, static_layers, Framebuffer, MateBlit,
+};
 #[cfg(windows)]
 pub use compose::bgra_premul_to_rgba;
 pub use look::{LookConfig, LookLoader};
@@ -79,7 +81,8 @@ pub struct VivariumConfig {
     pub enabled: bool,
     pub z_order: ZOrder,
     pub display_scale: f64,
-    pub character_height: u32,
+    /// Dest width of a `canonical_width` sprite at `display_scale` 1.0 (same formula as Display).
+    pub sprite_size: u32,
     pub logical_w: u32,
     pub logical_h: u32,
     /// Native window origin. macOS: bottom-left (Y up). Windows: top-left (Y down).
@@ -88,6 +91,13 @@ pub struct VivariumConfig {
     pub origin_y: Option<f64>,
     pub grid: u32,
     pub back: BackConfig,
+    /// Device pixels per point. Runtime-only (macOS backingScaleFactor; Windows 1.0).
+    #[serde(skip, default = "default_backing_scale")]
+    pub backing_scale: f64,
+}
+
+fn default_backing_scale() -> f64 {
+    1.0
 }
 
 pub const GRID: u32 = 16;
@@ -97,8 +107,8 @@ pub const MAX_LOGICAL_W: u32 = 1920;
 pub const MAX_LOGICAL_H: u32 = 1280;
 
 /// Side/bottom glass thickness in logical pixels (wall light loss).
-pub const WALL_GLASS_W: u32 = 32;
-pub const WALL_GLASS_H: u32 = 32;
+pub const WALL_GLASS_W: u32 = 16;
+pub const WALL_GLASS_H: u32 = 16;
 pub const TOP_EDGE_H: u32 = 4;
 
 impl Default for VivariumConfig {
@@ -107,13 +117,14 @@ impl Default for VivariumConfig {
             enabled: true,
             z_order: ZOrder::Normal,
             display_scale: 0.5,
-            character_height: 72,
+            sprite_size: 150,
             logical_w: 960,
             logical_h: 640,
             origin_x: None,
             origin_y: None,
             grid: GRID,
             back: BackConfig::default(),
+            backing_scale: 1.0,
         }
     }
 }
@@ -122,19 +133,55 @@ impl VivariumConfig {
     pub fn clamp(&mut self) {
         let g = self.grid.max(1);
         self.display_scale = self.display_scale.clamp(0.25, 2.0);
-        self.character_height = self.character_height.clamp(32, 150);
+        self.sprite_size = self.sprite_size.clamp(80, 300);
         self.logical_w = snap_dim(self.logical_w, g, MIN_LOGICAL_W, MAX_LOGICAL_W);
         self.logical_h = snap_dim(self.logical_h, g, MIN_LOGICAL_H, MAX_LOGICAL_H);
         self.back.opacity = self.back.opacity.clamp(0.0, 1.0);
+        if self.backing_scale < 1.0 {
+            self.backing_scale = 1.0;
+        }
+        self.backing_scale = self.backing_scale.min(3.0);
     }
 
-    pub fn pixel_size(&self) -> (u32, u32) {
-        let s = self.display_scale;
+    /// Window size in points (`logical × display_scale`).
+    pub fn point_size(&self) -> (f64, f64) {
         (
-            ((self.logical_w as f64) * s).round().max(1.0) as u32,
-            ((self.logical_h as f64) * s).round().max(1.0) as u32,
+            (self.logical_w as f64 * self.display_scale).max(1.0),
+            (self.logical_h as f64 * self.display_scale).max(1.0),
         )
     }
+
+    /// Framebuffer size in device pixels (`point_size × backing_scale`).
+    pub fn pixel_size(&self) -> (u32, u32) {
+        let (w, h) = self.point_size();
+        let b = self.backing_scale.max(1.0);
+        ((w * b).round().max(1.0) as u32, (h * b).round().max(1.0) as u32)
+    }
+}
+
+/// Dest size in framebuffer pixels. One scale: `sprite_size / canonical_width`
+/// (size at `display_scale` 1.0) times display zoom and backing.
+pub fn mate_dest_size(
+    src_w: f64,
+    src_h: f64,
+    sprite_size: u32,
+    canonical_width: f64,
+    display_scale: f64,
+    backing: f64,
+) -> (u32, u32) {
+    let scale = sprite_size as f64 / canonical_width.max(1.0)
+        * display_scale.max(0.05)
+        * backing.max(1.0);
+    (
+        (src_w * scale).round().max(1.0) as u32,
+        (src_h * scale).round().max(1.0) as u32,
+    )
+}
+
+/// Sprite width in logical cage coordinates (physics / clamp).
+/// Independent of `display_scale`: zoom scales the whole cage together.
+pub fn mate_logical_width(src_w: f64, sprite_size: u32, canonical_width: f64) -> f64 {
+    src_w * (sprite_size as f64 / canonical_width.max(1.0))
 }
 
 pub fn snap_dim(v: u32, grid: u32, min: u32, max: u32) -> u32 {
@@ -399,5 +446,35 @@ mod tests {
         );
         assert_eq!(w, 976);
         assert!((ox - 92.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn mate_scale_is_canonical_not_per_frame_height() {
+        let (sit_w, sit_h) = mate_dest_size(467.0, 329.0, 150, 512.0, 1.0, 1.0);
+        let (lie_w, lie_h) = mate_dest_size(549.0, 179.0, 150, 512.0, 1.0, 1.0);
+        assert_eq!(sit_w, 137);
+        assert_eq!(sit_h, 96);
+        assert_eq!(lie_w, 161);
+        assert_eq!(lie_h, 52);
+        let sit_body = sit_w as f64 / 467.0;
+        let lie_body = lie_w as f64 / 549.0;
+        assert!((sit_body - lie_body).abs() < 0.002);
+    }
+
+    #[test]
+    fn mate_dest_includes_display_scale() {
+        let (w1, h1) = mate_dest_size(512.0, 329.0, 150, 512.0, 1.0, 1.0);
+        let (w2, h2) = mate_dest_size(512.0, 329.0, 150, 512.0, 0.5, 1.0);
+        assert_eq!(w1, 150);
+        assert_eq!(w2, 75);
+        assert_eq!(h2 * 2, h1);
+    }
+
+    #[test]
+    fn mate_logical_width_ignores_pose_height() {
+        let sit = mate_logical_width(467.0, 150, 512.0);
+        let lie = mate_logical_width(549.0, 150, 512.0);
+        assert!((sit - 467.0 * 150.0 / 512.0).abs() < 0.01);
+        assert!(lie > sit);
     }
 }
