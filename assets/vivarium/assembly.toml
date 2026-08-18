@@ -1,0 +1,26 @@
+# Cage prop assembly. Logical px, origin inner bottom-left for x/y.
+# Vertical is always bottom-constrained. Save while running to hot-reload.
+# Settings does not expose these keys.
+
+[water]
+depth_px = 80
+fill = "#5aa0aa"
+alpha = 60
+
+[[instances]]
+part = "soil01"
+x = 0.0
+y = 0.0
+angle_deg = 0.0
+scale = 0.55
+h_anchor = "left"
+layer = "back"
+
+[[instances]]
+part = "wood1"
+x = 0.0
+y = 0.0
+angle_deg = 0.0
+scale = 0.5
+h_anchor = "right"
+layer = "back"

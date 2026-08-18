@@ -191,16 +191,6 @@ max    = 2.0
 step   = 0.05
 
 [[tabs.fields]]
-key    = "vivarium.sprite_size"
-label  = { en = "Character size", ja = "キャラクターサイズ" }
-type   = "number"
-widget = "slider"
-min    = 80
-max    = 300
-step   = 10
-suffix = " px"
-
-[[tabs.fields]]
 key       = "vivarium.logical_w"
 label     = { en = "Cage width", ja = "水槽の幅" }
 type      = "number"

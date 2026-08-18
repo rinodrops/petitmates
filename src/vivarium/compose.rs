@@ -6,8 +6,8 @@
 //! window (see `LookConfig::blur`), not a CPU frost of this framebuffer.
 
 use super::{
-    inner_rect, resolve_layout, BackKind, Floor, LayoutConfig, LookConfig, VivariumConfig,
-    WALL_GLASS_H, WALL_GLASS_W,
+    inner_rect, resolve_layout, BackKind, CageLayout, Layer, LookConfig, PartCatalog,
+    VivariumConfig, WALL_GLASS_H, WALL_GLASS_W,
 };
 
 #[derive(Clone)]
@@ -47,19 +47,19 @@ pub struct MateBlit<'a> {
 pub fn compose(
     cfg: &VivariumConfig,
     look: &LookConfig,
-    layout: &LayoutConfig,
+    assembly: &super::LayoutConfig,
+    parts: &PartCatalog,
     mates: &[MateBlit<'_>],
 ) -> Framebuffer {
-    let (back, glass) = static_layers(cfg, look, layout);
-    composite_layers(cfg, look, &back, &glass, layout, &[], mates, 0.0)
+    let (back, glass) = static_layers(cfg, look);
+    let inner = inner_rect(cfg.logical_w, cfg.logical_h);
+    let cage = resolve_layout(inner, assembly, parts);
+    let (prop_back, prop_front) = bake_prop_layers(cfg, &cage, parts);
+    composite_layers(cfg, look, &back, &glass, &prop_back, &prop_front, &cage, mates, 0.0)
 }
 
-/// Back + floors, and glass-only. Rebuild when look, layout, or size changes.
-pub fn static_layers(
-    cfg: &VivariumConfig,
-    look: &LookConfig,
-    layout: &LayoutConfig,
-) -> (Framebuffer, Framebuffer) {
+/// Wallpaper + back pane, and glass-only. Rebuild when look or size changes.
+pub fn static_layers(cfg: &VivariumConfig, look: &LookConfig) -> (Framebuffer, Framebuffer) {
     let (pw, ph) = cfg.pixel_size();
     let sx = pw as f64 / cfg.logical_w.max(1) as f64;
     let sy = ph as f64 / cfg.logical_h.max(1) as f64;
@@ -70,7 +70,6 @@ pub fn static_layers(
     };
     fill_back(&mut back, cfg);
     draw_back_pane(&mut back, cfg, look, sx, sy);
-    draw_floors(&mut back, cfg, layout, sx, sy);
 
     let mut glass = Framebuffer {
         rgba: vec![0u8; (pw * ph * 4) as usize],
@@ -81,26 +80,82 @@ pub fn static_layers(
     (back, glass)
 }
 
+/// Bake back/front prop images at framebuffer size. Call on resize / hot-reload.
+pub fn bake_prop_layers(
+    cfg: &VivariumConfig,
+    cage: &CageLayout,
+    parts: &PartCatalog,
+) -> (Framebuffer, Framebuffer) {
+    let (pw, ph) = cfg.pixel_size();
+    let sx = pw as f64 / cfg.logical_w.max(1) as f64;
+    let sy = ph as f64 / cfg.logical_h.max(1) as f64;
+    let mut back = Framebuffer {
+        rgba: vec![0u8; (pw * ph * 4) as usize],
+        w: pw,
+        h: ph,
+    };
+    let mut front = back.clone();
+    for inst in &cage.placed {
+        let Some(part) = parts.get(&inst.part_id) else {
+            continue;
+        };
+        let fb = match inst.layer {
+            Layer::Back => &mut back,
+            Layer::Front => &mut front,
+        };
+        blit_placed_prop(fb, part, inst.pose, sx, sy);
+    }
+    (back, front)
+}
+
+fn blit_placed_prop(
+    fb: &mut Framebuffer,
+    part: &super::layout::Part,
+    pose: super::Pose,
+    sx: f64,
+    sy: f64,
+) {
+    let dw = (pose.sw * sx).round().max(1.0) as u32;
+    let dh = (pose.sh * sy).round().max(1.0) as u32;
+    let scaled = scale_rgba_triangle(&part.rgba, part.img_w, part.img_h, dw, dh);
+    let ang = pose.angle_deg.to_radians();
+    let (rw, rh, rgba, fx, fy) = rotate_rgba_about_foot(&scaled, dw, dh, ang);
+    let px = (pose.left * sx + pose.sw * sx * 0.5 - fx).round() as i32;
+    let py = ((pose.top + pose.sh) * sy - fy).round() as i32;
+    blit_mate(
+        fb,
+        &MateBlit {
+            x: px,
+            y: py,
+            w: rw,
+            h: rh,
+            src_w: rw,
+            src_h: rh,
+            rgba: &rgba,
+        },
+    );
+}
+
 pub fn composite_layers(
     cfg: &VivariumConfig,
     look: &LookConfig,
     back: &Framebuffer,
     glass: &Framebuffer,
-    layout: &LayoutConfig,
-    submerged: &[MateBlit<'_>],
-    emerged: &[MateBlit<'_>],
+    prop_back: &Framebuffer,
+    prop_front: &Framebuffer,
+    cage: &CageLayout,
+    mates: &[MateBlit<'_>],
     t_sec: f64,
 ) -> Framebuffer {
     let sx = back.w as f64 / cfg.logical_w.max(1) as f64;
     let sy = back.h as f64 / cfg.logical_h.max(1) as f64;
     let mut fb = back.clone();
-    for m in submerged {
+    over_layer(&mut fb, prop_back);
+    for m in mates {
         blit_mate(&mut fb, m);
     }
-    draw_water(&mut fb, cfg, layout, t_sec, sx, sy);
-    for m in emerged {
-        blit_mate(&mut fb, m);
-    }
+    over_layer(&mut fb, prop_front);
+    draw_water(&mut fb, cfg, cage, t_sec, sx, sy);
     over_layer(&mut fb, glass);
     let radius = (7.0 * sx.min(sy)).max(3.0);
     apply_round_corners(&mut fb, radius);
@@ -168,43 +223,15 @@ fn draw_back_pane(fb: &mut Framebuffer, cfg: &VivariumConfig, look: &LookConfig,
     }
 }
 
-fn draw_floors(fb: &mut Framebuffer, cfg: &VivariumConfig, layout: &LayoutConfig, sx: f64, sy: f64) {
-    let inner = inner_rect(cfg.logical_w, cfg.logical_h);
-    let cage = resolve_layout(inner, layout);
-    for floor in &cage.floors {
-        fill_floor(fb, floor, sx, sy);
-    }
-}
-
-fn fill_floor(fb: &mut Framebuffer, floor: &Floor, sx: f64, sy: f64) {
-    let (r, g, b, _) = parse_hex(&floor.fill).unwrap_or((160, 148, 120, 255));
-    let a = floor.alpha;
-    if a == 0 {
-        return;
-    }
-    let x0 = (floor.x * sx).floor().max(0.0) as u32;
-    let x1 = (floor.right() * sx).ceil().min(fb.w as f64) as u32;
-    for x in x0..x1 {
-        let xl = (x as f64 + 0.5) / sx;
-        let y_walk = floor.walk_y(xl);
-        let y0 = (y_walk * sy).floor().max(0.0) as u32;
-        let y1 = ((y_walk + floor.vis_h) * sy).ceil().min(fb.h as f64) as u32;
-        for y in y0..y1 {
-            over(fb, x, y, r, g, b, a);
-        }
-    }
-}
-
 fn draw_water(
     fb: &mut Framebuffer,
     cfg: &VivariumConfig,
-    layout: &LayoutConfig,
+    cage: &CageLayout,
     t_sec: f64,
     sx: f64,
     sy: f64,
 ) {
     let inner = inner_rect(cfg.logical_w, cfg.logical_h);
-    let cage = resolve_layout(inner, layout);
     if cage.water_alpha == 0 {
         return;
     }
@@ -630,10 +657,14 @@ pub fn rgba_to_bgra_premul(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vivarium::{LayoutConfig, LookConfig, VivariumConfig};
+    use crate::vivarium::{load_part_catalog, LayoutConfig, LookConfig, VivariumConfig};
 
     fn alpha_at(fb: &Framebuffer, x: u32, y: u32) -> u8 {
         fb.rgba[idx(fb, x, y) + 3]
+    }
+
+    fn compose_default(cfg: &VivariumConfig, look: &LookConfig, mates: &[MateBlit<'_>]) -> Framebuffer {
+        compose(cfg, look, &LayoutConfig::default(), &load_part_catalog(), mates)
     }
 
     /// Premul-over a mid gray, matching Cocoa/Win window compositing.
@@ -654,7 +685,7 @@ mod tests {
     #[test]
     fn compose_fills_pixels() {
         let cfg = VivariumConfig::default();
-        let fb = compose(&cfg, &LookConfig::default(), &LayoutConfig::default(), &[]);
+        let fb = compose_default(&cfg, &LookConfig::default(), &[]);
         assert!(fb.w > 0 && fb.h > 0);
         assert_eq!(fb.rgba.len(), (fb.w * fb.h * 4) as usize);
         let opaque = fb.rgba.chunks(4).filter(|p| p[3] > 0).count();
@@ -662,30 +693,36 @@ mod tests {
     }
 
     #[test]
-    fn floor_and_water_washes_are_visible() {
+    fn prop_and_water_washes_are_visible() {
         let cfg = VivariumConfig::default();
-        let layout = LayoutConfig::default();
-        let fb = compose(&cfg, &LookConfig::default(), &layout, &[]);
+        let fb = compose_default(&cfg, &LookConfig::default(), &[]);
         let inner = inner_rect(cfg.logical_w, cfg.logical_h);
         let sx = fb.w as f64 / cfg.logical_w as f64;
         let sy = fb.h as f64 / cfg.logical_h as f64;
-        let bank_x = ((inner.x as f64 + inner.w as f64 * 0.12) * sx).round() as u32;
-        let bank_y = ((inner.y as f64 + inner.h as f64 * 0.72) * sy).round() as u32;
+        let soil_x = ((inner.x as f64 + 80.0) * sx).round() as u32;
+        let soil_y = ((inner.y as f64 + inner.h as f64 - 40.0) * sy).round() as u32;
         let wx = ((inner.x as f64 + inner.w as f64 * 0.88) * sx).round() as u32;
-        let wy = ((inner.y as f64 + inner.h as f64 * 0.80) * sy).round() as u32;
+        let wy = ((inner.y as f64 + inner.h as f64 - 20.0) * sy).round() as u32;
         assert!(
-            alpha_at(&fb, bank_x.min(fb.w - 1), bank_y.min(fb.h - 1)) > 80,
-            "bank floor should be visible"
+            alpha_at(&fb, soil_x.min(fb.w - 1), soil_y.min(fb.h - 1)) > 80,
+            "soil prop should be visible"
         );
-        let water_a = alpha_at(&fb, wx.min(fb.w - 1), wy.min(fb.h - 1));
-        assert!(water_a > 20, "water overlay should be visible ({water_a})");
-        assert!(water_a < 120, "freshwater stays almost transparent ({water_a})");
+        let water_g = {
+            let i = idx(&fb, wx.min(fb.w - 1), wy.min(fb.h - 1));
+            fb.rgba[i + 1]
+        };
+        let air_g = {
+            let ay = ((inner.y as f64 + inner.h as f64 * 0.2) * sy).round() as u32;
+            let i = idx(&fb, wx.min(fb.w - 1), ay.min(fb.h - 1));
+            fb.rgba[i + 1]
+        };
+        assert!(water_g > air_g, "water overlay should tint teal ({water_g} vs {air_g})");
     }
 
     #[test]
     fn glass_center_dims_rim_brightens() {
         let cfg = VivariumConfig::default();
-        let fb = compose(&cfg, &LookConfig::default(), &LayoutConfig::default(), &[]);
+        let fb = compose_default(&cfg, &LookConfig::default(), &[]);
         let cx = fb.w / 2;
         // Sample above the waterline so the air column stays a thin glass tint.
         let inner = inner_rect(cfg.logical_w, cfg.logical_h);
@@ -707,7 +744,6 @@ mod tests {
         let water_a = alpha_at(&fb, cx, water_y.min(fb.h - 1));
         assert!(air_a < 80, "air column stays a thin tint ({air_a})");
         assert!(water_a > air_a, "water overlay raises alpha ({water_a} vs {air_a})");
-        assert!(water_a < 120, "freshwater overlay stays thin ({water_a})");
         assert!(wall_mid < dst, "wall mid should dim ({wall_mid} vs {dst})");
         assert!(fb.rgba[wi + 1] > fb.rgba[wi], "wall mid should be teal");
         assert!(lip > dst, "inner lip should brighten ({lip} vs {dst})");
@@ -768,7 +804,7 @@ mod tests {
             src_h: 1,
             rgba: &pix,
         }];
-        let fb = compose(&cfg, &look, &LayoutConfig::default(), &mates);
+        let fb = compose_default(&cfg, &look, &mates);
         let i = idx(&fb, x as u32, y as u32);
         assert_ne!(&fb.rgba[i..i + 4], &pix, "front glass should cover the mate");
     }

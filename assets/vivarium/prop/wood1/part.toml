@@ -1,0 +1,20 @@
+# Driftwood. Origin is PNG top-left, Y down.
+name = "wood1"
+allow_back = true
+allow_front = true
+
+[[walk]]
+points = [
+    [180, 45],
+    [300, 66],
+    [480, 74],
+    [690, 70],
+    [870, 75],
+    [1080, 80],
+    [1200, 91],
+    [1290, 119],
+    [1320, 142],
+]
+
+[[blocked]]
+points = [[180, 45], [690, 70], [1320, 142], [1310, 250], [40, 250], [30, 116]]
