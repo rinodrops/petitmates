@@ -1,0 +1,43 @@
+# Vivarium floors + visual water — temporary tuning file.
+# Fractions of inner_rect (0–1). Resolved to cage-logical px each tick.
+# Save this file while the app is running; the cage redraws on the next tick.
+# Settings does not expose these keys.
+#
+# [water] y = waterline from the top of inner. Almost transparent.
+# [[floors]] y = walkable surface from the top of inner.
+# kind = "flat" | "ramp" (ramp is a fixed 30°, downhill to the right).
+
+[water]
+y = 0.75
+fill = "#5aa0aa"
+alpha = 60
+
+[[floors]]
+id = "bank"
+kind = "flat"
+x = 0.00
+w = 0.50
+y = 0.65
+h = 0.35
+fill = "#c4baa0"
+alpha = 200
+
+[[floors]]
+id = "ramp"
+kind = "ramp"
+x = 0.50
+w = 0.39
+y = 0.65
+h = 0.04
+fill = "#b8a888"
+alpha = 200
+
+[[floors]]
+id = "basin"
+kind = "flat"
+x = 0.50
+w = 0.50
+y = 0.99
+h = 0.01
+fill = "#9a8b6e"
+alpha = 160

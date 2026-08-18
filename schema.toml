@@ -7,6 +7,16 @@ lang       = "os"
 lang_key   = "display.language"
 save_button = "os"
 
+schema_version = 1
+
+[[migration]]
+version = 1
+  [[migration.transform]]
+  from  = "mode"
+  to    = "vivarium.enabled"
+  type  = "enum_to_bool"
+  match = "vivarium"
+
 # ── Display ──────────────────────────────────────────────────────────────────
 
 [[tabs]]
@@ -148,3 +158,67 @@ label  = { en = "City", ja = "都市" }
 type   = "string"
 widget = "text_input"
 hint   = { en = "Used for weather reactions. Leave empty to disable location lookup.", ja = "天気反応に使用します。空欄の場合は位置情報を取得しません。" }
+
+# ── Vivarium ─────────────────────────────────────────────────────────────────
+
+[[tabs]]
+id    = "vivarium"
+label = { en = "Vivarium", ja = "水槽" }
+icon  = "home"
+
+[[tabs.fields]]
+key    = "vivarium.enabled"
+label  = { en = "Show glass cage", ja = "水槽を表示する" }
+type   = "bool"
+widget = "toggle"
+
+[[tabs.fields]]
+key       = "vivarium.z_order"
+label     = { en = "Z-order", ja = "重ね順" }
+type      = "string"
+widget    = "segmented_control"
+options   = ["desktop", "normal", "front"]
+max_width = 280
+hint      = { en = "desktop = behind windows, normal = with windows, front = always on top.", ja = "desktop = ウィンドウの後ろ、normal = 通常、front = 最前面。" }
+
+[[tabs.fields]]
+key    = "vivarium.display_scale"
+label  = { en = "Display scale", ja = "表示スケール" }
+type   = "number"
+widget = "slider"
+min    = 0.25
+max    = 2.0
+step   = 0.05
+
+[[tabs.fields]]
+key    = "vivarium.sprite_size"
+label  = { en = "Character size", ja = "キャラクターサイズ" }
+type   = "number"
+widget = "slider"
+min    = 80
+max    = 300
+step   = 10
+suffix = " px"
+
+[[tabs.fields]]
+key       = "vivarium.logical_w"
+label     = { en = "Cage width", ja = "水槽の幅" }
+type      = "number"
+widget    = "drag_value"
+min       = 320
+max       = 1920
+step      = 16
+suffix    = " px"
+max_width = 120
+
+[[tabs.fields]]
+key       = "vivarium.logical_h"
+label     = { en = "Cage height", ja = "水槽の高さ" }
+type      = "number"
+widget    = "drag_value"
+min       = 240
+max       = 1280
+step      = 16
+suffix    = " px"
+max_width = 120
+hint      = { en = "Snaps to 16 px. Move the cage with ⌘-drag (Ctrl-drag on Windows); resize from an edge with ⌥⌘-drag (Alt+Ctrl-drag).", ja = "16 px 単位にスナップします。移動は ⌘-ドラッグ（Windows は Ctrl-ドラッグ）、端からのリサイズは ⌥⌘-ドラッグ（Windows は Alt+Ctrl-ドラッグ）です。" }

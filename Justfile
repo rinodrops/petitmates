@@ -37,6 +37,24 @@ darwin-build-x86_64: _settings-x86_64
     just _darwin-bundle darwin-x86_64 {{rust_target_x86}}
     @echo "App bundle: dist/darwin-x86_64/{{app_name}}.app"
 
+# Debug .app with LSUIElement (menu-bar extra). Prefer this over `cargo run`.
+darwin-run:
+    cargo build
+    mkdir -p "dist/darwin-dev/{{app_name}}.app/Contents/MacOS"
+    mkdir -p "dist/darwin-dev/{{app_name}}.app/Contents/Resources"
+    cp "target/debug/{{exe_name}}" \
+        "dist/darwin-dev/{{app_name}}.app/Contents/MacOS/{{exe_name}}"
+    if [ -d "{{settings_dir}}" ]; then \
+        SETTINGS_SCHEMA="{{settings_schema}}" \
+            cargo build --manifest-path "{{settings_dir}}/Cargo.toml" -p settings; \
+        cp "{{settings_dir}}/target/debug/settings" \
+            "dist/darwin-dev/{{app_name}}.app/Contents/MacOS/settings"; \
+    fi
+    just _copy-assets "dist/darwin-dev/{{app_name}}.app/Contents/Resources"
+    just _plist "dist/darwin-dev/{{app_name}}.app/Contents"
+    -pkill -x {{exe_name}}
+    open "dist/darwin-dev/{{app_name}}.app"
+
 darwin-sign-arm64: darwin-build-arm64
     just _require-cert
     xattr -cr "dist/darwin-arm64/{{app_name}}.app"
@@ -193,6 +211,8 @@ _copy-assets res_dir:
     cp assets/leopard_gecko/sprite/*.png    "{{res_dir}}/assets/leopard_gecko/sprite/"
     mkdir -p "{{res_dir}}/assets/common"
     cp assets/common/params.toml            "{{res_dir}}/assets/common/"
+    mkdir -p "{{res_dir}}/assets/vivarium"
+    cp assets/vivarium/look.toml            "{{res_dir}}/assets/vivarium/"
 
 _plist contents_dir:
     sed 's/@VERSION@/{{version}}/g' assets/darwin/Info.plist > "{{contents_dir}}/Info.plist"
