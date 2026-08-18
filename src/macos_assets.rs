@@ -62,7 +62,7 @@ pub struct SpriteAssets {
     anchors: HashMap<String, Anchor>,
     native: HashMap<String, (u32, u32, Vec<u8>)>,
     native_mirrored: HashMap<String, (u32, u32, Vec<u8>)>,
-    cage: RefCell<HashMap<(String, bool, u32, u32), (u32, u32, Vec<u8>)>>,
+    cage: RefCell<HashMap<(String, bool, u32, u32, i16), (u32, u32, Vec<u8>, f64, f64)>>,
     pub canonical_width: f64,
     pub animations: HashMap<String, AnimationDef>,
     pub surfaces: SurfaceConfig,
@@ -147,9 +147,17 @@ impl SpriteAssets {
             .unwrap_or((512.0, 512.0))
     }
 
-    /// Cage blit source: native PNG scaled once to `dw×dh` with Triangle.
-    pub fn cage_rgba(&self, name: &str, mirror: bool, dw: u32, dh: u32) -> Option<(u32, u32, Vec<u8>)> {
-        let key = (name.to_string(), mirror, dw, dh);
+    /// Cage blit source: native PNG scaled once to `dw×dh`, then rotated by a
+    /// permitted `angle_id` about the foot. Cache key includes the angle.
+    pub fn cage_rgba(
+        &self,
+        name: &str,
+        mirror: bool,
+        dw: u32,
+        dh: u32,
+        angle: crate::vivarium::AngleId,
+    ) -> Option<(u32, u32, Vec<u8>, f64, f64)> {
+        let key = (name.to_string(), mirror, dw, dh, angle.deg());
         {
             let cache = self.cage.borrow();
             if let Some(v) = cache.get(&key) {
@@ -162,7 +170,7 @@ impl SpriteAssets {
             self.native.get(name)?
         };
         let scaled = crate::vivarium::scale_rgba_triangle(src, *sw, *sh, dw, dh);
-        let out = (dw, dh, scaled);
+        let out = crate::vivarium::rotate_rgba_about_foot(&scaled, dw, dh, angle.rad());
         self.cage.borrow_mut().insert(key, out.clone());
         Some(out)
     }

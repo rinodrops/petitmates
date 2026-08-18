@@ -30,6 +30,24 @@ impl WinInfo {
     pub fn bottom(&self) -> f64 { self.y + self.h }
 }
 
+/// Axis-aligned bounds for `tick_water` (same space as `x` / `y`).
+#[derive(Debug, Clone, Copy)]
+pub struct WaterBounds {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl WaterBounds {
+    pub fn right(self) -> f64 {
+        self.x + self.w
+    }
+    pub fn bottom(self) -> f64 {
+        self.y + self.h
+    }
+}
+
 /// Screen geometry as seen by the physics layer.
 /// Each platform derives this from its own `ScreenInfo`.
 #[derive(Debug, Clone, Copy)]
@@ -643,23 +661,28 @@ fn resolve_wall_bottom(
 
 // ---- Water physics ----
 
-/// Per-tick physics for a character in `PhysicsWorld::Water`.
+/// Per-tick physics for a character in water.
 ///
-/// `surface` must be `Surface::WindowInterior`; other variants are a no-op.
-/// `water_affinity` (0–1) scales the downward pull that makes aquatic species sink.
-/// `sprite_half` is half the sprite's display width, used as the wall margin.
+/// `x` / `y` are in the same space as `bounds`. `water_affinity` (0–1) scales
+/// the downward pull. `sprite_half` is the wall margin.
 pub fn tick_water(
-    surface: &mut Surface,
+    x: &mut f64,
+    y: &mut f64,
     aq: &mut AquaticState,
-    win: &WinInfo,
+    bounds: WaterBounds,
     cfg: &crate::config::WaterConfig,
     water_affinity: f64,
     sprite_half: f64,
     dt: f64,
     rng: &mut impl rand::Rng,
 ) {
-    let Surface::WindowInterior { ref mut x_local, ref mut y_local, .. } = *surface else { return };
     let m = sprite_half.max(4.0);
+    let x0 = bounds.x + m;
+    let x1 = bounds.right() - m;
+    let y0 = bounds.y + m;
+    let y1 = bounds.bottom() - m;
+    let x0 = x0.min(x1);
+    let y0 = y0.min(y1);
 
     if aq.resting {
         // Resting: apply drag and downward pull, then clamp to bounds.
@@ -669,30 +692,30 @@ pub fn tick_water(
         aq.vy *= drag;
         aq.vy += water_affinity * 80.0 * dt;
 
-        *x_local += aq.vx * dt;
-        *y_local += aq.vy * dt;
+        *x += aq.vx * dt;
+        *y += aq.vy * dt;
 
-        *x_local = x_local.clamp(m, win.w - m);
-        *y_local = y_local.clamp(m, win.h - m);
+        *x = x.clamp(x0, x1);
+        *y = y.clamp(y0, y1);
     } else {
         // Swimming: downward bias for aquatic species.
         aq.vy += water_affinity * 40.0 * dt;
 
         // Integrate velocity.
-        *x_local += aq.vx * dt;
-        *y_local += aq.vy * dt;
+        *x += aq.vx * dt;
+        *y += aq.vy * dt;
 
         // Bounce off walls with a slight random angle perturbation.
-        if *x_local < m         { *x_local = m;           aq.vx =  aq.vx.abs()  + rng.gen_range(-8.0..8.0); }
-        if *x_local > win.w - m { *x_local = win.w - m;   aq.vx = -aq.vx.abs()  + rng.gen_range(-8.0..8.0); }
-        if *y_local < m         { *y_local = m;            aq.vy =  aq.vy.abs()  + rng.gen_range(-8.0..8.0); }
-        if *y_local > win.h - m { *y_local = win.h - m;   aq.vy = -aq.vy.abs()  + rng.gen_range(-8.0..8.0); }
+        if *x < x0 { *x = x0; aq.vx =  aq.vx.abs() + rng.random_range(-8.0..8.0); }
+        if *x > x1 { *x = x1; aq.vx = -aq.vx.abs() + rng.random_range(-8.0..8.0); }
+        if *y < y0 { *y = y0; aq.vy =  aq.vy.abs() + rng.random_range(-8.0..8.0); }
+        if *y > y1 { *y = y1; aq.vy = -aq.vy.abs() + rng.random_range(-8.0..8.0); }
 
         // Thigmotaxis: pull toward the nearest wall when too far from all walls.
-        let dist_l = *x_local - m;
-        let dist_r = (win.w - m) - *x_local;
-        let dist_t = *y_local - m;
-        let dist_b = (win.h - m) - *y_local;
+        let dist_l = *x - x0;
+        let dist_r = x1 - *x;
+        let dist_t = *y - y0;
+        let dist_b = y1 - *y;
         let min_dist = dist_l.min(dist_r).min(dist_t).min(dist_b);
 
         if min_dist > cfg.thigmotaxis_margin {
@@ -721,9 +744,42 @@ pub fn tick_water(
         let min_sp = max_sp * 0.15;
         let sp2 = aq.vx * aq.vx + aq.vy * aq.vy;
         if sp2 < min_sp * min_sp {
-            let angle: f64 = rng.gen_range(0.0..std::f64::consts::TAU);
+            let angle: f64 = rng.random_range(0.0..std::f64::consts::TAU);
             aq.vx = angle.cos() * min_sp;
             aq.vy = angle.sin() * min_sp;
         }
+    }
+}
+
+#[cfg(test)]
+mod water_tests {
+    use super::*;
+    use crate::behavior::AquaticState;
+    use crate::config::WaterConfig;
+    use rand::SeedableRng;
+
+    #[test]
+    fn tick_water_stays_inside_bounds() {
+        let mut x = 10.0;
+        let mut y = 10.0;
+        let mut aq = AquaticState {
+            vx: 400.0,
+            vy: -300.0,
+            resting: false,
+        };
+        let bounds = WaterBounds {
+            x: 100.0,
+            y: 200.0,
+            w: 80.0,
+            h: 60.0,
+        };
+        let cfg = WaterConfig::default();
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(1);
+        for _ in 0..40 {
+            tick_water(&mut x, &mut y, &mut aq, bounds, &cfg, 0.5, 8.0, 0.05, &mut rng);
+        }
+        let m = 8.0;
+        assert!(x >= bounds.x + m - 0.01 && x <= bounds.right() - m + 0.01);
+        assert!(y >= bounds.y + m - 0.01 && y <= bounds.bottom() - m + 0.01);
     }
 }
