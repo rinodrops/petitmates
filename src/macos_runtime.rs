@@ -213,6 +213,8 @@ struct VivariumWindow {
     cage_size: (u32, u32),
     layer_back: Option<vivarium::Framebuffer>,
     layer_glass: Option<vivarium::Framebuffer>,
+    layer_prop_back: Option<vivarium::Framebuffer>,
+    layer_prop_front: Option<vivarium::Framebuffer>,
     layers_look: Option<vivarium::LookConfig>,
     layers_layout: Option<vivarium::LayoutConfig>,
     last_blit: Vec<(i32, i32, u32, u32, String, bool, i16)>,
@@ -345,6 +347,7 @@ fn make_vivarium_panel(
         cfg,
         &vivarium::LookConfig::default(),
         &vivarium::LayoutConfig::default(),
+        &vivarium::load_part_catalog(),
         &[],
     );
     let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h, ptw, pth);
@@ -401,12 +404,12 @@ fn persist_vivi_geometry(v: &mut VivariumWindow) {
 
 fn clamp_all_vivi_mates(app: &mut AppState) {
     let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
-        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
+        (v.cfg.logical_w, v.cfg.logical_h, vivarium::CAGE_SPRITE_SIZE)
     }) else {
         return;
     };
     let inner = vivarium::inner_rect(logical_w, logical_h);
-    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current, &app.vivi_layout.parts);
     for ch in &mut app.chars {
         if ch.affiliation != Affiliation::Vivarium {
             continue;
@@ -420,6 +423,7 @@ fn clamp_all_vivi_mates(app: &mut AppState) {
             ch.vivi_x,
             &mut ch.vivi_floor,
             &cage.floors,
+            &cage.blocked,
             wa,
             cage.waterline,
             logical_sprite_w,
@@ -496,6 +500,10 @@ fn tick_vivi_interact(app: &mut AppState, mouse: NSPoint) {
                     (v.cfg.logical_w, v.cfg.logical_h, v.cfg.origin_x, v.cfg.origin_y),
                 )
             };
+            let min_w = app
+                .vivi_layout
+                .current
+                .min_logical_w(&app.vivi_layout.parts, orig_logical.0);
             let (nw, nh, ox, oy) = vivarium::resize_from_drag(
                 edge,
                 mouse.x - start_mouse.0,
@@ -507,6 +515,8 @@ fn tick_vivi_interact(app: &mut AppState, mouse: NSPoint) {
                 scale,
                 true,
                 grid,
+                min_w,
+                vivarium::MIN_LOGICAL_H,
             );
             if nw == cur.0 && nh == cur.1 && cur.2 == Some(ox) && cur.3 == Some(oy) {
                 return;
@@ -846,7 +856,7 @@ fn present_vivarium(app: &mut AppState) {
     let look = app.vivi_look.current.clone();
     let layout = app.vivi_layout.current.clone();
     let inner = vivarium::inner_rect(cfg.logical_w, cfg.logical_h);
-    let cage = vivarium::resolve_layout(inner, &layout);
+    let cage = vivarium::resolve_layout(inner, &layout, &app.vivi_layout.parts);
     if let Some(v) = app.vivarium.as_mut() {
         apply_vivarium_backdrop_blur(v, look.blur);
     }
@@ -863,7 +873,7 @@ fn present_vivarium(app: &mut AppState) {
         let (dw, dh) = vivarium::mate_dest_size(
             nsw,
             nsh,
-            cfg.sprite_size,
+            vivarium::CAGE_SPRITE_SIZE,
             ch.assets.canonical_width,
             cfg.display_scale,
             cfg.backing_scale,
@@ -907,16 +917,13 @@ fn present_vivarium(app: &mut AppState) {
         let (dw, dh) = vivarium::mate_dest_size(
             nsw,
             nsh,
-            cfg.sprite_size,
+            vivarium::CAGE_SPRITE_SIZE,
             ch.assets.canonical_width,
             cfg.display_scale,
             cfg.backing_scale,
         );
         let floor = vivarium::floor_by_id(&cage.floors, &ch.vivi_floor);
         let angle = floor.map(|f| f.angle_id).unwrap_or(vivarium::AngleId::Flat);
-        let submerged = floor
-            .map(|f| f.submerged_at(ch.vivi_x, cage.waterline))
-            .unwrap_or(false);
         let Some((sw, sh, rgba, fx, fy)) =
             ch.assets.cage_rgba(&sr.name, sr.mirror, dw, dh, angle)
         else {
@@ -924,12 +931,11 @@ fn present_vivarium(app: &mut AppState) {
         };
         let px = (ch.vivi_x * sx - fx).round() as i32;
         let py = (ch.vivi_y * sy - fy).round() as i32;
-        mate_pix.push((px, py, sw, sh, rgba, submerged));
+        mate_pix.push((px, py, sw, sh, rgba));
     }
-    let submerged: Vec<vivarium::MateBlit<'_>> = mate_pix
+    let mates: Vec<vivarium::MateBlit<'_>> = mate_pix
         .iter()
-        .filter(|(_, _, _, _, _, sub)| *sub)
-        .map(|(x, y, w, h, rgba, _)| vivarium::MateBlit {
+        .map(|(x, y, w, h, rgba)| vivarium::MateBlit {
             x: *x,
             y: *y,
             w: *w,
@@ -939,28 +945,20 @@ fn present_vivarium(app: &mut AppState) {
             rgba,
         })
         .collect();
-    let emerged: Vec<vivarium::MateBlit<'_>> = mate_pix
-        .iter()
-        .filter(|(_, _, _, _, _, sub)| !*sub)
-        .map(|(x, y, w, h, rgba, _)| vivarium::MateBlit {
-            x: *x,
-            y: *y,
-            w: *w,
-            h: *h,
-            src_w: *w,
-            src_h: *h,
-            rgba,
-        })
-        .collect();
+    let parts = &app.vivi_layout.parts;
     if let Some(vivi) = app.vivarium.as_mut() {
         let rebuild = vivi.layer_back.is_none()
+            || vivi.layer_prop_back.is_none()
             || vivi.cage_size != (pw, ph)
             || !vivi.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
             || !vivi.layers_layout.as_ref().is_some_and(|old| old == &layout);
         if rebuild {
-            let (back, glass) = vivarium::static_layers(&cfg, &look, &layout);
+            let (back, glass) = vivarium::static_layers(&cfg, &look);
+            let (prop_back, prop_front) = vivarium::bake_prop_layers(&cfg, &cage, parts);
             vivi.layer_back = Some(back);
             vivi.layer_glass = Some(glass);
+            vivi.layer_prop_back = Some(prop_back);
+            vivi.layer_prop_front = Some(prop_front);
             vivi.layers_look = Some(look.clone());
             vivi.layers_layout = Some(layout.clone());
         }
@@ -969,9 +967,10 @@ fn present_vivarium(app: &mut AppState) {
             &look,
             vivi.layer_back.as_ref().unwrap(),
             vivi.layer_glass.as_ref().unwrap(),
-            &layout,
-            &submerged,
-            &emerged,
+            vivi.layer_prop_back.as_ref().unwrap(),
+            vivi.layer_prop_front.as_ref().unwrap(),
+            &cage,
+            &mates,
             t_sec,
         );
         let reused = vivi
@@ -1005,12 +1004,12 @@ fn present_vivarium(app: &mut AppState) {
 
 fn put_one_in_cage(app: &mut AppState, idx: usize) {
     let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
-        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
+        (v.cfg.logical_w, v.cfg.logical_h, vivarium::CAGE_SPRITE_SIZE)
     }) else {
         return;
     };
     let inner = vivarium::inner_rect(logical_w, logical_h);
-    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current, &app.vivi_layout.parts);
     let Some(ch) = app.chars.get_mut(idx) else { return };
     let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
     let (nsw, _) = ch.assets.native_size(&sr.name);
@@ -1062,12 +1061,12 @@ fn ensure_pond_turtle_in_cage(app: &mut AppState, mt: MainThreadMarker, si: &Scr
 
 fn put_all_in_cage(app: &mut AppState) {
     let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
-        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
+        (v.cfg.logical_w, v.cfg.logical_h, vivarium::CAGE_SPRITE_SIZE)
     }) else {
         return;
     };
     let inner = vivarium::inner_rect(logical_w, logical_h);
-    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current, &app.vivi_layout.parts);
     let n = app.chars.len().max(1) as f64;
     for (i, ch) in app.chars.iter_mut().enumerate() {
         let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
@@ -1124,7 +1123,7 @@ fn let_all_out(app: &mut AppState, si: &ScreenInfo) {
 
 fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
     let Some((enabled, logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
-        (v.cfg.enabled, v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
+        (v.cfg.enabled, v.cfg.logical_w, v.cfg.logical_h, vivarium::CAGE_SPRITE_SIZE)
     }) else {
         return;
     };
@@ -1132,7 +1131,7 @@ fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
         return;
     }
     let inner = vivarium::inner_rect(logical_w, logical_h);
-    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current, &app.vivi_layout.parts);
     let mut rng = rand::rngs::SmallRng::seed_from_u64(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1156,6 +1155,7 @@ fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
             &mut ch.vivi_floor,
             wa,
             &cage.floors,
+            &cage.blocked,
             cage.waterline,
             logical_sprite_w,
             dt,
@@ -3260,6 +3260,8 @@ pub fn run() {
             cage_size: (0, 0),
             layer_back: None,
             layer_glass: None,
+            layer_prop_back: None,
+            layer_prop_front: None,
             layers_look: None,
             layers_layout: None,
             last_blit: Vec::new(),

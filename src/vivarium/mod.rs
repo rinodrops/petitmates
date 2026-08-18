@@ -5,13 +5,17 @@ mod layout;
 mod look;
 
 pub use compose::{
-    compose, composite_layers, rotate_rgba_about_foot, scale_rgba_triangle, static_layers,
-    Framebuffer, MateBlit,
+    bake_prop_layers, compose, composite_layers, rotate_rgba_about_foot, scale_rgba_triangle,
+    static_layers, Framebuffer, MateBlit,
 };
 #[cfg(windows)]
 pub use compose::bgra_premul_to_rgba;
 #[allow(unused_imports)]
-pub use layout::{AngleId, FloorKind, FloorSpec, LayoutConfig, LayoutLoader, WaterSpec};
+pub use layout::{
+    load_part_catalog, push_out_blocked, resolve_layout, snap_angle_id, AngleId, AssemblyConfig,
+    FloorKind, HAnchor, Layer, LayoutConfig, LayoutLoader, PartCatalog, PlacedInstance, Pose,
+    WaterSpec,
+};
 pub use look::{LookConfig, LookLoader};
 #[cfg(windows)]
 pub use compose::rgba_to_bgra_premul;
@@ -85,8 +89,6 @@ pub struct VivariumConfig {
     pub enabled: bool,
     pub z_order: ZOrder,
     pub display_scale: f64,
-    /// Dest width of a `canonical_width` sprite at `display_scale` 1.0 (same formula as Display).
-    pub sprite_size: u32,
     pub logical_w: u32,
     pub logical_h: u32,
     /// Native window origin. macOS: bottom-left (Y up). Windows: top-left (Y down).
@@ -121,7 +123,6 @@ impl Default for VivariumConfig {
             enabled: true,
             z_order: ZOrder::Normal,
             display_scale: 0.5,
-            sprite_size: 150,
             logical_w: 960,
             logical_h: 640,
             origin_x: None,
@@ -137,7 +138,6 @@ impl VivariumConfig {
     pub fn clamp(&mut self) {
         let g = self.grid.max(1);
         self.display_scale = self.display_scale.clamp(0.25, 2.0);
-        self.sprite_size = self.sprite_size.clamp(80, 300);
         self.logical_w = snap_dim(self.logical_w, g, MIN_LOGICAL_W, MAX_LOGICAL_W);
         self.logical_h = snap_dim(self.logical_h, g, MIN_LOGICAL_H, MAX_LOGICAL_H);
         self.back.opacity = self.back.opacity.clamp(0.0, 1.0);
@@ -163,7 +163,11 @@ impl VivariumConfig {
     }
 }
 
-/// Dest size in framebuffer pixels. One scale: `sprite_size / canonical_width`
+/// Cage-mate dest width of a `canonical_width` sprite at `display_scale` 1.0.
+/// Product scale, not a Settings slider (`display.sprite_size` is Free Roam).
+pub const CAGE_SPRITE_SIZE: u32 = 150;
+
+/// Dest size in framebuffer pixels. One scale: `CAGE_SPRITE_SIZE / canonical_width`
 /// (size at `display_scale` 1.0) times display zoom and backing.
 pub fn mate_dest_size(
     src_w: f64,
@@ -232,6 +236,7 @@ impl Floor {
         self.y_left + t * (self.y_right - self.y_left)
     }
 
+    #[allow(dead_code)]
     pub fn submerged_at(&self, x: f64, waterline: f64) -> bool {
         self.walk_y(x) > waterline + 1.0
     }
@@ -244,60 +249,8 @@ pub struct CageLayout {
     pub water_alpha: u8,
     #[allow(dead_code)]
     pub inner: InnerRect,
-}
-
-/// Fixed ramp slope (downhill to the right). Matches `AngleId::Ramp30`.
-const RAMP_TAN: f64 = 0.57735026919;
-
-pub fn resolve_layout(inner: InnerRect, layout: &LayoutConfig) -> CageLayout {
-    let waterline = inner.y as f64 + layout.water.y.clamp(0.05, 0.98) * inner.h as f64;
-    let mut floors = Vec::new();
-    for spec in &layout.floors {
-        let x = inner.x as f64 + spec.x.clamp(0.0, 1.0) * inner.w as f64;
-        let w = (spec.w.clamp(0.02, 1.0) * inner.w as f64)
-            .min((inner.x + inner.w) as f64 - x)
-            .max(1.0);
-        let y_left = inner.y as f64 + spec.y.clamp(0.0, 1.0) * inner.h as f64;
-        let y_right = match spec.kind {
-            FloorKind::Flat => y_left,
-            FloorKind::Ramp => (y_left + w * RAMP_TAN).min((inner.y + inner.h) as f64),
-        };
-        let vis_h = (spec.h.clamp(0.0, 1.0) * inner.h as f64).max(2.0);
-        floors.push(Floor {
-            id: spec.id.clone(),
-            kind: spec.kind,
-            x,
-            w,
-            y_left,
-            y_right,
-            vis_h,
-            fill: spec.fill.clone(),
-            alpha: spec.alpha,
-            angle_id: spec.angle_id(),
-        });
-    }
-    if floors.is_empty() {
-        let y = (inner.y + inner.h) as f64;
-        floors.push(Floor {
-            id: "basin".into(),
-            kind: FloorKind::Flat,
-            x: inner.x as f64,
-            w: inner.w as f64,
-            y_left: y,
-            y_right: y,
-            vis_h: 8.0,
-            fill: "#9a8b6e".into(),
-            alpha: 160,
-            angle_id: AngleId::Flat,
-        });
-    }
-    CageLayout {
-        floors,
-        waterline,
-        water_fill: layout.water.fill.clone(),
-        water_alpha: layout.water.alpha,
-        inner,
-    }
+    pub placed: Vec<layout::PlacedInstance>,
+    pub blocked: Vec<Vec<[f64; 2]>>,
 }
 
 /// Allowed x-range on `floor` given `water_affinity`. `None` if the floor is unusable.
@@ -331,16 +284,18 @@ pub fn walk_range(
 }
 
 pub fn default_floor_id(floors: &[Floor], water_affinity: f64, waterline: f64, sprite_w: f64) -> String {
-    let prefer = if water_affinity > 0.0 { "basin" } else { "bank" };
-    if floors.iter().any(|f| {
-        f.id == prefer && walk_range(f, water_affinity, waterline, sprite_w).is_some()
-    }) {
-        return prefer.into();
+    let mut best: Option<(f64, String)> = None;
+    for f in floors {
+        if walk_range(f, water_affinity, waterline, sprite_w).is_none() {
+            continue;
+        }
+        let mid = (f.y_left + f.y_right) * 0.5;
+        let score = if water_affinity > 0.0 { mid } else { -mid };
+        if best.as_ref().is_none_or(|(s, _)| score > *s) {
+            best = Some((score, f.id.clone()));
+        }
     }
-    floors
-        .iter()
-        .find(|f| walk_range(f, water_affinity, waterline, sprite_w).is_some())
-        .map(|f| f.id.clone())
+    best.map(|(_, id)| id)
         .unwrap_or_else(|| floors[0].id.clone())
 }
 
@@ -382,6 +337,7 @@ pub fn clamp_vivi_pos(
     x: f64,
     floor_id: &mut String,
     floors: &[Floor],
+    blocked: &[Vec<[f64; 2]>],
     water_affinity: f64,
     waterline: f64,
     sprite_w: f64,
@@ -397,7 +353,9 @@ pub fn clamp_vivi_pos(
     let floor = &floors[idx];
     *floor_id = floor.id.clone();
     if let Some((lo, hi)) = walk_range(floor, water_affinity, waterline, sprite_w) {
-        let nx = x.clamp(lo, hi);
+        let clamped = x.clamp(lo, hi);
+        let y = floor.walk_y(clamped);
+        let nx = layout::push_out_blocked(clamped, y, blocked).clamp(lo, hi);
         return (nx, floor.walk_y(nx));
     }
     *floor_id = default_floor_id(floors, water_affinity, waterline, sprite_w);
@@ -450,6 +408,8 @@ pub fn resize_from_drag(
     scale: f64,
     y_up: bool,
     grid: u32,
+    min_w: u32,
+    min_h: u32,
 ) -> (u32, u32, f64, f64) {
     let s = scale.max(0.05);
     let mut w = orig_w as f64;
@@ -475,8 +435,8 @@ pub fn resize_from_drag(
             h -= dy / s;
         }
     }
-    let new_w = snap_dim(w.round().max(0.0) as u32, grid, MIN_LOGICAL_W, MAX_LOGICAL_W);
-    let new_h = snap_dim(h.round().max(0.0) as u32, grid, MIN_LOGICAL_H, MAX_LOGICAL_H);
+    let new_w = snap_dim(w.round().max(0.0) as u32, grid, min_w.max(MIN_LOGICAL_W), MAX_LOGICAL_W);
+    let new_h = snap_dim(h.round().max(0.0) as u32, grid, min_h.max(MIN_LOGICAL_H), MAX_LOGICAL_H);
     let mut ox = orig_ox;
     let mut oy = orig_oy;
     if edge & EDGE_LEFT != 0 {
@@ -617,6 +577,7 @@ pub fn tick_cage_mate(
     floor_id: &mut String,
     water_affinity: f64,
     floors: &[Floor],
+    blocked: &[Vec<[f64; 2]>],
     waterline: f64,
     sprite_w: f64,
     dt: f64,
@@ -675,6 +636,10 @@ pub fn tick_cage_mate(
         }
     }
     *y = floors[idx].walk_y(*x);
+    if let Some((lo, hi)) = walk_range(&floors[idx], water_affinity, waterline, sprite_w) {
+        *x = layout::push_out_blocked(*x, *y, blocked).clamp(lo, hi);
+        *y = floors[idx].walk_y(*x);
+    }
 }
 
 fn pick_rest(rng01: f64) -> crate::behavior::State {
@@ -725,6 +690,7 @@ mod tests {
     fn resize_right_grows_width_keeps_origin() {
         let (w, h, ox, oy) = resize_from_drag(
             EDGE_RIGHT, 8.0, 0.0, 960, 640, 100.0, 50.0, 0.5, true, 16,
+            MIN_LOGICAL_W, MIN_LOGICAL_H,
         );
         assert_eq!(w, 976);
         assert_eq!(h, 640);
@@ -736,6 +702,7 @@ mod tests {
     fn resize_left_keeps_right_edge() {
         let (w, _h, ox, _oy) = resize_from_drag(
             EDGE_LEFT, -8.0, 0.0, 960, 640, 100.0, 50.0, 0.5, true, 16,
+            MIN_LOGICAL_W, MIN_LOGICAL_H,
         );
         assert_eq!(w, 976);
         assert!((ox - 92.0).abs() < 0.01);
@@ -772,80 +739,134 @@ mod tests {
     }
 
     fn default_cage() -> CageLayout {
-        resolve_layout(inner_rect(960, 640), &LayoutConfig::default())
+        let parts = load_part_catalog();
+        resolve_layout(inner_rect(960, 640), &LayoutConfig::default(), &parts)
     }
 
     #[test]
-    fn default_layout_has_three_floors_and_ramp() {
+    fn default_assembly_has_soil_and_wood_walk() {
         let cage = default_cage();
-        assert_eq!(cage.floors.len(), 3);
-        assert!(cage.floors.iter().any(|f| f.id == "bank"));
-        assert!(cage.floors.iter().any(|f| f.id == "basin"));
-        let ramp = cage.floors.iter().find(|f| f.id == "ramp").expect("ramp");
-        assert_eq!(ramp.kind, FloorKind::Ramp);
-        assert_eq!(ramp.angle_id, AngleId::Ramp30);
-        assert!(ramp.y_right > ramp.y_left + 10.0);
+        assert!(cage.floors.iter().any(|f| f.id.starts_with("soil01:")));
+        assert!(cage.floors.iter().any(|f| f.id.starts_with("wood1:")));
+        assert!(cage.placed.len() >= 2);
+    }
+
+    #[test]
+    fn widening_opens_gap_between_left_and_right() {
+        let parts = load_part_catalog();
+        let assembly = LayoutConfig::default();
+        let narrow = resolve_layout(inner_rect(960, 640), &assembly, &parts);
+        let wide = resolve_layout(inner_rect(1920, 640), &assembly, &parts);
+        let soil_right = |c: &CageLayout| {
+            c.floors
+                .iter()
+                .filter(|f| f.id.starts_with("soil01:"))
+                .map(|f| f.right())
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
+        let wood_left = |c: &CageLayout| {
+            c.floors
+                .iter()
+                .filter(|f| f.id.starts_with("wood1:"))
+                .map(|f| f.x)
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!(
+            wood_left(&narrow) < soil_right(&narrow),
+            "default width keeps left/right overlapping"
+        );
+        assert!(
+            wood_left(&wide) > soil_right(&wide) + 8.0,
+            "wide cage opens a gap between left and right walk"
+        );
+        let span = |c: &CageLayout| {
+            let lo = c.floors.iter().map(|f| f.x).fold(f64::INFINITY, f64::min);
+            let hi = c.floors.iter().map(|f| f.right()).fold(f64::NEG_INFINITY, f64::max);
+            hi - lo
+        };
+        assert!(span(&wide) > span(&narrow) + 50.0);
     }
 
     #[test]
     fn floors_stay_inside_inner_after_resize() {
+        let parts = load_part_catalog();
         let inner = inner_rect(480, 320);
-        let cage = resolve_layout(inner, &LayoutConfig::default());
+        let cage = resolve_layout(inner, &LayoutConfig::default(), &parts);
         let x1 = (inner.x + inner.w) as f64;
         let y1 = (inner.y + inner.h) as f64;
         for f in &cage.floors {
-            assert!(f.x >= inner.x as f64 - 0.01);
-            assert!(f.right() <= x1 + 0.01);
-            assert!(f.y_left.min(f.y_right) >= inner.y as f64 - 0.01);
-            assert!(f.y_left.max(f.y_right) <= y1 + 0.01);
+            assert!(f.x >= inner.x as f64 - 0.5);
+            assert!(f.right() <= x1 + 0.5);
+            assert!(f.y_left.min(f.y_right) <= y1 + 80.0);
         }
         assert!(cage.waterline > inner.y as f64);
         assert!(cage.waterline < y1);
     }
 
     #[test]
-    fn zero_affinity_cannot_use_basin_or_past_waterline() {
+    fn zero_affinity_cannot_stand_on_walk_below_waterline() {
         let cage = default_cage();
-        let basin = cage.floors.iter().find(|f| f.id == "basin").unwrap();
-        assert!(walk_range(basin, 0.0, cage.waterline, 40.0).is_none());
-        let ramp = cage.floors.iter().find(|f| f.id == "ramp").unwrap();
-        let (lo, hi) = walk_range(ramp, 0.0, cage.waterline, 40.0).expect("emerged ramp");
-        assert!(ramp.walk_y(hi) <= cage.waterline + 4.0);
-        assert!(ramp.walk_y(lo) < cage.waterline);
-        let bank = cage.floors.iter().find(|f| f.id == "bank").unwrap();
-        assert!(walk_range(bank, 0.0, cage.waterline, 40.0).is_some());
+        let submerged: Vec<_> = cage
+            .floors
+            .iter()
+            .filter(|f| f.y_left.min(f.y_right) > cage.waterline + 1.0)
+            .collect();
+        assert!(!submerged.is_empty(), "wood taper should dip under water");
+        for f in &submerged {
+            assert!(walk_range(f, 0.0, cage.waterline, 4.0).is_none());
+            assert!(walk_range(f, 0.5, cage.waterline, 4.0).is_some());
+        }
+        let emerged = cage
+            .floors
+            .iter()
+            .find(|f| walk_range(f, 0.0, cage.waterline, 40.0).is_some())
+            .expect("soil bank should stay emerged");
+        assert!(emerged.id.starts_with("soil01:"));
     }
 
     #[test]
-    fn turtle_can_use_basin() {
+    fn turtle_prefers_lower_walk() {
         let cage = default_cage();
-        let basin = cage.floors.iter().find(|f| f.id == "basin").unwrap();
-        assert!(walk_range(basin, 0.5, cage.waterline, 40.0).is_some());
-        let id = default_floor_id(&cage.floors, 0.5, cage.waterline, 40.0);
-        assert_eq!(id, "basin");
         let land_id = default_floor_id(&cage.floors, 0.0, cage.waterline, 40.0);
-        assert_eq!(land_id, "bank");
+        let wet_id = default_floor_id(&cage.floors, 0.5, cage.waterline, 40.0);
+        let land = cage.floors.iter().find(|f| f.id == land_id).unwrap();
+        let wet = cage.floors.iter().find(|f| f.id == wet_id).unwrap();
+        let land_y = (land.y_left + land.y_right) * 0.5;
+        let wet_y = (wet.y_left + wet.y_right) * 0.5;
+        assert!(land_y <= wet_y + 1.0);
     }
 
     #[test]
     fn clamp_pins_y_to_floor_surface() {
         let cage = default_cage();
-        let mut floor_id = "bank".to_string();
-        let (x, y) = clamp_vivi_pos(100.0, &mut floor_id, &cage.floors, 0.0, cage.waterline, 40.0);
-        let bank = cage.floors.iter().find(|f| f.id == "bank").unwrap();
-        assert_eq!(floor_id, "bank");
-        assert!((y - bank.walk_y(x)).abs() < 0.01);
-        let (lo, hi) = walk_range(bank, 0.0, cage.waterline, 40.0).unwrap();
+        let mut floor_id = default_floor_id(&cage.floors, 0.0, cage.waterline, 40.0);
+        let floor = cage.floors.iter().find(|f| f.id == floor_id).unwrap();
+        let (x, y) = clamp_vivi_pos(
+            floor.x + floor.w * 0.5,
+            &mut floor_id,
+            &cage.floors,
+            &cage.blocked,
+            0.0,
+            cage.waterline,
+            40.0,
+        );
+        assert_eq!(floor_id, floor.id);
+        assert!((y - floor.walk_y(x)).abs() < 0.01);
+        let (lo, hi) = walk_range(floor, 0.0, cage.waterline, 40.0).unwrap();
         assert!(x >= lo - 0.01 && x <= hi + 0.01);
     }
 
     #[test]
-    fn ramp_walk_y_interpolates() {
+    fn walk_y_interpolates_along_segment() {
         let cage = default_cage();
-        let ramp = cage.floors.iter().find(|f| f.id == "ramp").unwrap();
-        let mid = ramp.x + ramp.w * 0.5;
-        let y = ramp.walk_y(mid);
-        let expected = (ramp.y_left + ramp.y_right) * 0.5;
+        let seg = cage
+            .floors
+            .iter()
+            .find(|f| (f.y_right - f.y_left).abs() > 4.0)
+            .expect("wood has a sloped segment");
+        let mid = seg.x + seg.w * 0.5;
+        let y = seg.walk_y(mid);
+        let expected = (seg.y_left + seg.y_right) * 0.5;
         assert!((y - expected).abs() < 0.5);
     }
 
