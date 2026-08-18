@@ -196,8 +196,11 @@ struct CharState {
     #[allow(dead_code)]
     species: &'static str,
     affiliation: Affiliation,
-    /// Horizontal position in Vivarium logical pixels (foot center).
+    /// Foot position in Vivarium logical pixels (origin top-left, Y down).
     vivi_x: f64,
+    vivi_y: f64,
+    /// Walkable floor id inside the cage (`bank` / `ramp` / `basin`).
+    vivi_floor: String,
 }
 
 struct VivariumWindow {
@@ -211,7 +214,8 @@ struct VivariumWindow {
     layer_back: Option<vivarium::Framebuffer>,
     layer_glass: Option<vivarium::Framebuffer>,
     layers_look: Option<vivarium::LookConfig>,
-    last_blit: Vec<(i32, i32, u32, u32, String, bool)>,
+    layers_layout: Option<vivarium::LayoutConfig>,
+    last_blit: Vec<(i32, i32, u32, u32, String, bool, i16)>,
     /// Last CGS backdrop-blur radius actually applied (`None` = not yet).
     backdrop_blur: Option<i64>,
     interact: Option<ViviInteract>,
@@ -276,6 +280,7 @@ struct AppState {
     last_full_tick: Instant,
     vivarium: Option<VivariumWindow>,
     vivi_look: vivarium::LookLoader,
+    vivi_layout: vivarium::LayoutLoader,
 }
 
 thread_local! {
@@ -336,7 +341,12 @@ fn make_vivarium_panel(
     si: &ScreenInfo,
 ) -> (Retained<NSPanel>, Retained<NSImageView>) {
     let (ptw, pth) = cfg.point_size();
-    let fb = vivarium::compose(cfg, &vivarium::LookConfig::default(), &[]);
+    let fb = vivarium::compose(
+        cfg,
+        &vivarium::LookConfig::default(),
+        &vivarium::LayoutConfig::default(),
+        &[],
+    );
     let img = rgba_to_nsimage(&fb.rgba, fb.w, fb.h, ptw, pth);
     let iv = make_image_view(&img, mt);
     let panel = unsafe {
@@ -396,6 +406,7 @@ fn clamp_all_vivi_mates(app: &mut AppState) {
         return;
     };
     let inner = vivarium::inner_rect(logical_w, logical_h);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
     for ch in &mut app.chars {
         if ch.affiliation != Affiliation::Vivarium {
             continue;
@@ -404,7 +415,17 @@ fn clamp_all_vivi_mates(app: &mut AppState) {
         let (nsw, _) = ch.assets.native_size(&sr.name);
         let logical_sprite_w =
             vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
-        ch.vivi_x = vivarium::clamp_vivi_x(ch.vivi_x, inner, logical_sprite_w);
+        let wa = ch.assets.surfaces.water_affinity;
+        let (x, y) = vivarium::clamp_vivi_pos(
+            ch.vivi_x,
+            &mut ch.vivi_floor,
+            &cage.floors,
+            wa,
+            cage.waterline,
+            logical_sprite_w,
+        );
+        ch.vivi_x = x;
+        ch.vivi_y = y;
     }
 }
 
@@ -789,6 +810,12 @@ fn present_vivarium(app: &mut AppState) {
             }
         }
     }
+    if app.vivi_layout.reload_if_changed() {
+        if let Some(v) = app.vivarium.as_mut() {
+            v.dirty = true;
+            v.layer_back = None;
+        }
+    }
     if let Some(v) = app.vivarium.as_mut() {
         let backing = unsafe { v.panel.backingScaleFactor() }.max(1.0);
         if (v.cfg.backing_scale - backing).abs() > 0.01 {
@@ -804,7 +831,6 @@ fn present_vivarium(app: &mut AppState) {
         }
         return;
     }
-    let inner = vivarium::inner_rect(cfg.logical_w, cfg.logical_h);
     let (pw, ph) = cfg.pixel_size();
     let (ptw, pth) = cfg.point_size();
     let sx = pw as f64 / cfg.logical_w.max(1) as f64;
@@ -818,6 +844,9 @@ fn present_vivarium(app: &mut AppState) {
         }
     }
     let look = app.vivi_look.current.clone();
+    let layout = app.vivi_layout.current.clone();
+    let inner = vivarium::inner_rect(cfg.logical_w, cfg.logical_h);
+    let cage = vivarium::resolve_layout(inner, &layout);
     if let Some(v) = app.vivarium.as_mut() {
         apply_vivarium_backdrop_blur(v, look.blur);
     }
@@ -839,22 +868,32 @@ fn present_vivarium(app: &mut AppState) {
             cfg.display_scale,
             cfg.backing_scale,
         );
+        let angle = vivarium::floor_by_id(&cage.floors, &ch.vivi_floor)
+            .map(|f| f.angle_id)
+            .unwrap_or(vivarium::AngleId::Flat);
         let px = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
-        let py = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
-        blit_key.push((px, py, dw, dh, sr.name.to_string(), sr.mirror));
+        let py = (ch.vivi_y * sy - dh as f64).round() as i32;
+        blit_key.push((px, py, dw, dh, sr.name.to_string(), sr.mirror, angle.deg()));
     }
     let layers_ok = app.vivarium.as_ref().is_some_and(|v| {
         v.layer_back.is_some()
             && v.cage_size == (pw, ph)
             && v.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
+            && v.layers_layout.as_ref().is_some_and(|old| old == &layout)
     });
-    let skip = !app.vivarium.as_ref().map(|v| v.dirty).unwrap_or(true)
+    let water_anim = layout.water.alpha > 0;
+    let skip = !water_anim
+        && !app.vivarium.as_ref().map(|v| v.dirty).unwrap_or(true)
         && layers_ok
         && app.vivarium.as_ref().map(|v| v.last_blit == blit_key).unwrap_or(false);
     if skip {
         return;
     }
 
+    let t_sec = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
     let mut mate_pix = Vec::new();
     for ch in &app.chars {
         if ch.affiliation != Affiliation::Vivarium {
@@ -873,41 +912,67 @@ fn present_vivarium(app: &mut AppState) {
             cfg.display_scale,
             cfg.backing_scale,
         );
-        let Some((sw, sh, rgba)) = ch.assets.cage_rgba(&sr.name, sr.mirror, dw, dh) else {
+        let floor = vivarium::floor_by_id(&cage.floors, &ch.vivi_floor);
+        let angle = floor.map(|f| f.angle_id).unwrap_or(vivarium::AngleId::Flat);
+        let submerged = floor
+            .map(|f| f.submerged_at(ch.vivi_x, cage.waterline))
+            .unwrap_or(false);
+        let Some((sw, sh, rgba, fx, fy)) =
+            ch.assets.cage_rgba(&sr.name, sr.mirror, dw, dh, angle)
+        else {
             continue;
         };
-        let px = (ch.vivi_x * sx - dw as f64 / 2.0).round() as i32;
-        let py = ((inner.y + inner.h) as f64 * sy - dh as f64).round() as i32;
-        mate_pix.push((px, py, dw, dh, sw, sh, rgba));
+        let px = (ch.vivi_x * sx - fx).round() as i32;
+        let py = (ch.vivi_y * sy - fy).round() as i32;
+        mate_pix.push((px, py, sw, sh, rgba, submerged));
     }
-    let mates: Vec<vivarium::MateBlit<'_>> = mate_pix
+    let submerged: Vec<vivarium::MateBlit<'_>> = mate_pix
         .iter()
-        .map(|(x, y, w, h, sw, sh, rgba)| vivarium::MateBlit {
+        .filter(|(_, _, _, _, _, sub)| *sub)
+        .map(|(x, y, w, h, rgba, _)| vivarium::MateBlit {
             x: *x,
             y: *y,
             w: *w,
             h: *h,
-            src_w: *sw,
-            src_h: *sh,
+            src_w: *w,
+            src_h: *h,
+            rgba,
+        })
+        .collect();
+    let emerged: Vec<vivarium::MateBlit<'_>> = mate_pix
+        .iter()
+        .filter(|(_, _, _, _, _, sub)| !*sub)
+        .map(|(x, y, w, h, rgba, _)| vivarium::MateBlit {
+            x: *x,
+            y: *y,
+            w: *w,
+            h: *h,
+            src_w: *w,
+            src_h: *h,
             rgba,
         })
         .collect();
     if let Some(vivi) = app.vivarium.as_mut() {
         let rebuild = vivi.layer_back.is_none()
             || vivi.cage_size != (pw, ph)
-            || !vivi.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look));
+            || !vivi.layers_look.as_ref().is_some_and(|old| old.glass_eq(&look))
+            || !vivi.layers_layout.as_ref().is_some_and(|old| old == &layout);
         if rebuild {
-            let (back, glass) = vivarium::static_layers(&cfg, &look);
+            let (back, glass) = vivarium::static_layers(&cfg, &look, &layout);
             vivi.layer_back = Some(back);
             vivi.layer_glass = Some(glass);
             vivi.layers_look = Some(look.clone());
+            vivi.layers_layout = Some(layout.clone());
         }
         let fb = vivarium::composite_layers(
             &cfg,
             &look,
             vivi.layer_back.as_ref().unwrap(),
             vivi.layer_glass.as_ref().unwrap(),
-            &mates,
+            &layout,
+            &submerged,
+            &emerged,
+            t_sec,
         );
         let reused = vivi
             .cage_img
@@ -939,12 +1004,24 @@ fn present_vivarium(app: &mut AppState) {
 }
 
 fn put_one_in_cage(app: &mut AppState, idx: usize) {
-    let Some(vivi) = app.vivarium.as_ref() else { return };
-    let inner = vivarium::inner_rect(vivi.cfg.logical_w, vivi.cfg.logical_h);
+    let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
+        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
+    }) else {
+        return;
+    };
+    let inner = vivarium::inner_rect(logical_w, logical_h);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
     let Some(ch) = app.chars.get_mut(idx) else { return };
+    let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+    let (nsw, _) = ch.assets.native_size(&sr.name);
+    let sprite_w = vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
     ch.affiliation = Affiliation::Vivarium;
     ch.aquatic = None;
-    ch.vivi_x = inner.x as f64 + inner.w as f64 * 0.5;
+    let wa = ch.assets.surfaces.water_affinity;
+    let (id, x, y) = vivarium::spawn_on_floor(&cage.floors, wa, cage.waterline, sprite_w, 0.5);
+    ch.vivi_floor = id;
+    ch.vivi_x = x;
+    ch.vivi_y = y;
     ch.anim_state = State::LieIdle {
         head_front: false,
         elapsed: 0.0,
@@ -984,13 +1061,26 @@ fn ensure_pond_turtle_in_cage(app: &mut AppState, mt: MainThreadMarker, si: &Scr
 }
 
 fn put_all_in_cage(app: &mut AppState) {
-    let Some(vivi) = app.vivarium.as_ref() else { return };
-    let inner = vivarium::inner_rect(vivi.cfg.logical_w, vivi.cfg.logical_h);
+    let Some((logical_w, logical_h, sprite_size)) = app.vivarium.as_ref().map(|v| {
+        (v.cfg.logical_w, v.cfg.logical_h, v.cfg.sprite_size)
+    }) else {
+        return;
+    };
+    let inner = vivarium::inner_rect(logical_w, logical_h);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
     let n = app.chars.len().max(1) as f64;
     for (i, ch) in app.chars.iter_mut().enumerate() {
+        let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+        let (nsw, _) = ch.assets.native_size(&sr.name);
+        let sprite_w = vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
         ch.affiliation = Affiliation::Vivarium;
         ch.aquatic = None;
-        ch.vivi_x = inner.x as f64 + inner.w as f64 * (i as f64 + 0.5) / n;
+        let wa = ch.assets.surfaces.water_affinity;
+        let (id, x, y) =
+            vivarium::spawn_on_floor(&cage.floors, wa, cage.waterline, sprite_w, (i as f64 + 0.5) / n);
+        ch.vivi_floor = id;
+        ch.vivi_x = x;
+        ch.vivi_y = y;
         ch.anim_state = State::LieIdle {
             head_front: false,
             elapsed: 0.0,
@@ -1042,6 +1132,7 @@ fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
         return;
     }
     let inner = vivarium::inner_rect(logical_w, logical_h);
+    let cage = vivarium::resolve_layout(inner, &app.vivi_layout.current);
     let mut rng = rand::rngs::SmallRng::seed_from_u64(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1056,17 +1147,19 @@ fn tick_vivarium_chars(app: &mut AppState, dt: f64) {
         let (nsw, _) = ch.assets.native_size(&sr.name);
         let logical_sprite_w =
             vivarium::mate_logical_width(nsw, sprite_size, ch.assets.canonical_width);
-        let r1: f64 = rng.random();
-        let r2: f64 = rng.random();
-        vivarium::tick_rest(
+        let wa = ch.assets.surfaces.water_affinity;
+        vivarium::tick_cage_mate(
             &mut ch.anim_state,
             &mut ch.facing,
             &mut ch.vivi_x,
-            dt,
-            inner,
+            &mut ch.vivi_y,
+            &mut ch.vivi_floor,
+            wa,
+            &cage.floors,
+            cage.waterline,
             logical_sprite_w,
-            r1,
-            r2,
+            dt,
+            &mut rng,
         );
         let _ = crate::engine::advance_anim(&mut ch.anim_state, dt, &ch.effective_config, &ch.assets.animations);
     }
@@ -1628,6 +1721,8 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         },
         affiliation: Affiliation::Desktop,
         vivi_x: 0.0,
+        vivi_y: 0.0,
+        vivi_floor: String::new(),
     }
 }
 
@@ -2464,26 +2559,31 @@ fn tick_char(
     if let Some(ref mut aq) = ch.aquatic {
         // --- Water physics ---
         let wa = ch.assets.surfaces.water_affinity;
-        if let Surface::WindowInterior { win_id, .. } = ch.surface {
+        if let Surface::WindowInterior { win_id, ref mut x_local, ref mut y_local } = ch.surface {
             if let Some(&win) = macos_wm::find_win(win_id, wins) {
                 let mut rng = rand::rngs::SmallRng::seed_from_u64(
                     now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
                 );
-                physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, wa, sprite_size / 2.0, dt, &mut rng);
+                physics::tick_water(
+                    x_local,
+                    y_local,
+                    aq,
+                    physics::WaterBounds { x: 0.0, y: 0.0, w: win.w, h: win.h },
+                    &cfg.water,
+                    wa,
+                    sprite_size / 2.0,
+                    dt,
+                    &mut rng,
+                );
 
                 // Rest/wake transitions (resting only triggers near the bottom).
                 let was_resting = aq.resting;
                 if aq.resting {
                     let wake_p = (cfg.water.wake_prob_per_sec * dt).clamp(0.0, 1.0);
                     if rng.gen_bool(wake_p) { aq.resting = false; }
-                } else {
-                    let near_bottom = if let Surface::WindowInterior { y_local, .. } = ch.surface {
-                        y_local > win.h - cfg.water.thigmotaxis_margin
-                    } else { false };
-                    if near_bottom {
-                        let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
-                        if rng.gen_bool(rest_p) { aq.resting = true; }
-                    }
+                } else if *y_local > win.h - cfg.water.thigmotaxis_margin {
+                    let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
+                    if rng.gen_bool(rest_p) { aq.resting = true; }
                 }
                 // Flip animation state when rest/swim mode changes.
                 if was_resting != aq.resting {
@@ -3161,6 +3261,7 @@ pub fn run() {
             layer_back: None,
             layer_glass: None,
             layers_look: None,
+            layers_layout: None,
             last_blit: Vec::new(),
             backdrop_blur: None,
             interact: None,
@@ -3220,6 +3321,7 @@ pub fn run() {
             last_full_tick: Instant::now(),
             vivarium,
             vivi_look: vivarium::LookLoader::load(),
+            vivi_layout: vivarium::LayoutLoader::load(),
         });
     });
 
