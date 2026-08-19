@@ -2,9 +2,3 @@
 name = "soil01"
 allow_back = true
 allow_front = false
-
-[[walk]]
-points = [[120, 8], [440, 7], [1400, 7]]
-
-[[blocked]]
-points = [[120, 8], [1400, 7], [1480, 165], [40, 165]]

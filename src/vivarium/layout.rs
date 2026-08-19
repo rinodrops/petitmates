@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use super::occupancy;
 use super::{inner_rect, InnerRect, MIN_LOGICAL_H, MIN_LOGICAL_W, WALL_GLASS_W};
+
+pub use occupancy::{Occupancy, push_out_blocked};
 
 const BUILTIN_ASSEMBLY: &str = include_str!("../../assets/vivarium/assembly.toml");
 const SOIL_TOML: &str = include_str!("../../assets/vivarium/prop/soil01/part.toml");
@@ -53,7 +56,7 @@ pub enum FloorKind {
 }
 
 impl FloorKind {
-    fn from_angle(id: AngleId) -> Self {
+    pub(super) fn from_angle(id: AngleId) -> Self {
         match id {
             AngleId::Flat => Self::Flat,
             AngleId::Ramp30 => Self::Ramp,
@@ -90,26 +93,13 @@ impl Default for Layer {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-pub struct WalkPoly {
-    pub points: Vec<[f64; 2]>,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-pub struct BlockedPoly {
-    pub points: Vec<[f64; 2]>,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct PartToml {
+    #[serde(default)]
     name: String,
     #[serde(default = "default_true")]
     allow_back: bool,
     #[serde(default = "default_true")]
     allow_front: bool,
-    #[serde(default)]
-    walk: Vec<WalkPoly>,
-    #[serde(default)]
-    blocked: Vec<BlockedPoly>,
 }
 
 fn default_true() -> bool {
@@ -124,8 +114,6 @@ pub struct Part {
     pub name: String,
     pub allow_back: bool,
     pub allow_front: bool,
-    pub walk: Vec<WalkPoly>,
-    pub blocked: Vec<BlockedPoly>,
     pub img_w: u32,
     pub img_h: u32,
     pub rgba: Vec<u8>,
@@ -291,8 +279,6 @@ fn parse_part(id: &str, toml_text: &str, png: &[u8]) -> Option<Part> {
         },
         allow_back: spec.allow_back,
         allow_front: spec.allow_front,
-        walk: spec.walk,
-        blocked: spec.blocked,
         img_w,
         img_h,
         rgba,
@@ -352,6 +338,19 @@ impl Pose {
         let rx = dx * c - dy * s;
         let ry = dx * s + dy * c;
         (self.left + self.sw / 2.0 + rx, self.top + self.sh + ry)
+    }
+
+    pub fn cage_to_part(self, cx: f64, cy: f64) -> (f64, f64) {
+        let ang = self.angle_deg.to_radians();
+        let (c, s) = (ang.cos(), ang.sin());
+        let rx = cx - (self.left + self.sw / 2.0);
+        let ry = cy - (self.top + self.sh);
+        let dx = rx * c + ry * s;
+        let dy = -rx * s + ry * c;
+        let sx = dx + self.sw / 2.0;
+        let sy = dy + self.sh;
+        let scale = self.scale.max(1e-6);
+        (sx / scale, sy / scale)
     }
 }
 
@@ -470,31 +469,7 @@ fn prop_root() -> PathBuf {
     vivarium_dir().join("prop")
 }
 
-fn clip_walk_seg(
-    left: f64,
-    y_left: f64,
-    right: f64,
-    y_right: f64,
-    x0: f64,
-    x1: f64,
-) -> Option<(f64, f64, f64, f64)> {
-    let w = right - left;
-    if w < 1.0 {
-        return None;
-    }
-    let lo = left.max(x0);
-    let hi = right.min(x1);
-    if hi - lo < 2.0 {
-        return None;
-    }
-    let y_at = |x: f64| {
-        let t = ((x - left) / w).clamp(0.0, 1.0);
-        y_left + t * (y_right - y_left)
-    };
-    Some((lo, y_at(lo), hi, y_at(hi)))
-}
-
-/// Place instances, derive walk floors, and map blocked polygons into cage space.
+/// Place instances, derive occupancy blobs, and walk skylines.
 pub fn resolve_layout(
     inner: InnerRect,
     assembly: &AssemblyConfig,
@@ -502,9 +477,7 @@ pub fn resolve_layout(
 ) -> super::CageLayout {
     let inner_bottom = inner.y as f64 + inner.h as f64;
     let waterline = (inner_bottom - assembly.water.depth_px).max(inner.y as f64);
-    let mut floors = Vec::new();
     let mut placed = Vec::new();
-    let mut blocked = Vec::new();
     for (index, inst) in assembly.instances.iter().enumerate() {
         let Some(part) = parts.get(&inst.part) else {
             continue;
@@ -519,58 +492,9 @@ pub fn resolve_layout(
             layer: inst.layer,
             pose,
         });
-        for (wi, walk) in part.walk.iter().enumerate() {
-            if walk.points.len() < 2 {
-                continue;
-            }
-            for (si, pair) in walk.points.windows(2).enumerate() {
-                let (x0, y0) = pose.part_to_cage(pair[0][0], pair[0][1]);
-                let (x1, y1) = pose.part_to_cage(pair[1][0], pair[1][1]);
-                let (left, y_left, right, y_right) = if x1 >= x0 {
-                    (x0, y0, x1, y1)
-                } else {
-                    (x1, y1, x0, y0)
-                };
-                let ix0 = inner.x as f64;
-                let ix1 = (inner.x + inner.w) as f64;
-                let Some((left, y_left, right, y_right)) =
-                    clip_walk_seg(left, y_left, right, y_right, ix0, ix1)
-                else {
-                    continue;
-                };
-                let w = (right - left).max(1.0);
-                if w < 2.0 {
-                    continue;
-                }
-                let angle_id = snap_angle_id(y_left, y_right, w);
-                floors.push(super::Floor {
-                    id: format!("{}:{index}:{wi}:{si}", inst.part),
-                    kind: FloorKind::from_angle(angle_id),
-                    x: left,
-                    w,
-                    y_left,
-                    y_right,
-                    vis_h: 8.0,
-                    fill: String::new(),
-                    alpha: 0,
-                    angle_id,
-                });
-            }
-        }
-        for poly in &part.blocked {
-            let pts: Vec<[f64; 2]> = poly
-                .points
-                .iter()
-                .map(|p| {
-                    let (x, y) = pose.part_to_cage(p[0], p[1]);
-                    [x, y]
-                })
-                .collect();
-            if pts.len() >= 3 {
-                blocked.push(pts);
-            }
-        }
     }
+    let occ = occupancy::build_occupancy(inner, &placed, parts);
+    let mut floors = occupancy::floors_from_occupancy(&occ);
     if floors.is_empty() {
         let y = inner_bottom;
         floors.push(super::Floor {
@@ -593,56 +517,8 @@ pub fn resolve_layout(
         water_alpha: assembly.water.alpha,
         inner,
         placed,
-        blocked,
+        occupancy: occ,
     }
-}
-
-pub fn point_in_poly(x: f64, y: f64, poly: &[[f64; 2]]) -> bool {
-    if poly.len() < 3 {
-        return false;
-    }
-    let mut inside = false;
-    let mut j = poly.len() - 1;
-    for i in 0..poly.len() {
-        let (xi, yi) = (poly[i][0], poly[i][1]);
-        let (xj, yj) = (poly[j][0], poly[j][1]);
-        let intersect = ((yi > y) != (yj > y))
-            && (x < (xj - xi) * (y - yi) / (yj - yi + f64::EPSILON) + xi);
-        if intersect {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
-/// If the foot is inside a blocked polygon, push `x` to the nearest edge.
-pub fn push_out_blocked(x: f64, y: f64, blocked: &[Vec<[f64; 2]>]) -> f64 {
-    let mut nx = x;
-    for poly in blocked {
-        if !point_in_poly(nx, y, poly) {
-            continue;
-        }
-        let mut best: Option<f64> = None;
-        for delta in 1..400 {
-            let d = delta as f64;
-            for cand in [nx - d, nx + d] {
-                if !point_in_poly(cand, y, poly) {
-                    let dist = (cand - x).abs();
-                    if best.is_none_or(|b| dist < (b - x).abs()) {
-                        best = Some(cand);
-                    }
-                }
-            }
-            if best.is_some() {
-                break;
-            }
-        }
-        if let Some(c) = best {
-            nx = c;
-        }
-    }
-    nx
 }
 
 #[cfg(test)]
@@ -659,24 +535,12 @@ mod tests {
     }
 
     #[test]
-    fn builtin_parts_parse_and_walk_stays_in_image() {
+    fn builtin_parts_parse() {
         let parts = load_part_catalog();
         for id in ["soil01", "wood1"] {
             let part = parts.get(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(part.img_w > 0 && part.img_h > 0);
-            assert!(!part.walk.is_empty(), "{id} needs a walk polyline");
-            for walk in &part.walk {
-                for [x, y] in &walk.points {
-                    assert!(*x >= 0.0 && *x <= part.img_w as f64, "{id} walk x {x}");
-                    assert!(*y >= 0.0 && *y <= part.img_h as f64, "{id} walk y {y}");
-                }
-            }
-            for poly in &part.blocked {
-                for [x, y] in &poly.points {
-                    assert!(*x >= 0.0 && *x <= part.img_w as f64 + 1.0, "{id} blocked x {x}");
-                    assert!(*y >= 0.0 && *y <= part.img_h as f64 + 1.0, "{id} blocked y {y}");
-                }
-            }
+            assert!(!part.rgba.is_empty());
         }
     }
 }
