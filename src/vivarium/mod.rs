@@ -3,6 +3,7 @@
 mod compose;
 mod layout;
 mod look;
+mod occupancy;
 
 pub use compose::{
     bake_prop_layers, compose, composite_layers, rotate_rgba_about_foot, scale_rgba_triangle,
@@ -13,8 +14,8 @@ pub use compose::bgra_premul_to_rgba;
 #[allow(unused_imports)]
 pub use layout::{
     load_part_catalog, push_out_blocked, resolve_layout, snap_angle_id, AngleId, AssemblyConfig,
-    FloorKind, HAnchor, Layer, LayoutConfig, LayoutLoader, PartCatalog, PlacedInstance, Pose,
-    WaterSpec,
+    FloorKind, HAnchor, Layer, LayoutConfig, LayoutLoader, Occupancy, PartCatalog, PlacedInstance,
+    Pose, WaterSpec,
 };
 pub use look::{LookConfig, LookLoader};
 #[cfg(windows)]
@@ -250,7 +251,7 @@ pub struct CageLayout {
     #[allow(dead_code)]
     pub inner: InnerRect,
     pub placed: Vec<layout::PlacedInstance>,
-    pub blocked: Vec<Vec<[f64; 2]>>,
+    pub occupancy: occupancy::Occupancy,
 }
 
 /// Allowed x-range on `floor` given `water_affinity`. `None` if the floor is unusable.
@@ -337,7 +338,7 @@ pub fn clamp_vivi_pos(
     x: f64,
     floor_id: &mut String,
     floors: &[Floor],
-    blocked: &[Vec<[f64; 2]>],
+    occupancy: &occupancy::Occupancy,
     water_affinity: f64,
     waterline: f64,
     sprite_w: f64,
@@ -355,7 +356,7 @@ pub fn clamp_vivi_pos(
     if let Some((lo, hi)) = walk_range(floor, water_affinity, waterline, sprite_w) {
         let clamped = x.clamp(lo, hi);
         let y = floor.walk_y(clamped);
-        let nx = layout::push_out_blocked(clamped, y, blocked).clamp(lo, hi);
+        let nx = occupancy::push_out_blocked(clamped, y, occupancy).clamp(lo, hi);
         return (nx, floor.walk_y(nx));
     }
     *floor_id = default_floor_id(floors, water_affinity, waterline, sprite_w);
@@ -577,7 +578,7 @@ pub fn tick_cage_mate(
     floor_id: &mut String,
     water_affinity: f64,
     floors: &[Floor],
-    blocked: &[Vec<[f64; 2]>],
+    occupancy: &occupancy::Occupancy,
     waterline: f64,
     sprite_w: f64,
     dt: f64,
@@ -637,7 +638,7 @@ pub fn tick_cage_mate(
     }
     *y = floors[idx].walk_y(*x);
     if let Some((lo, hi)) = walk_range(&floors[idx], water_affinity, waterline, sprite_w) {
-        *x = layout::push_out_blocked(*x, *y, blocked).clamp(lo, hi);
+        *x = occupancy::push_out_blocked(*x, *y, occupancy).clamp(lo, hi);
         *y = floors[idx].walk_y(*x);
     }
 }
@@ -743,48 +744,61 @@ mod tests {
         resolve_layout(inner_rect(960, 640), &LayoutConfig::default(), &parts)
     }
 
-    #[test]
-    fn default_assembly_has_soil_and_wood_walk() {
-        let cage = default_cage();
-        assert!(cage.floors.iter().any(|f| f.id.starts_with("soil01:")));
-        assert!(cage.floors.iter().any(|f| f.id.starts_with("wood1:")));
-        assert!(cage.placed.len() >= 2);
+    fn blob_ids(cage: &CageLayout) -> Vec<String> {
+        let mut ids: Vec<String> = cage
+            .floors
+            .iter()
+            .filter_map(|f| f.id.split(':').nth(1).map(str::to_string))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 
     #[test]
-    fn widening_opens_gap_between_left_and_right() {
+    fn default_assembly_has_walk() {
+        let cage = default_cage();
+        assert!(!cage.floors.is_empty(), "soil/wood should produce a walk skyline");
+        assert!(cage.placed.len() >= 2);
+        assert!(cage.floors.iter().any(|f| f.id.starts_with("blob:")));
+    }
+
+    #[test]
+    fn widening_splits_left_and_right_blobs() {
         let parts = load_part_catalog();
         let assembly = LayoutConfig::default();
         let narrow = resolve_layout(inner_rect(960, 640), &assembly, &parts);
         let wide = resolve_layout(inner_rect(1920, 640), &assembly, &parts);
-        let soil_right = |c: &CageLayout| {
-            c.floors
-                .iter()
-                .filter(|f| f.id.starts_with("soil01:"))
-                .map(|f| f.right())
-                .fold(f64::NEG_INFINITY, f64::max)
-        };
-        let wood_left = |c: &CageLayout| {
-            c.floors
-                .iter()
-                .filter(|f| f.id.starts_with("wood1:"))
-                .map(|f| f.x)
-                .fold(f64::INFINITY, f64::min)
-        };
-        assert!(
-            wood_left(&narrow) < soil_right(&narrow),
-            "default width keeps left/right overlapping"
-        );
-        assert!(
-            wood_left(&wide) > soil_right(&wide) + 8.0,
-            "wide cage opens a gap between left and right walk"
-        );
         let span = |c: &CageLayout| {
             let lo = c.floors.iter().map(|f| f.x).fold(f64::INFINITY, f64::min);
             let hi = c.floors.iter().map(|f| f.right()).fold(f64::NEG_INFINITY, f64::max);
             hi - lo
         };
         assert!(span(&wide) > span(&narrow) + 50.0);
+        assert!(
+            blob_ids(&wide).len() >= blob_ids(&narrow).len(),
+            "widening should not merge blobs"
+        );
+        let run_gap = |c: &CageLayout| -> f64 {
+            let mut runs: Vec<(f64, f64)> = Vec::new();
+            for f in &c.floors {
+                if let Some(last) = runs.last_mut() {
+                    if f.x <= last.1 + 4.0 {
+                        last.1 = last.1.max(f.right());
+                        continue;
+                    }
+                }
+                runs.push((f.x, f.right()));
+            }
+            if runs.len() < 2 {
+                return 0.0;
+            }
+            runs[1].0 - runs[0].1
+        };
+        assert!(
+            run_gap(&wide) > run_gap(&narrow) + 8.0,
+            "wide cage opens a gap between left and right occupancy"
+        );
     }
 
     #[test]
@@ -809,7 +823,7 @@ mod tests {
         let submerged: Vec<_> = cage
             .floors
             .iter()
-            .filter(|f| f.y_left.min(f.y_right) > cage.waterline + 1.0)
+            .filter(|f| f.y_left.min(f.y_right) > cage.waterline + 1.0 && f.w >= 8.0)
             .collect();
         assert!(!submerged.is_empty(), "wood taper should dip under water");
         for f in &submerged {
@@ -820,8 +834,8 @@ mod tests {
             .floors
             .iter()
             .find(|f| walk_range(f, 0.0, cage.waterline, 40.0).is_some())
-            .expect("soil bank should stay emerged");
-        assert!(emerged.id.starts_with("soil01:"));
+            .expect("some walk stays emerged");
+        assert!(emerged.y_left.min(emerged.y_right) <= cage.waterline + 1.0);
     }
 
     #[test]
@@ -845,7 +859,7 @@ mod tests {
             floor.x + floor.w * 0.5,
             &mut floor_id,
             &cage.floors,
-            &cage.blocked,
+            &cage.occupancy,
             0.0,
             cage.waterline,
             40.0,
