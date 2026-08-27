@@ -1,6 +1,6 @@
 //! Logical occupancy from posed prop sprites: hole-filled blobs and walk skylines.
 
-use super::layout::{snap_angle_id, Part, PartCatalog, PlacedInstance, Pose};
+use super::layout::{Part, PartCatalog, PlacedInstance, Pose, snap_angle_id};
 use super::{Floor, FloorKind, InnerRect};
 
 /// Opaque enough to count as solid (skip AA fringe).
@@ -136,28 +136,52 @@ pub fn build_occupancy(
 }
 
 fn blit_part(raw: &mut [u8], w: u32, h: u32, inner: InnerRect, pose: &Pose, part: &Part) {
+    let dest_w = part.dest_w.max(1) as f64;
+    let dest_h = part.dest_h.max(1) as f64;
     let corners = [
         pose.part_to_cage(0.0, 0.0),
-        pose.part_to_cage(part.img_w as f64, 0.0),
-        pose.part_to_cage(part.img_w as f64, part.img_h as f64),
-        pose.part_to_cage(0.0, part.img_h as f64),
+        pose.part_to_cage(dest_w, 0.0),
+        pose.part_to_cage(dest_w, dest_h),
+        pose.part_to_cage(0.0, dest_h),
     ];
-    let min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).floor() as i32 - 1;
-    let max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).ceil() as i32 + 1;
-    let min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min).floor() as i32 - 1;
-    let max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max).ceil() as i32 + 1;
+    let min_x = corners
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::INFINITY, f64::min)
+        .floor() as i32
+        - 1;
+    let max_x = corners
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::NEG_INFINITY, f64::max)
+        .ceil() as i32
+        + 1;
+    let min_y = corners
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::INFINITY, f64::min)
+        .floor() as i32
+        - 1;
+    let max_y = corners
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::NEG_INFINITY, f64::max)
+        .ceil() as i32
+        + 1;
     let x0 = inner.x as i32;
     let y0 = inner.y as i32;
     let x1 = x0 + w as i32;
     let y1 = y0 + h as i32;
+    let sx = part.img_w as f64 / dest_w;
+    let sy = part.img_h as f64 / dest_h;
     for cy in min_y.max(y0)..max_y.min(y1) {
         for cx in min_x.max(x0)..max_x.min(x1) {
             let (px, py) = pose.cage_to_part(cx as f64 + 0.5, cy as f64 + 0.5);
-            if px < 0.0 || py < 0.0 {
+            if px < 0.0 || py < 0.0 || px >= dest_w || py >= dest_h {
                 continue;
             }
-            let ix = px.floor() as i64;
-            let iy = py.floor() as i64;
+            let ix = (px * sx).floor() as i64;
+            let iy = (py * sy).floor() as i64;
             if ix < 0 || iy < 0 || ix >= part.img_w as i64 || iy >= part.img_h as i64 {
                 continue;
             }
@@ -397,7 +421,7 @@ fn perp_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 mod tests {
     use super::*;
     use crate::vivarium::layout::{HAnchor, Instance, Layer, Part};
-    use crate::vivarium::{inner_rect, resolve_layout, AssemblyConfig, WaterSpec};
+    use crate::vivarium::{AssemblyConfig, WaterSpec, inner_rect, resolve_layout};
     use std::collections::HashMap;
 
     fn solid(w: u32, h: u32) -> Vec<u8> {
@@ -425,6 +449,8 @@ mod tests {
             name: id.into(),
             allow_back: true,
             allow_front: true,
+            dest_w: w,
+            dest_h: h,
             img_w: w,
             img_h: h,
             rgba,
@@ -449,7 +475,10 @@ mod tests {
             h: 20,
         };
         let mut parts = PartCatalog::new();
-        parts.insert("ring".into(), part("ring", 12, 12, donut(12, 12, (4, 4, 8, 8))));
+        parts.insert(
+            "ring".into(),
+            part("ring", 12, 12, donut(12, 12, (4, 4, 8, 8))),
+        );
         let pose = Pose {
             left: 4.0,
             top: 4.0,
@@ -459,7 +488,10 @@ mod tests {
             scale: 1.0,
         };
         let occ = build_occupancy(inner, &[placed("ring", pose)], &parts);
-        assert!(occ.filled_at(10.0, 10.0), "hole fill should occupy the donut interior");
+        assert!(
+            occ.filled_at(10.0, 10.0),
+            "hole fill should occupy the donut interior"
+        );
         assert!(occ.blocks_foot(10.0, 10.0));
         let top = occ.skyline_y(10.0).unwrap();
         assert!(!occ.blocks_foot(10.0, top));
@@ -492,11 +524,7 @@ mod tests {
             angle_deg: 0.0,
             scale: 1.0,
         };
-        let occ = build_occupancy(
-            inner,
-            &[placed("a", a), placed("b", b)],
-            &parts,
-        );
+        let occ = build_occupancy(inner, &[placed("a", a), placed("b", b)], &parts);
         assert!(occ.filled_at(6.0, 8.0));
         assert!(occ.filled_at(28.0, 8.0));
         assert!(!occ.filled_at(16.0, 8.0), "gap between blobs stays open");
@@ -536,15 +564,17 @@ mod tests {
             angle_deg: 0.0,
             scale: 1.0,
         };
-        let occ = build_occupancy(
-            inner,
-            &[placed("a", a), placed("b", b)],
-            &parts,
-        );
+        let occ = build_occupancy(inner, &[placed("a", a), placed("b", b)], &parts);
         assert!(occ.filled_at(12.0, 8.0));
         let floors = floors_from_occupancy(&occ);
-        let ids: Vec<_> = floors.iter().map(|f| f.id.split(':').nth(1).unwrap()).collect();
-        assert!(ids.iter().all(|b| *b == "0"), "overlap is one connected blob");
+        let ids: Vec<_> = floors
+            .iter()
+            .map(|f| f.id.split(':').nth(1).unwrap())
+            .collect();
+        assert!(
+            ids.iter().all(|b| *b == "0"),
+            "overlap is one connected blob"
+        );
     }
 
     #[test]
@@ -585,5 +615,34 @@ mod tests {
         let mid_x = inner.x as f64 + 30.0;
         let foot_y = cage.floors[0].walk_y(mid_x) + 4.0;
         assert!(cage.occupancy.blocks_foot(mid_x, foot_y));
+    }
+
+    #[test]
+    fn hidpi_png_occupies_dest_width_not_png_width() {
+        let inner = InnerRect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 16,
+        };
+        let mut p = part("hi", 16, 8, solid(16, 8));
+        p.dest_w = 8;
+        p.dest_h = 4;
+        let mut parts = PartCatalog::new();
+        parts.insert("hi".into(), p);
+        let pose = Pose {
+            left: 4.0,
+            top: 8.0,
+            sw: 8.0,
+            sh: 4.0,
+            angle_deg: 0.0,
+            scale: 1.0,
+        };
+        let occ = build_occupancy(inner, &[placed("hi", pose)], &parts);
+        assert!(occ.filled_at(8.0, 10.0), "dest box should be occupied");
+        assert!(
+            !occ.filled_at(20.0, 10.0),
+            "PNG width must not leak past dest"
+        );
     }
 }

@@ -1,4 +1,7 @@
 # Substrate bank. Origin is PNG top-left, Y down.
+# dest_* is cage-logical px at instance scale 1.0. sprite.png is dest × 2.
 name = "soil01"
 allow_back = true
 allow_front = false
+dest_w = 837
+dest_h = 94

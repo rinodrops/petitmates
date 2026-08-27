@@ -1,4 +1,7 @@
 # Driftwood. Origin is PNG top-left, Y down.
+# dest_* is cage-logical px at instance scale 1.0. sprite.png is dest × 2.
 name = "wood1"
 allow_back = true
 allow_front = true
+dest_w = 669
+dest_h = 133
