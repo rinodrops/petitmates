@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::occupancy;
-use super::{inner_rect, InnerRect, MIN_LOGICAL_H, MIN_LOGICAL_W, WALL_GLASS_W};
+use super::{InnerRect, MIN_LOGICAL_H, MIN_LOGICAL_W, WALL_GLASS_W, inner_rect};
 
 pub use occupancy::{Occupancy, push_out_blocked};
 
@@ -100,6 +100,11 @@ struct PartToml {
     allow_back: bool,
     #[serde(default = "default_true")]
     allow_front: bool,
+    /// Cage-logical px at instance scale 1.0. 0 = PNG size (1x legacy).
+    #[serde(default)]
+    dest_w: u32,
+    #[serde(default)]
+    dest_h: u32,
 }
 
 fn default_true() -> bool {
@@ -114,6 +119,9 @@ pub struct Part {
     pub name: String,
     pub allow_back: bool,
     pub allow_front: bool,
+    /// Cage-logical size at instance scale 1.0.
+    pub dest_w: u32,
+    pub dest_h: u32,
     pub img_w: u32,
     pub img_h: u32,
     pub rgba: Vec<u8>,
@@ -200,7 +208,7 @@ fn hardcoded_assembly() -> AssemblyConfig {
                 x: 0.0,
                 y: 0.0,
                 angle_deg: 0.0,
-                scale: 0.55,
+                scale: 1.0,
                 h_anchor: HAnchor::Left,
                 layer: Layer::Back,
             },
@@ -209,7 +217,7 @@ fn hardcoded_assembly() -> AssemblyConfig {
                 x: 0.0,
                 y: 0.0,
                 angle_deg: 0.0,
-                scale: 0.5,
+                scale: 1.0,
                 h_anchor: HAnchor::Right,
                 layer: Layer::Back,
             },
@@ -235,7 +243,7 @@ impl AssemblyConfig {
             let Some(part) = parts.get(&inst.part) else {
                 continue;
             };
-            let sw = part.img_w as f64 * inst.scale;
+            let sw = part.dest_w as f64 * inst.scale;
             match inst.h_anchor {
                 HAnchor::Left => left_span = left_span.max(inst.x + sw),
                 HAnchor::Right => right_span = right_span.max(inst.x + sw),
@@ -270,6 +278,8 @@ fn decode_rgba(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 fn parse_part(id: &str, toml_text: &str, png: &[u8]) -> Option<Part> {
     let spec: PartToml = toml::from_str(toml_text).ok()?;
     let (img_w, img_h, rgba) = decode_rgba(png)?;
+    let dest_w = if spec.dest_w > 0 { spec.dest_w } else { img_w };
+    let dest_h = if spec.dest_h > 0 { spec.dest_h } else { img_h };
     Some(Part {
         id: id.to_string(),
         name: if spec.name.is_empty() {
@@ -279,6 +289,8 @@ fn parse_part(id: &str, toml_text: &str, png: &[u8]) -> Option<Part> {
         },
         allow_back: spec.allow_back,
         allow_front: spec.allow_front,
+        dest_w,
+        dest_h,
         img_w,
         img_h,
         rgba,
@@ -364,8 +376,8 @@ pub struct PlacedInstance {
 }
 
 pub fn instance_pose(inner: InnerRect, inst: &Instance, part: &Part) -> Pose {
-    let sw = part.img_w as f64 * inst.scale;
-    let sh = part.img_h as f64 * inst.scale;
+    let sw = part.dest_w as f64 * inst.scale;
+    let sh = part.dest_h as f64 * inst.scale;
     let bottom = inner.y as f64 + inner.h as f64 - inst.y;
     let top = bottom - sh;
     let left = match inst.h_anchor {
@@ -436,10 +448,7 @@ fn vivarium_dir() -> PathBuf {
     }
     if let Some(exe) = std::env::current_exe().ok() {
         if let Some(dir) = exe.parent() {
-            let bundled = dir
-                .join("../Resources/assets/vivarium")
-                .canonicalize()
-                .ok();
+            let bundled = dir.join("../Resources/assets/vivarium").canonicalize().ok();
             if let Some(p) = bundled.filter(|p| p.exists()) {
                 return p;
             }
@@ -523,24 +532,51 @@ pub fn resolve_layout(
 
 #[cfg(test)]
 mod tests {
-        use super::*;
+    use super::*;
 
     #[test]
     fn builtin_assembly_toml_parses() {
         let cfg = parse_assembly(BUILTIN_ASSEMBLY).expect("assets/vivarium/assembly.toml");
-        assert!(cfg.water.alpha <= 80, "water should stay almost transparent");
+        assert!(
+            cfg.water.alpha <= 80,
+            "water should stay almost transparent"
+        );
         assert_eq!(cfg.instances.len(), 2);
-        assert!(cfg.instances.iter().any(|i| i.part == "soil01" && i.h_anchor == HAnchor::Left));
-        assert!(cfg.instances.iter().any(|i| i.part == "wood1" && i.h_anchor == HAnchor::Right));
+        assert!(
+            cfg.instances
+                .iter()
+                .any(|i| i.part == "soil01" && i.h_anchor == HAnchor::Left)
+        );
+        assert!(
+            cfg.instances
+                .iter()
+                .any(|i| i.part == "wood1" && i.h_anchor == HAnchor::Right)
+        );
     }
 
     #[test]
     fn builtin_parts_parse() {
         let parts = load_part_catalog();
-        for id in ["soil01", "wood1"] {
-            let part = parts.get(id).unwrap_or_else(|| panic!("missing {id}"));
-            assert!(part.img_w > 0 && part.img_h > 0);
-            assert!(!part.rgba.is_empty());
-        }
+        let soil = parts.get("soil01").expect("missing soil01");
+        assert_eq!(soil.dest_w, 837);
+        assert_eq!(soil.dest_h, 94);
+        assert_eq!(soil.img_w, soil.dest_w * 2);
+        assert_eq!(soil.img_h, soil.dest_h * 2);
+        let wood = parts.get("wood1").expect("missing wood1");
+        assert_eq!(wood.dest_w, 669);
+        assert_eq!(wood.dest_h, 133);
+        assert_eq!(wood.img_w, wood.dest_w * 2);
+        assert_eq!(wood.img_h, wood.dest_h * 2);
+    }
+
+    #[test]
+    fn omitted_dest_defaults_to_png_size() {
+        let part = parse_part("x", "name = \"x\"\n", SOIL_PNG).unwrap();
+        assert_eq!(part.dest_w, part.img_w);
+        assert_eq!(part.dest_h, part.img_h);
+        let part = parse_part("x", "name = \"x\"\ndest_w = 40\ndest_h = 20\n", SOIL_PNG).unwrap();
+        assert_eq!(part.dest_w, 40);
+        assert_eq!(part.dest_h, 20);
+        assert!(part.img_w > 40);
     }
 }

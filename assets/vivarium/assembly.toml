@@ -12,7 +12,7 @@ part = "soil01"
 x = 0.0
 y = 0.0
 angle_deg = 0.0
-scale = 0.55
+scale = 1.0
 h_anchor = "left"
 layer = "back"
 
@@ -21,6 +21,6 @@ part = "wood1"
 x = 0.0
 y = 0.0
 angle_deg = 0.0
-scale = 0.5
+scale = 1.0
 h_anchor = "right"
 layer = "back"
