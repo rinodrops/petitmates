@@ -65,9 +65,10 @@ fn surface_host_win_id(surface: &Surface) -> Option<u32> {
 ///
 /// - **IMMEDIATE** (1 tick): any character is in a dynamic state
 ///   (Falling, JumpRunup) — need fresh surface data every tick.
-/// - **HIGH_FREQ** (15 ticks ≈ 1.5 s): a character is on a window surface
+/// - **HIGH_FREQ** (5 ticks): a character is on a window surface
 ///   or within `attract_dist` of one — keep data reasonably fresh while
-///   window dragging / scrolling occurs.
+///   window dragging / scrolling occurs. Wall-clock time depends on the
+///   configured tick rate (about 170 ms at 30 fps).
 /// - **LOW_FREQ** (150 ticks ≈ 15 s): all characters are on the Desktop
 ///   with no windows nearby — window positions rarely change in this state.
 struct WinListCache {
@@ -96,7 +97,7 @@ fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f6
             return WIN_CACHE_IMMEDIATE;
         }
         // Characters on a window surface need high-frequency refresh so that
-        // the rendered position tracks window movement within ~1.5 s.
+        // the rendered position tracks window movement within a few ticks.
         if surface_host_win_id(&ch.surface).is_some() {
             return WIN_CACHE_HIGH_FREQ;
         }
@@ -121,7 +122,10 @@ fn next_refresh_interval(chars: &[CharState], wins: &[WinInfo], attract_dist: f6
 // ---- Per-character state ----
 
 /// Snapshot of the values that were passed to Cocoa last tick.
-/// Used to skip redundant `swap_sprite` / `setFrameOrigin` / `orderWindow` calls.
+/// Used to skip redundant `swap_sprite` / `setFrameOrigin` calls.
+/// `orderWindow` is not skipped while the character is on a window: a key
+/// window can climb back in front of a non-activating panel without changing
+/// `z_host_id` / `z_above_host_id`.
 #[derive(PartialEq)]
 struct RenderedState {
     sprite_name:      String,
@@ -131,7 +135,8 @@ struct RenderedState {
     z_host_id:        Option<u32>,
     /// The CGWindowID of the first foreign window above the host in z-order,
     /// or None when the host is already at the front of all foreign windows.
-    /// Mirrors Windows' GW_HWNDPREV logic: only re-order when this changes.
+    /// Mirrors Windows' GW_HWNDPREV logic. While hosted, z-order is reapplied
+    /// every tick even when this value is unchanged.
     z_above_host_id:  Option<u32>,
 }
 
@@ -1855,20 +1860,26 @@ fn tick_char(
     // Z-order: mirror the Windows GW_HWNDPREV approach.
     //
     // Read the first foreign window above the host from the cached wins list
-    // (front-to-back order).  The cache is refreshed at HIGH_FREQ so z-order
-    // changes are detected within ~500 ms — no extra IPC per tick.
+    // (front-to-back order). The list itself stays on the tiered refresh;
+    // this is not a CGWindowList query.
     // When above_id is Some: insert panel just below it (between it and host).
     // When above_id is None: host is frontmost; panel goes directly above it.
-    // On Desktop/Airborne (z_host == None): panel comes to front.
-    // Only call into Cocoa when the relevant ids actually change.
+    // On Desktop (z_host == None): panel comes to front, and only when the
+    // host id changes.
+    //
+    // While hosted, reapply every tick. The panel is a NonactivatingPanel at
+    // NSNormalWindowLevel, so the key window can move back in front of it
+    // after a single orderWindow without changing the cached ids. Skipping
+    // until those ids change leaves the character behind that window.
     let z_above_host_id: Option<u32> = z_host.and_then(|host_id| {
         let host_pos = wins.iter().position(|w| w.id == host_id)?;
         if host_pos == 0 { None } else { wins.get(host_pos - 1).map(|w| w.id) }
     });
 
+    let on_window     = z_host.is_some();
     let host_changed  = prev.map_or(true, |p| p.z_host_id       != z_host);
     let above_changed = prev.map_or(true, |p| p.z_above_host_id != z_above_host_id);
-    if host_changed || above_changed {
+    if on_window || host_changed || above_changed {
         unsafe {
             match (z_host, z_above_host_id) {
                 (None, _) => {
