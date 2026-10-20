@@ -175,6 +175,11 @@ If no override file is present, built-in defaults derived from personality are u
 
 ## Release Notes
 
+### v1.0.1
+
+**Fixes**
+- macOS: a character sitting on a window no longer stays behind that window after you bring the window forward. It may slip behind for a moment, then returns to the front.
+
 ### v1.0.0
 
 **Settings**
