@@ -34,7 +34,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{NSImage, NSImageView};
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSData, NSPoint, NSRect, NSSize, NSString};
 
 use crate::manifest::{Attachment, AnimationDef, Manifest, SurfaceConfig};
 
@@ -76,6 +76,16 @@ impl SpriteAssets {
         manifest: &Manifest,
         display_width: f64,
     ) -> Option<Self> {
+        Self::load_coated(char_dir, manifest, display_width, None)
+    }
+
+    /// Load sprites, optionally recolored by `coat`.
+    pub fn load_coated(
+        char_dir: &Path,
+        manifest: &Manifest,
+        display_width: f64,
+        coat: Option<crate::coat::Coat>,
+    ) -> Option<Self> {
         let scale = display_width / manifest.canonical_width.max(1.0);
         let sprite_dir = char_dir.join("sprite");
 
@@ -93,10 +103,13 @@ impl SpriteAssets {
                 return None;
             }
             let path = sprite_dir.join(format!("{name}.png"));
-            let ns_path = NSString::from_str(path.to_str()?);
-
-            let orig =
-                unsafe { NSImage::initWithContentsOfFile(NSImage::alloc(), &ns_path) }?;
+            let bytes = std::fs::read(&path).ok()?;
+            let bytes = match coat {
+                Some(coat) => crate::coat::tint_png(&bytes, name, coat),
+                None => bytes,
+            };
+            let data = NSData::with_bytes(&bytes);
+            let orig = unsafe { NSImage::initWithData(NSImage::alloc(), &data) }?;
             let orig_h = unsafe { orig.size() }.height;
             let (nw, nh, native_rgba) = nsimage_to_rgba(&orig)?;
             let native_flip = mirror_rgba(&native_rgba, nw, nh);
