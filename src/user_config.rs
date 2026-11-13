@@ -7,11 +7,10 @@
 /// The file is auto-generated with defaults on first launch.
 /// Users can edit it manually, or via the settings window (**Settings…** in the menu).
 /// When the settings window closes, Petit Mates restarts so display / speech / weather / characters apply cleanly.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
 
@@ -201,15 +200,175 @@ pub enum Mode {
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 #[serde(default)]
+pub struct NamedDragon {
+    pub name: String,
+    pub hue: f64,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct NamedTurtle {
+    pub name: String,
+    pub shell_hue: f64,
+    pub skin_hue: f64,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct PetsConfig {
+    pub bearded_dragon: Vec<NamedDragon>,
+    pub pond_turtle: Vec<NamedTurtle>,
+}
+
+/// One animal to place on the desktop.
+#[derive(Debug, Clone)]
+pub struct Spawn {
+    pub species: &'static str,
+    pub name: Option<String>,
+    pub coat: Option<crate::coat::Coat>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
+#[serde(default)]
 pub struct UserConfig {
     pub display: DisplayConfig,
     pub speech: SpeechConfig,
     pub weather: WeatherConfig,
     pub characters: CharactersConfig,
+    pub pets: PetsConfig,
     pub vivarium: crate::vivarium::VivariumConfig,
     /// Ignored at runtime except as a one-shot enable hint when `[vivarium]` is absent.
     #[serde(default)]
     pub mode: Mode,
+}
+
+impl UserConfig {
+    /// Animals for a cold start. Named pets come first, in list order.
+    pub fn startup_spawns(&self) -> Vec<Spawn> {
+        let (bd, pt, lg) = self.characters.resolved_counts();
+        let mut out = Vec::new();
+        out.extend(fill_dragons(self, bd));
+        out.extend(fill_turtles(self, pt));
+        for _ in 0..lg {
+            out.push(Spawn {
+                species: "leopard_gecko",
+                name: None,
+                coat: None,
+            });
+        }
+        out
+    }
+
+    /// The next animal of `species` to add. Named pets that are not already out win.
+    pub fn next_spawn(&self, species: &str, out_names: &[String]) -> Spawn {
+        match species {
+            "bearded_dragon" => self
+                .pets
+                .bearded_dragon
+                .iter()
+                .find(|pet| !pet.name.is_empty() && !out_names.iter().any(|n| n == &pet.name))
+                .map(|pet| Spawn {
+                    species: "bearded_dragon",
+                    name: Some(pet.name.clone()),
+                    coat: Some(crate::coat::Coat::Dragon { hue: pet.hue }),
+                })
+                .unwrap_or_else(|| unnamed_dragon()),
+            "pond_turtle" => self
+                .pets
+                .pond_turtle
+                .iter()
+                .find(|pet| !pet.name.is_empty() && !out_names.iter().any(|n| n == &pet.name))
+                .map(|pet| Spawn {
+                    species: "pond_turtle",
+                    name: Some(pet.name.clone()),
+                    coat: Some(crate::coat::Coat::Turtle {
+                        shell: pet.shell_hue,
+                        skin: pet.skin_hue,
+                    }),
+                })
+                .unwrap_or_else(unnamed_turtle),
+            _ => Spawn {
+                species: "leopard_gecko",
+                name: None,
+                coat: None,
+            },
+        }
+    }
+}
+
+fn fill_dragons(cfg: &UserConfig, count: u32) -> Vec<Spawn> {
+    let mut rng = rand::rng();
+    let mut out = Vec::new();
+    for pet in cfg
+        .pets
+        .bearded_dragon
+        .iter()
+        .filter(|p| !p.name.is_empty())
+        .take(count as usize)
+    {
+        out.push(Spawn {
+            species: "bearded_dragon",
+            name: Some(pet.name.clone()),
+            coat: Some(crate::coat::Coat::Dragon { hue: pet.hue }),
+        });
+    }
+    while out.len() < count as usize {
+        out.push(unnamed_dragon_rng(&mut rng));
+    }
+    out
+}
+
+fn fill_turtles(cfg: &UserConfig, count: u32) -> Vec<Spawn> {
+    let mut rng = rand::rng();
+    let mut out = Vec::new();
+    for pet in cfg
+        .pets
+        .pond_turtle
+        .iter()
+        .filter(|p| !p.name.is_empty())
+        .take(count as usize)
+    {
+        out.push(Spawn {
+            species: "pond_turtle",
+            name: Some(pet.name.clone()),
+            coat: Some(crate::coat::Coat::Turtle {
+                shell: pet.shell_hue,
+                skin: pet.skin_hue,
+            }),
+        });
+    }
+    while out.len() < count as usize {
+        out.push(unnamed_turtle_rng(&mut rng));
+    }
+    out
+}
+
+fn unnamed_dragon() -> Spawn {
+    unnamed_dragon_rng(&mut rand::rng())
+}
+
+fn unnamed_turtle() -> Spawn {
+    unnamed_turtle_rng(&mut rand::rng())
+}
+
+fn unnamed_dragon_rng(rng: &mut impl rand::Rng) -> Spawn {
+    let hue = crate::coat::DRAGON_HUE + rng.random_range(-16.0..16.0);
+    Spawn {
+        species: "bearded_dragon",
+        name: None,
+        coat: Some(crate::coat::Coat::Dragon { hue }),
+    }
+}
+
+fn unnamed_turtle_rng(rng: &mut impl rand::Rng) -> Spawn {
+    Spawn {
+        species: "pond_turtle",
+        name: None,
+        coat: Some(crate::coat::Coat::Turtle {
+            shell: crate::coat::SHELL_HUE + rng.random_range(-16.0..16.0),
+            skin: crate::coat::SKIN_HUE + rng.random_range(-16.0..16.0),
+        }),
+    }
 }
 
 // ---- Path resolution ----
@@ -245,7 +404,9 @@ pub fn write_vivarium_z_order(z: crate::vivarium::ZOrder) {
 }
 
 fn patch_vivarium(edit: impl FnOnce(&mut toml_edit::Table)) {
-    let Some(path) = user_config_path() else { return };
+    let Some(path) = user_config_path() else {
+        return;
+    };
     let src = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(_) => DEFAULT_TOML.to_string(),
@@ -624,7 +785,7 @@ fn show_native_error_macos(title: &str, message: &str) {
 #[cfg(target_os = "windows")]
 fn show_native_error_windows(title: &str, message: &str) {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
     fn to_wide(s: &str) -> Vec<u16> {
         std::ffi::OsStr::new(s).encode_wide().chain([0]).collect()

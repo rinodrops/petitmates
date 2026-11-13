@@ -116,6 +116,70 @@ hint      = { en = "At least one species count must be greater than zero.", ja =
 value = "0"
 when  = "chars_min_one"
 
+# ── Pets ─────────────────────────────────────────────────────────────────────
+
+[[tabs]]
+id    = "pets"
+label = { en = "Pets", ja = "個体" }
+icon  = "pets"
+
+[[tabs.fields]]
+key       = "pets.bearded_dragon"
+label     = { en = "Bearded dragons", ja = "フトアゴヒゲトカゲ" }
+widget    = "record_list"
+on_change = "pet_preview"
+
+[[tabs.fields.item_fields]]
+key    = "name"
+label  = { en = "Name", ja = "名前" }
+type   = "string"
+widget = "text_input"
+
+[[tabs.fields.item_fields]]
+key     = "hue"
+label   = { en = "Hue", ja = "色相" }
+type    = "number"
+widget  = "slider"
+min     = 0
+max     = 360
+step    = 1
+initial = 38
+reset   = true
+
+[[tabs.fields]]
+key       = "pets.pond_turtle"
+label     = { en = "Pond turtles", ja = "クサガメ" }
+widget    = "record_list"
+on_change = "pet_preview"
+
+[[tabs.fields.item_fields]]
+key    = "name"
+label  = { en = "Name", ja = "名前" }
+type   = "string"
+widget = "text_input"
+
+[[tabs.fields.item_fields]]
+key     = "shell_hue"
+label   = { en = "Shell hue", ja = "背甲の色相" }
+type    = "number"
+widget  = "slider"
+min     = 0
+max     = 360
+step    = 1
+initial = 42
+reset   = true
+
+[[tabs.fields.item_fields]]
+key     = "skin_hue"
+label   = { en = "Skin hue", ja = "肌の色相" }
+type    = "number"
+widget  = "slider"
+min     = 0
+max     = 360
+step    = 1
+initial = 46
+reset   = true
+
 # ── Speech ───────────────────────────────────────────────────────────────────
 
 [[tabs]]

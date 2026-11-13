@@ -191,6 +191,7 @@ struct CharState {
     vivi_x: f64,
     vivi_y: f64,
     vivi_floor: String,
+    pet_name: Option<String>,
     species: &'static str,
 }
 
@@ -695,6 +696,31 @@ fn compute_effective_config(
     cfg
 }
 
+fn windows_coated(
+    species: &str,
+    base: &Rc<SpriteAssets>,
+    width: f64,
+    coat: Option<crate::coat::Coat>,
+) -> Rc<SpriteAssets> {
+    let Some(coat) = coat.filter(|c| !c.is_original()) else { return Rc::clone(base); };
+    let (sprites, manifest_bytes) = match species {
+        "pond_turtle" => (
+            windows_assets::embedded::pond_turtle::SPRITES,
+            windows_assets::embedded::pond_turtle::MANIFEST_TOML,
+        ),
+        _ => (
+            windows_assets::embedded::bearded_dragon::SPRITES,
+            windows_assets::embedded::bearded_dragon::MANIFEST_TOML,
+        ),
+    };
+    let Some(manifest) = crate::manifest::load_from_bytes(manifest_bytes) else {
+        return Rc::clone(base);
+    };
+    SpriteAssets::load_embedded_coated(sprites, &manifest, width, Some(coat))
+        .map(Rc::new)
+        .unwrap_or_else(|| Rc::clone(base))
+}
+
 unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig, char_name: &str) -> CharState {
     let hinstance  = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide("PetitMatesOverlay");
@@ -750,6 +776,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         vivi_x: 0.0,
         vivi_y: 0.0,
         vivi_floor: String::new(),
+        pet_name: None,
         species: match char_name {
             "pond_turtle" => "pond_turtle",
             "leopard_gecko" => "leopard_gecko",
@@ -2244,10 +2271,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_BD => {
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
-                        let si     = windows_wm::screen_info();
-                        let assets = Rc::clone(&app.bd_assets);
+                        let si = windows_wm::screen_info();
+                        let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
+                        let spawn = crate::user_config::load().next_spawn("bearded_dragon", &out);
+                        let assets = windows_coated("bearded_dragon", &app.bd_assets, app.sprite_size, spawn.coat);
                         let config = app.bd_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
+                        let mut ch = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
+                        ch.pet_name = spawn.name;
                         app.chars.push(ch);
                     }
                 });
@@ -2277,10 +2307,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_PT => {
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
-                        let si     = windows_wm::screen_info();
-                        let assets = Rc::clone(&app.pt_assets);
+                        let si = windows_wm::screen_info();
+                        let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
+                        let spawn = crate::user_config::load().next_spawn("pond_turtle", &out);
+                        let assets = windows_coated("pond_turtle", &app.pt_assets, app.sprite_size, spawn.coat);
                         let config = app.pt_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
+                        let mut ch = spawn_char_hwnd(&si, assets, config, "pond_turtle");
+                        ch.pet_name = spawn.name;
                         app.chars.push(ch);
                     }
                 });
@@ -2603,32 +2636,22 @@ pub fn run() {
         // Create character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
         let weather_handle = crate::weather::spawn(&user_cfg.weather);
-        let initial_chars: Vec<CharState> = user_cfg
-            .characters
-            .startup_species_ids()
-            .into_iter()
-            .map(|species| match species {
-                "bearded_dragon" => spawn_char_hwnd(
-                    &si,
-                    Rc::clone(&bd_assets),
-                    bd_config.clone(),
-                    species,
-                ),
-                "pond_turtle" => spawn_char_hwnd(
-                    &si,
-                    Rc::clone(&pt_assets),
+        let initial_chars: Vec<CharState> = user_cfg.startup_spawns().into_iter().map(|spawn| {
+            let (assets, config) = match spawn.species {
+                "pond_turtle" => (
+                    windows_coated("pond_turtle", &pt_assets, pt_display_w, spawn.coat),
                     pt_config.clone(),
-                    species,
                 ),
-                "leopard_gecko" => spawn_char_hwnd(
-                    &si,
-                    Rc::clone(&lg_assets),
-                    lg_config.clone(),
-                    species,
+                "leopard_gecko" => (Rc::clone(&lg_assets), lg_config.clone()),
+                _ => (
+                    windows_coated("bearded_dragon", &bd_assets, bd_display_w, spawn.coat),
+                    bd_config.clone(),
                 ),
-                _ => unreachable!("startup_species_ids only returns built-in species"),
-            })
-            .collect();
+            };
+            let mut ch = spawn_char_hwnd(&si, assets, config, spawn.species);
+            ch.pet_name = spawn.name;
+            ch
+        }).collect();
         let host_hwnd = initial_chars
             .first()
             .expect("startup_species_ids always returns at least one character")

@@ -193,6 +193,8 @@ struct CharState {
     last_rendered: Option<RenderedState>,
     /// Present when the character is in `PhysicsWorld::Water`; `None` on land.
     aquatic: Option<crate::behavior::AquaticState>,
+    /// Saved name, when this animal is one of the named pets.
+    pet_name: Option<String>,
     #[allow(dead_code)]
     species: &'static str,
     affiliation: Affiliation,
@@ -1670,6 +1672,22 @@ fn compute_effective_config(
     cfg
 }
 
+fn assets_for_species(
+    species: &str,
+    base: &Rc<SpriteAssets>,
+    width: f64,
+    coat: Option<crate::coat::Coat>,
+) -> Rc<SpriteAssets> {
+    let Some(dir) = char_dir_for(species) else { return Rc::clone(base); };
+    let Some(manifest) = crate::manifest::load(&dir) else { return Rc::clone(base); };
+    match coat {
+        Some(coat) if !coat.is_original() => SpriteAssets::load_coated(&dir, &manifest, width, Some(coat))
+            .map(Rc::new)
+            .unwrap_or_else(|| Rc::clone(base)),
+        _ => Rc::clone(base),
+    }
+}
+
 fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
     let (start_cx, start_cy) = physics::startup_drop(&si.physics_screen(), assets.size("s-stand", false).0, si.menu_bar_height);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
@@ -1714,6 +1732,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_screen_pos: (start_cx, start_cy),
         last_rendered: None,
         aquatic: None,
+        pet_name: None,
         species: match char_name {
             "pond_turtle" => "pond_turtle",
             "leopard_gecko" => "leopard_gecko",
@@ -1815,9 +1834,13 @@ define_class!(
                 let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                let assets = Rc::clone(&app.bd_assets);
+                let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
+                let spawn = crate::user_config::load().next_spawn("bearded_dragon", &out);
+                let assets = assets_for_species("bearded_dragon", &app.bd_assets, app.sprite_size, spawn.coat);
                 let config = app.bd_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false, "bearded_dragon"));
+                let mut ch = spawn_char(assets, config, &si, mt, false, "bearded_dragon");
+                ch.pet_name = spawn.name;
+                app.chars.push(ch);
             });
         }
 
@@ -1831,9 +1854,13 @@ define_class!(
                 let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                let assets = Rc::clone(&app.pt_assets);
+                let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
+                let spawn = crate::user_config::load().next_spawn("pond_turtle", &out);
+                let assets = assets_for_species("pond_turtle", &app.pt_assets, app.sprite_size, spawn.coat);
                 let config = app.pt_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false, "pond_turtle"));
+                let mut ch = spawn_char(assets, config, &si, mt, false, "pond_turtle");
+                ch.pet_name = spawn.name;
+                app.chars.push(ch);
             });
         }
 
@@ -3207,38 +3234,22 @@ pub fn run() {
         // Demo mode: one bearded dragon with deterministic scripted behavior.
         vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true, "bearded_dragon")]
     } else {
-        user_cfg
-            .characters
-            .startup_species_ids()
-            .into_iter()
-            .map(|species| match species {
-                "bearded_dragon" => spawn_char(
-                    Rc::clone(&bd_assets),
-                    bd_config.clone(),
-                    &si,
-                    mt,
-                    false,
-                    species,
-                ),
-                "pond_turtle" => spawn_char(
-                    Rc::clone(&pt_assets),
+        user_cfg.startup_spawns().into_iter().map(|spawn| {
+            let (assets, config) = match spawn.species {
+                "pond_turtle" => (
+                    assets_for_species("pond_turtle", &pt_assets, pt_display_w, spawn.coat),
                     pt_config.clone(),
-                    &si,
-                    mt,
-                    false,
-                    species,
                 ),
-                "leopard_gecko" => spawn_char(
-                    Rc::clone(&lg_assets),
-                    lg_config.clone(),
-                    &si,
-                    mt,
-                    false,
-                    species,
+                "leopard_gecko" => (Rc::clone(&lg_assets), lg_config.clone()),
+                _ => (
+                    assets_for_species("bearded_dragon", &bd_assets, bd_display_w, spawn.coat),
+                    bd_config.clone(),
                 ),
-                _ => unreachable!("startup_species_ids only returns built-in species"),
-            })
-            .collect()
+            };
+            let mut ch = spawn_char(assets, config, &si, mt, false, spawn.species);
+            ch.pet_name = spawn.name;
+            ch
+        }).collect()
     };
 
     let weather_handle = crate::weather::spawn(&user_cfg.weather);

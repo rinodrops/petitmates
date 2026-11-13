@@ -193,7 +193,9 @@ _darwin-bundle arch rust_target:
     mkdir -p "dist/{{arch}}/{{app_name}}.app/Contents/Resources"
     cp "target/{{rust_target}}/release/{{exe_name}}" \
         "dist/{{arch}}/{{app_name}}.app/Contents/MacOS/{{exe_name}}"
-    cp "{{settings_dir}}/target/{{rust_target}}/release/settings" \
+    SETTINGS_SCHEMA="{{settings_schema}}" \
+        cargo build --release --target {{rust_target}} --bin settings --features settings-host
+    cp "target/{{rust_target}}/release/settings" \
         "dist/{{arch}}/{{app_name}}.app/Contents/MacOS/settings"
     just _copy-assets "dist/{{arch}}/{{app_name}}.app/Contents/Resources"
     just _plist "dist/{{arch}}/{{app_name}}.app/Contents"

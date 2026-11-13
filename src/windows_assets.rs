@@ -72,6 +72,15 @@ impl SpriteAssets {
     /// Returns `None` if any listed sprite is missing or unreadable.
     #[allow(dead_code)]
     pub fn load(char_dir: &Path, manifest: &Manifest, display_width: f64) -> Option<Self> {
+        Self::load_coated(char_dir, manifest, display_width, None)
+    }
+
+    pub fn load_coated(
+        char_dir: &Path,
+        manifest: &Manifest,
+        display_width: f64,
+        coat: Option<crate::coat::Coat>,
+    ) -> Option<Self> {
         let scale = display_width / manifest.canonical_width.max(1.0);
         let sprite_dir = char_dir.join("sprite");
 
@@ -89,7 +98,14 @@ impl SpriteAssets {
                 return None;
             }
             let path = sprite_dir.join(format!("{name}.png"));
-            let img  = image::open(&path).ok()?;
+            let img = image::open(&path).ok()?;
+            let img = if let Some(coat) = coat {
+                let mut rgba = img.to_rgba8();
+                crate::coat::tint_image(&mut rgba, name, coat);
+                image::DynamicImage::ImageRgba8(rgba)
+            } else {
+                img
+            };
             let (ow, oh) = img.dimensions();
             let native_rgba = img.to_rgba8().into_raw();
             let native_flip = mirror_rgba(&native_rgba, ow, oh);
@@ -129,6 +145,15 @@ impl SpriteAssets {
     /// `embedded_assets.rs` module.  Used for the standalone exe where no
     /// external asset directory exists.
     pub fn load_embedded(sprites: &[(&str, &[u8])], manifest: &Manifest, display_width: f64) -> Option<Self> {
+        Self::load_embedded_coated(sprites, manifest, display_width, None)
+    }
+
+    pub fn load_embedded_coated(
+        sprites: &[(&str, &[u8])],
+        manifest: &Manifest,
+        display_width: f64,
+        coat: Option<crate::coat::Coat>,
+    ) -> Option<Self> {
         let scale = display_width / manifest.canonical_width.max(1.0);
 
         let mut images   = HashMap::new();
@@ -143,6 +168,13 @@ impl SpriteAssets {
                 .map(|(_, b)| *b)?;
 
             let img = image::load_from_memory(png_bytes).ok()?;
+            let img = if let Some(coat) = coat {
+                let mut rgba = img.to_rgba8();
+                crate::coat::tint_image(&mut rgba, name, coat);
+                image::DynamicImage::ImageRgba8(rgba)
+            } else {
+                img
+            };
             let (ow, oh) = img.dimensions();
             let native_rgba = img.to_rgba8().into_raw();
             let native_flip = mirror_rgba(&native_rgba, ow, oh);

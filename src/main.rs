@@ -2,16 +2,17 @@
 
 mod anim_trigger;
 mod behavior;
+pub mod coat;
 mod config;
-mod physics;
 mod debug_menu;
 mod demo_behavior;
 mod engine;
 mod manifest;
-mod terrestrial_behavior;
+mod physics;
+mod power;
 mod speech;
 mod sprite_map;
-mod power;
+mod terrestrial_behavior;
 mod user_config;
 mod vivarium;
 mod weather;
