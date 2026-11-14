@@ -439,36 +439,29 @@ fn eye_protect(img: &RgbaImage) -> Vec<bool> {
             }
         }
     }
+    expand_eye_protection(img, keep)
+}
+
+fn expand_eye_protection(img: &RgbaImage, keep: Vec<bool>) -> Vec<bool> {
     let mut protect = keep.clone();
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize;
-            if protect[i] {
-                continue;
-            }
-            let px = img.get_pixel(x as u32, y as u32);
-            let (_h, _s, v) = hsv(*px);
-            if v >= 0.75 {
-                continue;
-            }
-            let mut near = false;
-            for dy in -5..=5 {
-                for dx in -5..=5 {
-                    if dx * dx + dy * dy > 25 {
-                        continue;
-                    }
-                    let nx = x + dx;
-                    let ny = y + dy;
-                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                        continue;
-                    }
-                    if keep[(ny * w + nx) as usize] {
-                        near = true;
-                    }
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    const REACH: [usize; 6] = [5, 4, 4, 4, 3, 0];
+    let rgba = img.as_raw();
+    for (i, &is_eye) in keep.iter().enumerate() {
+        if !is_eye {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        for ny in y.saturating_sub(5)..=(y + 5).min(h - 1) {
+            let reach = REACH[y.abs_diff(ny)];
+            let row = ny * w;
+            for nx in x.saturating_sub(reach)..=(x + reach).min(w - 1) {
+                let j = row + nx;
+                let offset = 4 * j;
+                // HSV value < 0.75 is equivalent to every RGB byte being < 192.
+                if !protect[j] && rgba[offset..offset + 3].iter().all(|&c| c < 192) {
+                    protect[j] = true;
                 }
-            }
-            if near {
-                protect[i] = true;
             }
         }
     }
