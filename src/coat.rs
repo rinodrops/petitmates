@@ -79,6 +79,61 @@ pub fn tint_image(img: &mut RgbaImage, sprite: &str, coat: Coat) {
     }
 }
 
+/// Hue is absolute. Saturation and value are multipliers on the pixel (1.0 keeps them).
+/// The local coat tuner uses this. [`tint_image`] is the shipping tint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RegionAdjust {
+    pub hue: f64,
+    pub sat: f64,
+    pub val: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AdjustCoat {
+    Dragon(RegionAdjust),
+    Turtle { shell: RegionAdjust, skin: RegionAdjust },
+}
+
+/// Recolor protected regions with independent hue, saturation, and value.
+/// Eyes, mouth, outline, the dragon's cream belly, and the turtle's yellow stripes stay.
+#[allow(dead_code)]
+pub fn tint_adjust(img: &mut RgbaImage, sprite: &str, coat: AdjustCoat) {
+    let mask = mask_for(sprite);
+    let eye = eye_protect(img);
+    let shell = shell_mask(img, mask.as_ref());
+    for (i, px) in img.pixels_mut().enumerate() {
+        if eye[i] || is_outline(px) || is_mouth(px) {
+            continue;
+        }
+        match coat {
+            AdjustCoat::Dragon(adj) => {
+                if is_cream(px) || !is_dragon_body(px) {
+                    continue;
+                }
+                *px = apply_region(*px, adj);
+            }
+            AdjustCoat::Turtle { shell: shell_adj, skin } => {
+                if is_stripe(px) {
+                    continue;
+                }
+                if shell[i] {
+                    *px = apply_region(*px, shell_adj);
+                } else if is_olive(px) {
+                    *px = apply_region(*px, skin);
+                }
+            }
+        }
+    }
+}
+
+fn apply_region(px: Rgba<u8>, adj: RegionAdjust) -> Rgba<u8> {
+    let (_h, s, v) = hsv(px);
+    let s2 = (s * adj.sat).clamp(0.0, 1.0);
+    let v2 = (v * adj.val).clamp(0.0, 1.0);
+    let (r, g, b) = hsv_to_rgb(adj.hue, s2, v2);
+    Rgba([r, g, b, px[3]])
+}
+
 fn repaint(px: Rgba<u8>, target: f64, base: f64) -> Rgba<u8> {
     let (h, s, v) = hsv(px);
     let delta = wrap_deg(target - base);
