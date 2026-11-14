@@ -12,6 +12,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 ureq = { version = "3", features = ["json"] }
 serde_json = "1"
 image = "0.25"
+crc32fast = "1"
 settings = { path = "../settings", optional = true }
 
 [features]
@@ -33,12 +34,15 @@ objc2-app-kit = { version = "0.3.2", features = [
     "NSAnimationContext",
     "NSApplication",
     "NSBezierPath",
+    "NSBitmapImageRep",
     "NSButton",
     "NSColor",
     "NSEvent",
     "NSFont",
     "NSImage",
     "NSImageView",
+    "NSImageRep",
+    "NSGraphics",
     "NSMenu",
     "NSMenuItem",
     "NSPanel",
@@ -80,6 +84,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[build-dependencies]
+crc32fast = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Xcode 27 beta: dyld rejects stripped proc-macro dylibs with "mis-aligned
 # LINKEDIT string pool".  Disabling strip for build-override avoids the issue;
