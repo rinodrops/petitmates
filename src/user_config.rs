@@ -6,7 +6,7 @@
 ///
 /// The file is auto-generated with defaults on first launch.
 /// Users can edit it manually, or via the settings window (**Settings…** in the menu).
-/// Settings for active behavior take effect after a restart. Pet profiles are read when spawning.
+/// Saved Settings changes take effect when the settings window closes and the app restarts.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -567,16 +567,21 @@ pub fn launch_settings_ui() {
     }
 }
 
-// Pet profiles are loaded at each spawn. Changes to other settings still
-// need a restart to update the running app.
+// A saved change needs a restart so active characters pick up the new settings.
 fn settings_require_restart(before: Option<&[u8]>, after: Option<&[u8]>) -> bool {
     if before == after {
         return false;
     }
     fn settings(bytes: Option<&[u8]>) -> Option<toml::Table> {
         let mut table: toml::Table = toml::from_str(std::str::from_utf8(bytes?).ok()?).ok()?;
-        table.remove("pets");
         table.remove("schema_version");
+        if let Some(pets) = table.get_mut("pets").and_then(toml::Value::as_table_mut) {
+            for profiles in pets.iter_mut().filter_map(|(_, value)| value.as_array_mut()) {
+                for profile in profiles.iter_mut().filter_map(toml::Value::as_table_mut) {
+                    profile.remove("id");
+                }
+            }
+        }
         Some(table)
     }
     match (settings(before), settings(after)) {
@@ -730,18 +735,22 @@ mod tests {
     }
 
     #[test]
-    fn profile_only_edits_do_not_restart_running_pets() {
+    fn saved_profile_edits_restart_running_pets() {
         let before = Some(br#"[pets]
-bearded_dragon = [{name = "A"}]
+bearded_dragon = [{name = "A", body_color = "original"}]
 "#.as_slice());
-        let after = Some(br#"schema_version = 1
+        let migrated = Some(br#"schema_version = 1
 [pets]
-bearded_dragon = [{name = "B"}]
+bearded_dragon = [{name = "A", body_color = "original", id = "legacy-0"}]
 "#.as_slice());
-        assert!(!settings_require_restart(before, after));
-        let display = Some(b"[display]
-sprite_size = 200
-".as_slice());
+        let edited = Some(br#"schema_version = 1
+[pets]
+bearded_dragon = [{name = "A", body_color = "custom:230:80:90", id = "legacy-0"}]
+"#.as_slice());
+        assert!(!settings_require_restart(before, before));
+        assert!(!settings_require_restart(before, migrated));
+        assert!(settings_require_restart(migrated, edited));
+        let display = Some(b"[display]\nsprite_size = 200\n".as_slice());
         assert!(settings_require_restart(before, display));
     }
 

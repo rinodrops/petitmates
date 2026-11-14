@@ -123,7 +123,7 @@ No installer needed — the executable is fully self-contained.
 </tr>
 </table>
 
-- **Settings…** — Edit display, characters, individual pets, speech, and weather. Changes to display and behavior apply after the app restarts. Changes to the Pets tab apply the next time you call a character.
+- **Settings…** — Edit display, characters, individual pets, speech, and weather. When Settings closes after saving changes, Petit Mates restarts to apply them. On Windows, choose **OK** to save and close.
 - **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor instead (restart the app manually to apply).
 - **Add / Remove character** — Spawn or dismiss each of the three characters independently.
 - **About** — Version info.

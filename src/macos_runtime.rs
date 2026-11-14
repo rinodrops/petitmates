@@ -2081,15 +2081,15 @@ fn perform_settings_restart(mt: MainThreadMarker) {
 }
 
 fn tick() {
+    let mt = unsafe { MainThreadMarker::new_unchecked() };
+    if crate::user_config::take_restart_request() {
+        perform_settings_restart(mt);
+        return;
+    }
+
     APP.with(|cell| {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
-        let mt = unsafe { MainThreadMarker::new_unchecked() };
-
-        if crate::user_config::take_restart_request() {
-            perform_settings_restart(mt);
-            return;
-        }
 
         // Rate-limit: skip this 60 Hz callback when the target interval has not elapsed.
         {
