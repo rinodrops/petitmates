@@ -6,12 +6,11 @@
 ///
 /// The file is auto-generated with defaults on first launch.
 /// Users can edit it manually, or via the settings window (**Settings…** in the menu).
-/// When the settings window closes, Petit Mates restarts so display / speech / weather / characters apply cleanly.
-
+/// Saved Settings changes take effect when the settings window closes and the app restarts.
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
 
@@ -189,17 +188,34 @@ impl CharactersConfig {
     }
 }
 
-/// Runtime mode selected by the user.
-///
-/// - `Free` (default): characters roam the desktop and external window frames only.
-///   Aquatic physics is disabled; no character enters a `WindowInterior`.
-/// - `Vivarium`: enables the dedicated vivarium window and aquatic physics.
-#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    #[default]
-    Free,
-    Vivarium,
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct PetProfile {
+    pub id: String,
+    pub name: String,
+    pub body_color: Option<String>,
+    pub shell_color: Option<String>,
+    pub skin_color: Option<String>,
+    pub hue: Option<f64>,
+    pub shell_hue: Option<f64>,
+    pub skin_hue: Option<f64>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct PetsConfig {
+    pub bearded_dragon: Vec<PetProfile>,
+    pub pond_turtle: Vec<PetProfile>,
+    pub leopard_gecko: Vec<PetProfile>,
+}
+
+/// An individual to place on the desktop.
+#[derive(Debug, Clone)]
+pub struct Spawn {
+    pub species: &'static str,
+    pub profile_id: Option<String>,
+    pub name: Option<String>,
+    pub coat: Option<crate::coat::Coat>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
@@ -209,7 +225,87 @@ pub struct UserConfig {
     pub speech: SpeechConfig,
     pub weather: WeatherConfig,
     pub characters: CharactersConfig,
-    pub mode: Mode,
+    pub pets: PetsConfig,
+}
+
+impl PetsConfig {
+    fn profiles(&self, species: &str) -> &[PetProfile] {
+        match species {
+            "bearded_dragon" => &self.bearded_dragon,
+            "pond_turtle" => &self.pond_turtle,
+            _ => &self.leopard_gecko,
+        }
+    }
+}
+
+impl UserConfig {
+    /// Animals for a cold start. Named profiles come first, in list order.
+    pub fn startup_spawns(&self) -> Vec<Spawn> {
+        let (bd, pt, lg) = self.characters.resolved_counts();
+        let mut rng = rand::rng();
+        let mut spawns = Vec::new();
+        for (species, count) in [("bearded_dragon", bd), ("pond_turtle", pt), ("leopard_gecko", lg)] {
+            let mut named = self.named_spawns(species);
+            spawns.extend((0..count).map(|_| {
+                named.next().unwrap_or_else(|| random_spawn(species, &mut rng))
+            }));
+        }
+        spawns
+    }
+
+    /// The next available profile for this species, or a random built-in color.
+    pub fn next_spawn(&self, species: &'static str, active: &[&str]) -> Spawn {
+        self.named_spawns(species)
+            .find(|spawn| spawn.profile_id.as_deref().is_some_and(|id| !active.contains(&id)))
+            .unwrap_or_else(|| random_spawn(species, &mut rand::rng()))
+    }
+
+    fn named_spawns(&self, species: &'static str) -> impl Iterator<Item = Spawn> + '_ {
+        let profiles = self.pets.profiles(species);
+        let mut used_ids = std::collections::HashSet::new();
+        profiles.iter().enumerate()
+            .filter_map(move |(index, profile)| {
+                let id = if !profile.id.trim().is_empty() && used_ids.insert(profile.id.as_str()) {
+                    profile.id.clone()
+                } else {
+                    format!("legacy-{index}")
+                };
+                if profile.name.trim().is_empty() {
+                    return None;
+                }
+                let coat = match species {
+                    "bearded_dragon" => Some(crate::coat_palette::dragon(
+                        profile.body_color.as_deref(), profile.hue,
+                    )),
+                    "pond_turtle" => Some(crate::coat_palette::turtle(
+                        profile.shell_color.as_deref(), profile.shell_hue,
+                        profile.skin_color.as_deref(), profile.skin_hue,
+                    )),
+                    _ => None,
+                };
+                Some(Spawn {
+                    species,
+                    profile_id: Some(id),
+                    name: Some(profile.name.clone()),
+                    coat,
+                })
+            })
+    }
+}
+
+fn random_spawn(species: &'static str, rng: &mut impl rand::Rng) -> Spawn {
+    use crate::coat::Coat;
+    use crate::coat_palette::Region;
+
+    let coat = match species {
+        "bearded_dragon" => Some(Coat::DragonColor(Region::Dragon.random(rng))),
+        "pond_turtle" => Some(Coat::TurtleColor {
+            shell: Region::Shell.random(rng),
+            skin: Region::Skin.random(rng),
+        }),
+        _ => None,
+    };
+    Spawn { species, profile_id: None, name: None, coat }
 }
 
 // ---- Path resolution ----
@@ -302,7 +398,7 @@ fn detect_system_language() -> String {
 
 // ---- Load / save ----
 
-const DEFAULT_TOML: &str = r#"[display]
+const DEFAULT_TOML: &str = r##"[display]
 sprite_size       = 150   # character size in pixels
 font_size         = 14    # speech bubble font size in points
 tick_rate_ac      = 30    # animation fps on AC power: 10, 15, 30, or 60
@@ -321,9 +417,7 @@ enabled = true
 bearded_dragon = 1   # startup count per species (0–5); all zero → 1 bearded dragon
 pond_turtle    = 1
 leopard_gecko  = 1
-
-# mode = "free"   # "free" (default) or "vivarium"
-"#;
+"##;
 
 /// Loads `user.toml` from the application support directory.
 /// If the file does not exist, creates it with default values and returns defaults.
@@ -447,6 +541,7 @@ pub fn launch_settings_ui() {
         }
     };
 
+    let before = std::fs::read(&path).ok();
     let mut child = match Command::new(&settings).arg(&path).spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -465,8 +560,33 @@ pub fn launch_settings_ui() {
         std::thread::spawn(move || {
             let _ = child.wait();
             *SETTINGS_WATCHER_ACTIVE.lock().unwrap() = false;
-            restart_after_settings_closed();
+            if settings_require_restart(before.as_deref(), std::fs::read(&path).ok().as_deref()) {
+                restart_after_settings_closed();
+            }
         });
+    }
+}
+
+// A saved change needs a restart so active characters pick up the new settings.
+fn settings_require_restart(before: Option<&[u8]>, after: Option<&[u8]>) -> bool {
+    if before == after {
+        return false;
+    }
+    fn settings(bytes: Option<&[u8]>) -> Option<toml::Table> {
+        let mut table: toml::Table = toml::from_str(std::str::from_utf8(bytes?).ok()?).ok()?;
+        table.remove("schema_version");
+        if let Some(pets) = table.get_mut("pets").and_then(toml::Value::as_table_mut) {
+            for profiles in pets.iter_mut().filter_map(|(_, value)| value.as_array_mut()) {
+                for profile in profiles.iter_mut().filter_map(toml::Value::as_table_mut) {
+                    profile.remove("id");
+                }
+            }
+        }
+        Some(table)
+    }
+    match (settings(before), settings(after)) {
+        (Some(before), Some(after)) => before != after,
+        _ => true,
     }
 }
 
@@ -554,7 +674,7 @@ fn show_native_error_macos(title: &str, message: &str) {
 #[cfg(target_os = "windows")]
 fn show_native_error_windows(title: &str, message: &str) {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
     fn to_wide(s: &str) -> Vec<u16> {
         std::ffi::OsStr::new(s).encode_wide().chain([0]).collect()
@@ -580,6 +700,59 @@ fn escape_applescript_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_profiles_follow_list_order_per_species_and_reuse_available_slots() {
+        let mut cfg: UserConfig = toml::from_str(r#"
+            [characters]
+            bearded_dragon = 3
+            pond_turtle = 1
+            leopard_gecko = 1
+
+            [pets]
+            bearded_dragon = [
+                { id = "first", name = "Mikan", body_color = "custom:0:80:90" },
+                { id = "blank", name = " " },
+                { id = "second", name = "Mikan", body_color = "straw" }
+            ]
+            pond_turtle = [{ id = "first", name = "Mikan", shell_hue = 200 }]
+            leopard_gecko = [{ name = "Kohaku" }]
+        "#).unwrap();
+
+        let startup = cfg.startup_spawns();
+        let ids: Vec<_> = startup.iter().map(|spawn| spawn.profile_id.as_deref()).collect();
+        assert_eq!(ids, [Some("first"), Some("second"), None, Some("first"), Some("legacy-0")]);
+        assert_eq!(startup[4].name.as_deref(), Some("Kohaku"));
+        assert_eq!(cfg.next_spawn("bearded_dragon", &["first"]).profile_id.as_deref(), Some("second"));
+        let fallback = cfg.next_spawn("bearded_dragon", &["first", "second"]);
+        assert!(fallback.name.is_none() && fallback.coat.is_some());
+
+        cfg.pets.bearded_dragon.swap(0, 2);
+        cfg.pets.bearded_dragon[0].name = "Renamed".to_owned();
+        assert_eq!(cfg.next_spawn("bearded_dragon", &[]).name.as_deref(), Some("Renamed"));
+        assert_eq!(cfg.next_spawn("bearded_dragon", &["second"]).profile_id.as_deref(), Some("first"));
+        assert_eq!(cfg.next_spawn("pond_turtle", &[]).profile_id.as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn saved_profile_edits_restart_running_pets() {
+        let before = Some(br#"[pets]
+bearded_dragon = [{name = "A", body_color = "original"}]
+"#.as_slice());
+        let migrated = Some(br#"schema_version = 1
+[pets]
+bearded_dragon = [{name = "A", body_color = "original", id = "legacy-0"}]
+"#.as_slice());
+        let edited = Some(br#"schema_version = 1
+[pets]
+bearded_dragon = [{name = "A", body_color = "custom:230:80:90", id = "legacy-0"}]
+"#.as_slice());
+        assert!(!settings_require_restart(before, before));
+        assert!(!settings_require_restart(before, migrated));
+        assert!(settings_require_restart(migrated, edited));
+        let display = Some(b"[display]\nsprite_size = 200\n".as_slice());
+        assert!(settings_require_restart(before, display));
+    }
 
     #[test]
     fn characters_default_is_one_each() {

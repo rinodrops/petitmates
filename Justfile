@@ -13,6 +13,7 @@ rust_target_x86   := "x86_64-apple-darwin"
 settings_dir    := env_var_or_default("SETTINGS_DIR", "../settings")
 settings_schema := justfile_directory() + "/schema.toml"
 win_target_dir  := "/tmp/pm-win"
+dev_target_dir  := env_var_or_default("CARGO_TARGET_DIR", "target")
 
 default: help
 
@@ -29,13 +30,28 @@ release: darwin-release win-release
 
 darwin-build: darwin-build-arm64 darwin-build-x86_64
 
-darwin-build-arm64: _settings-arm64
+darwin-build-arm64: _settings-icons
     just _darwin-bundle darwin-arm64 {{rust_target_arm64}}
     @echo "App bundle: dist/darwin-arm64/{{app_name}}.app"
 
-darwin-build-x86_64: _settings-x86_64
+darwin-build-x86_64: _settings-icons
     just _darwin-bundle darwin-x86_64 {{rust_target_x86}}
     @echo "App bundle: dist/darwin-x86_64/{{app_name}}.app"
+
+# Debug .app with LSUIElement (menu-bar extra). Prefer this over `cargo run`.
+darwin-run: _settings-icons
+    SETTINGS_SCHEMA="{{settings_schema}}" cargo build --bins --features settings-host
+    mkdir -p "dist/darwin-dev/{{app_name}}.app/Contents/MacOS"
+    mkdir -p "dist/darwin-dev/{{app_name}}.app/Contents/Resources"
+    cp "{{dev_target_dir}}/debug/{{exe_name}}" \
+        "dist/darwin-dev/{{app_name}}.app/Contents/MacOS/{{exe_name}}"
+    cp "{{dev_target_dir}}/debug/settings" \
+        "dist/darwin-dev/{{app_name}}.app/Contents/MacOS/settings"
+    just _copy-assets "dist/darwin-dev/{{app_name}}.app/Contents/Resources"
+    just _plist "dist/darwin-dev/{{app_name}}.app/Contents"
+    just _adhoc-sign "dist/darwin-dev/{{app_name}}.app"
+    -pkill -x {{exe_name}}
+    open -n "dist/darwin-dev/{{app_name}}.app"
 
 darwin-sign-arm64: darwin-build-arm64
     just _require-cert
@@ -126,13 +142,14 @@ install: darwin-build-arm64
 # Windows
 # ---------------------------------------------------------------------------
 
-win-build: _settings-win
+win-build: _settings-icons
     just _ico
-    CARGO_TARGET_DIR="{{win_target_dir}}" cargo build --release --target x86_64-pc-windows-gnu
+    SETTINGS_SCHEMA="{{settings_schema}}" CARGO_TARGET_DIR="{{win_target_dir}}" \
+        cargo build --release --target x86_64-pc-windows-gnu --bins --features settings-host
     mkdir -p "dist/windows-x86_64"
     cp "{{win_target_dir}}/x86_64-pc-windows-gnu/release/{{exe_name}}.exe" \
         "dist/windows-x86_64/{{app_name}}.exe"
-    cp "{{settings_dir}}/dist/settings/windows-x86_64/Settings.exe" \
+    cp "{{win_target_dir}}/x86_64-pc-windows-gnu/release/settings.exe" \
         "dist/windows-x86_64/Settings.exe"
     @echo "Windows build: dist/windows-x86_64"
 
@@ -157,17 +174,14 @@ clean:
 # Internal
 # ---------------------------------------------------------------------------
 
-_settings-arm64:
+_settings-icons:
     SETTINGS_SCHEMA="{{settings_schema}}" \
-        just --justfile "{{settings_dir}}/Justfile" binary-arm64
+        just --justfile "{{settings_dir}}/Justfile" _ensure-icon-font
 
-_settings-x86_64:
-    SETTINGS_SCHEMA="{{settings_schema}}" \
-        just --justfile "{{settings_dir}}/Justfile" binary-x86_64
-
-_settings-win:
-    SETTINGS_SCHEMA="{{settings_schema}}" \
-        just --justfile "{{settings_dir}}/Justfile" settings-win-build
+# Seal the bundle and its nested Settings executable for local launches.
+_adhoc-sign app:
+    codesign --force --sign - "{{app}}/Contents/MacOS/settings"
+    codesign --force --sign - "{{app}}"
 
 _darwin-bundle arch rust_target:
     MACOSX_DEPLOYMENT_TARGET={{min_macos}} cargo build --release --target {{rust_target}}
@@ -175,11 +189,14 @@ _darwin-bundle arch rust_target:
     mkdir -p "dist/{{arch}}/{{app_name}}.app/Contents/Resources"
     cp "target/{{rust_target}}/release/{{exe_name}}" \
         "dist/{{arch}}/{{app_name}}.app/Contents/MacOS/{{exe_name}}"
-    cp "{{settings_dir}}/target/{{rust_target}}/release/settings" \
+    SETTINGS_SCHEMA="{{settings_schema}}" \
+        cargo build --release --target {{rust_target}} --bin settings --features settings-host
+    cp "target/{{rust_target}}/release/settings" \
         "dist/{{arch}}/{{app_name}}.app/Contents/MacOS/settings"
     just _copy-assets "dist/{{arch}}/{{app_name}}.app/Contents/Resources"
     just _plist "dist/{{arch}}/{{app_name}}.app/Contents"
     just _icns "dist/{{arch}}/{{app_name}}.app/Contents/Resources/AppIcon.icns"
+    just _adhoc-sign "dist/{{arch}}/{{app_name}}.app"
 
 _copy-assets res_dir:
     mkdir -p "{{res_dir}}/assets/bearded_dragon/sprite"

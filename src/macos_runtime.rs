@@ -184,9 +184,20 @@ struct CharState {
     last_rendered: Option<RenderedState>,
     /// Present when the character is in `PhysicsWorld::Water`; `None` on land.
     aquatic: Option<crate::behavior::AquaticState>,
+    /// Saved name, when this animal is one of the named pets.
+    pet_name: Option<String>,
+    pet_profile: Option<(&'static str, String)>,
 }
 
 // ---- App-wide state (singletons) ----
+
+fn next_pet(app: &AppState, species: &'static str) -> crate::user_config::Spawn {
+    let active: Vec<_> = app.chars.iter().filter_map(|character| {
+        let (kind, id) = character.pet_profile.as_ref()?;
+        (species == *kind).then_some(id.as_str())
+    }).collect();
+    crate::user_config::load().next_spawn(species, &active)
+}
 
 struct AppState {
     chars: Vec<CharState>,
@@ -232,8 +243,6 @@ struct AppState {
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
     last_full_tick: Instant,
-    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
-    mode: crate::user_config::Mode,
 }
 
 thread_local! {
@@ -269,7 +278,9 @@ fn make_char_panel(
             NSBackingStoreType::Buffered,
             false,
         );
-        p.setBackgroundColor(Some(&NSColor::clearColor()));
+        // Tiny alpha so WindowServer hit-tests the full frame when we accept
+        // mouse events. Fully clear pixels otherwise fall through to Finder.
+        p.setBackgroundColor(Some(&NSColor::colorWithWhite_alpha(0.0, 0.01)));
         p.setOpaque(false);
         p.setHasShadow(false);
         p.setLevel(0); // NSNormalWindowLevel — lets other windows occlude the character
@@ -278,6 +289,7 @@ fn make_char_panel(
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
         p.setIgnoresMouseEvents(true);
+        p.setAcceptsMouseMovedEvents(true);
         p.setAlphaValue(1.0);
         p.setContentView(Some(&*iv));
         p
@@ -285,9 +297,143 @@ fn make_char_panel(
     (panel, iv)
 }
 
-/// Update the sprite shown in the character's reusable NSImageView.
-/// `setImage:` fires on every sprite change. `setContentSize` and `setFrameSize`
-/// fire only when the sprite dimensions change (state transitions, not frame loops).
+fn point_in_ns_rect(frame: NSRect, p: NSPoint) -> bool {
+    p.x >= frame.origin.x
+        && p.x < frame.origin.x + frame.size.width
+        && p.y >= frame.origin.y
+        && p.y < frame.origin.y + frame.size.height
+}
+
+fn handle_cmd_left_down(app: &mut AppState, mouse: NSPoint, _option: bool) -> bool {
+    if app.chars.iter().any(|c| c.drag_offset.is_some()) {
+        return true;
+    }
+    for ch in &mut app.chars {
+        let frame = unsafe { ch.panel.frame() };
+        if point_in_ns_rect(frame, mouse) {
+            let offset = (mouse.x - frame.origin.x, mouse.y - frame.origin.y);
+            ch.drag_offset = Some(offset);
+            ch.anim_state = State::Grabbed;
+            ch.surface = Surface::Airborne;
+            update_cmd_hit_participation(app);
+            return true;
+        }
+    }
+    false
+}
+
+/// While ⌘ is held over a mate (or a ⌘-drag is in progress), accept mouse
+/// events so Finder / the desktop do not see the drag. Without ⌘, panels
+/// stay click-through.
+fn update_cmd_hit_participation(app: &mut AppState) {
+    let flags = unsafe { NSEvent::modifierFlags_class() };
+    let command = flags.contains(NSEventModifierFlags::Command);
+    let mouse = unsafe { NSEvent::mouseLocation() };
+    for ch in &mut app.chars {
+        let frame = unsafe { ch.panel.frame() };
+        let over = point_in_ns_rect(frame, mouse);
+        let accept = ch.drag_offset.is_some() || (command && over);
+        unsafe { ch.panel.setIgnoresMouseEvents(!accept) };
+    }
+}
+
+fn handle_left_dragged(app: &mut AppState, mouse: NSPoint) -> bool {
+    let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some()) else {
+        return false;
+    };
+    let off = app.chars[drag_idx].drag_offset.unwrap();
+    let new_ns_x = mouse.x - off.0;
+    let new_ns_y = mouse.y - off.1;
+    unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
+    let sz = unsafe { app.chars[drag_idx].panel.frame().size };
+    let si = macos_wm::screen_info_raw_full();
+    app.chars[drag_idx].char_pos = (new_ns_x, si.height - new_ns_y - sz.height);
+    let foot_x = new_ns_x + sz.width / 2.0;
+    let foot_y = si.height - new_ns_y;
+    let wins: &[WinInfo] = &app.win_cache.wins;
+    let in_snap = macos_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some();
+    set_snap_highlight(&app.chars[drag_idx].image_view, in_snap);
+    update_cmd_hit_participation(app);
+    true
+}
+
+fn handle_left_up(app: &mut AppState) -> bool {
+    let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some()) else {
+        return false;
+    };
+    app.chars[drag_idx].drag_offset = None;
+    set_snap_highlight(&app.chars[drag_idx].image_view, false);
+
+    let si = macos_wm::screen_info_raw_full();
+    let wins = macos_wm::list_windows(&si);
+    let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
+    let ch = &mut app.chars[drag_idx];
+
+    let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
+    let (fw, fh) = ch.assets.image(&sr.name, sr.mirror)
+        .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
+        .unwrap_or((150.0, 150.0));
+    let foot_x = ch.char_pos.0 + fw / 2.0;
+    let foot_y = ch.char_pos.1 + fh;
+
+    let new_surface = macos_wm::find_drop_surface(foot_x, foot_y, &wins, &si);
+    match new_surface {
+        Some(surf) => {
+            let ctx = BehaviorContext {
+                state: &ch.anim_state,
+                surface: &surf,
+                elapsed_secs: 0.0,
+                config: &cfg,
+                rng01: 0.0,
+                surface_progress: 0.5,
+                facing: ch.facing,
+                at_edge: false,
+                surface_edge_info: SurfaceEdge::None,
+                jump_target: None,
+                attract_target: None,
+            };
+            let new_anim = ch.behavior.on_landed(&ctx);
+            let stand_anchor = ch.assets.anchor("s-stand")
+                .unwrap_or(Anchor { x: 0.0, y: 0.0 });
+            let stand_h = ch.assets.image("s-stand", false)
+                .map(|img| unsafe { img.size() }.height)
+                .unwrap_or(fh);
+            let snap_y = match &surf {
+                Surface::WindowTop { win_id, .. } =>
+                    macos_wm::find_win(*win_id, &wins).map(|w| w.y),
+                Surface::Desktop { .. } => {
+                    let si2 = macos_wm::screen_info_raw_full();
+                    Some(si2.floor_y())
+                }
+                _ => None,
+            };
+            if let Some(surface_y) = snap_y {
+                ch.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
+            }
+            ch.surface = surf;
+            if let Some(react_anim) = ch.behavior_engine.on_interaction(
+                crate::anim_trigger::ReactionTrigger::Dropped,
+            ) {
+                ch.anim_state = crate::behavior::State::OneShot {
+                    animation: react_anim,
+                    frame: 0,
+                    frame_elapsed: 0.0,
+                    done: false,
+                    return_to: Box::new(new_anim),
+                };
+            } else {
+                ch.anim_state = new_anim;
+            }
+        }
+        None => {
+            ch.surface = Surface::Airborne;
+            ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
+        }
+    }
+    update_cmd_hit_participation(app);
+    true
+}
+
 fn swap_sprite(
     image_view: &NSImageView,
     panel: &NSPanel,
@@ -555,6 +701,15 @@ fn status_location_label(
     format!("\u{1f4cd} {}", body)  // 📍
 }
 
+fn bundled_app() -> bool {
+    unsafe {
+        NSBundle::mainBundle()
+            .bundleIdentifier()
+            .map(|id| id.to_string() == "jp.emotiongraphics.petitmates")
+            .unwrap_or(false)
+    }
+}
+
 fn make_status_item(
     handler: &MenuDelegate,
     mt: MainThreadMarker,
@@ -565,10 +720,16 @@ fn make_status_item(
     unsafe {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(-2.0); // NSSquareStatusItemLength
-        // Fix autosave name to a stable string so Control Center does not
-        // create a new entry on every launch (PID-based auto-generated names).
-        let autosave_name = NSString::from_str("PetitMates");
-        let (): () = objc2::msg_send![&*item, setAutosaveName: &*autosave_name];
+        // Show first. `setAutosaveName` restores Control Center visibility and
+        // can hide the item (and make `button` nil) before we set the icon.
+        // Unpackaged `cargo run` has no bundle id — skip autosave so it does
+        // not share the Release app's Control Center slot.
+        let (): () = msg_send![&*item, setVisible: true];
+        if bundled_app() {
+            let autosave_name = NSString::from_str("PetitMates");
+            let (): () = objc2::msg_send![&*item, setAutosaveName: &*autosave_name];
+            let (): () = msg_send![&*item, setVisible: true];
+        }
         if let Some(btn) = item.button(mt) {
             if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str("lizard.fill"),
@@ -730,6 +891,22 @@ fn compute_effective_config(
     cfg
 }
 
+fn assets_for_species(
+    species: &str,
+    base: &Rc<SpriteAssets>,
+    width: f64,
+    coat: Option<crate::coat::Coat>,
+) -> Rc<SpriteAssets> {
+    let Some(dir) = char_dir_for(species) else { return Rc::clone(base); };
+    let Some(manifest) = crate::manifest::load(&dir) else { return Rc::clone(base); };
+    match coat {
+        Some(coat) if !coat.is_original() => SpriteAssets::load_coated(&dir, &manifest, width, Some(coat))
+            .map(Rc::new)
+            .unwrap_or_else(|| Rc::clone(base)),
+        _ => Rc::clone(base),
+    }
+}
+
 fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, mt: MainThreadMarker, demo: bool, char_name: &str) -> CharState {
     let (start_cx, start_cy) = physics::startup_drop(&si.physics_screen(), assets.size("s-stand", false).0, si.menu_bar_height);
     let init_img = assets.image("s-stand", false).expect("s-stand.png missing");
@@ -774,6 +951,8 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_screen_pos: (start_cx, start_cy),
         last_rendered: None,
         aquatic: None,
+        pet_name: None,
+        pet_profile: None,
     }
 }
 
@@ -866,9 +1045,13 @@ define_class!(
                 let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                let assets = Rc::clone(&app.bd_assets);
+                let spawn = next_pet(app, "bearded_dragon");
+                let assets = assets_for_species("bearded_dragon", &app.bd_assets, app.sprite_size, spawn.coat);
                 let config = app.bd_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false, "bearded_dragon"));
+                let mut ch = spawn_char(assets, config, &si, mt, false, "bearded_dragon");
+                ch.pet_name = spawn.name;
+                ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
+                app.chars.push(ch);
             });
         }
 
@@ -882,9 +1065,13 @@ define_class!(
                 let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                let assets = Rc::clone(&app.pt_assets);
+                let spawn = next_pet(app, "pond_turtle");
+                let assets = assets_for_species("pond_turtle", &app.pt_assets, app.sprite_size, spawn.coat);
                 let config = app.pt_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false, "pond_turtle"));
+                let mut ch = spawn_char(assets, config, &si, mt, false, "pond_turtle");
+                ch.pet_name = spawn.name;
+                ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
+                app.chars.push(ch);
             });
         }
 
@@ -900,7 +1087,11 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.lg_assets);
                 let config = app.lg_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false, "leopard_gecko"));
+                let spawn = next_pet(app, "leopard_gecko");
+                let mut ch = spawn_char(assets, config, &si, mt, false, spawn.species);
+                ch.pet_name = spawn.name;
+                ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
+                app.chars.push(ch);
             });
         }
 
@@ -1050,12 +1241,14 @@ fn set_snap_highlight(image_view: &NSImageView, active: bool) {
 
 // ---- ⌘+drag event monitors ----
 
-/// Register global event monitors for ⌘+drag.
+/// Register global + local monitors for ⌘-drag and hit-testing.
 /// Returns the monitor handles that must be kept alive.
 fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
     let mut monitors = Vec::new();
 
-    // LeftMouseDown — decide whether to start a drag.
+    // Global monitors still run when the panel is click-through (⌘ not yet
+    // applied, or the pointer raced ahead of FlagsChanged). Once a panel
+    // accepts events, only local monitors see the same buttons.
     let mask_down = NSEventMask::LeftMouseDown;
     let blk_down = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| {
         let ev = unsafe { ev.as_ref() };
@@ -1063,25 +1256,12 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         if !flags.contains(NSEventModifierFlags::Command) {
             return;
         }
+        let option = flags.contains(NSEventModifierFlags::Option);
         let mouse_ns = unsafe { NSEvent::mouseLocation() };
         APP.with(|cell| {
             let mut b = cell.borrow_mut();
             let Some(app) = b.as_mut() else { return };
-            // Find the first panel that contains the click.
-            for ch in &mut app.chars {
-                let frame = unsafe { ch.panel.frame() };
-                if mouse_ns.x >= frame.origin.x
-                    && mouse_ns.x < frame.origin.x + frame.size.width
-                    && mouse_ns.y >= frame.origin.y
-                    && mouse_ns.y < frame.origin.y + frame.size.height
-                {
-                    let offset = (mouse_ns.x - frame.origin.x, mouse_ns.y - frame.origin.y);
-                    ch.drag_offset = Some(offset);
-                    ch.anim_state = State::Grabbed;
-                    ch.surface = Surface::Airborne;
-                    break; // only grab the topmost hit
-                }
-            }
+            handle_cmd_left_down(app, mouse_ns, option);
         });
     });
     if let Some(m) = unsafe {
@@ -1090,29 +1270,13 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
-    // LeftMouseDragged — follow the mouse.
     let mask_drag = NSEventMask::LeftMouseDragged;
     let blk_drag = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
-            let mut b = cell.borrow_mut();
+            let Ok(mut b) = cell.try_borrow_mut() else { return };
             let Some(app) = b.as_mut() else { return };
-            let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
-                else { return };
-            let off = app.chars[drag_idx].drag_offset.unwrap();
             let mouse_ns = unsafe { NSEvent::mouseLocation() };
-            let new_ns_x = mouse_ns.x - off.0;
-            let new_ns_y = mouse_ns.y - off.1;
-            unsafe { app.chars[drag_idx].panel.setFrameOrigin(NSPoint::new(new_ns_x, new_ns_y)) };
-            let sz = unsafe { app.chars[drag_idx].panel.frame().size };
-            let si = macos_wm::screen_info_raw_full();
-            app.chars[drag_idx].char_pos = (new_ns_x, si.height - new_ns_y - sz.height);
-
-            // Snap-zone feedback: highlight the sprite when a surface is nearby.
-            let foot_x = new_ns_x + sz.width / 2.0;
-            let foot_y = si.height - new_ns_y;
-            let wins: &[WinInfo] = &app.win_cache.wins;
-            let in_snap = macos_wm::find_drop_surface(foot_x, foot_y, wins, &si).is_some();
-            set_snap_highlight(&app.chars[drag_idx].image_view, in_snap);
+            handle_left_dragged(app, mouse_ns);
         });
     });
     if let Some(m) = unsafe {
@@ -1121,87 +1285,12 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
-    // LeftMouseUp — release: find surface or start falling.
     let mask_up = NSEventMask::LeftMouseUp;
     let blk_up = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
         APP.with(|cell| {
-            let mut b = cell.borrow_mut();
+            let Ok(mut b) = cell.try_borrow_mut() else { return };
             let Some(app) = b.as_mut() else { return };
-            let Some(drag_idx) = app.chars.iter().position(|c| c.drag_offset.is_some())
-                else { return };
-            app.chars[drag_idx].drag_offset = None;
-            set_snap_highlight(&app.chars[drag_idx].image_view, false);
-
-            let si = macos_wm::screen_info_raw_full();
-            let wins = macos_wm::list_windows(&si);
-            let cfg = app.chars[drag_idx].config.lock().unwrap().current.clone();
-
-            let ch = &mut app.chars[drag_idx];
-
-            // Sprite dimensions for foot position.
-            let sr = sprite_for_state(&ch.anim_state, ch.facing, &ch.assets.animations);
-            let (fw, fh) = ch.assets.image(&sr.name, sr.mirror)
-                .map(|img| { let sz = unsafe { img.size() }; (sz.width, sz.height) })
-                .unwrap_or((150.0, 150.0));
-            let foot_x = ch.char_pos.0 + fw / 2.0;
-            let foot_y = ch.char_pos.1 + fh;
-
-            // Try to snap to a nearby surface (wider wall threshold for drag drops).
-            let new_surface = macos_wm::find_drop_surface(foot_x, foot_y, &wins, &si);
-            match new_surface {
-                Some(surf) => {
-                    let ctx = BehaviorContext {
-                        state: &ch.anim_state,
-                        surface: &surf,
-                        elapsed_secs: 0.0,
-                        config: &cfg,
-                        rng01: 0.0,
-                        surface_progress: 0.5,
-                        facing: ch.facing,
-                        at_edge: false,
-                        surface_edge_info: SurfaceEdge::None,
-                        jump_target: None,
-                        attract_target: None,
-                    };
-                    let new_anim = ch.behavior.on_landed(&ctx);
-                    let stand_anchor = ch.assets.anchor("s-stand")
-                        .unwrap_or(Anchor { x: 0.0, y: 0.0 });
-                    let stand_h = ch.assets.image("s-stand", false)
-                        .map(|img| unsafe { img.size() }.height)
-                        .unwrap_or(fh);
-                    let snap_y = match &surf {
-                        Surface::WindowTop { win_id, .. } =>
-                            macos_wm::find_win(*win_id, &wins).map(|w| w.y),
-                        Surface::Desktop { .. } => {
-                            let si2 = macos_wm::screen_info_raw_full();
-                            Some(si2.floor_y())
-                        }
-                        _ => None,
-                    };
-                    if let Some(surface_y) = snap_y {
-                        ch.char_pos = (foot_x - fw / 2.0, surface_y - stand_h + stand_anchor.y);
-                    }
-                    ch.surface = surf;
-                    // Wrap landing animation in a OneShot reaction if one is defined.
-                    if let Some(react_anim) = ch.behavior_engine.on_interaction(
-                        crate::anim_trigger::ReactionTrigger::Dropped,
-                    ) {
-                        ch.anim_state = crate::behavior::State::OneShot {
-                            animation: react_anim,
-                            frame: 0,
-                            frame_elapsed: 0.0,
-                            done: false,
-                            return_to: Box::new(new_anim),
-                        };
-                    } else {
-                        ch.anim_state = new_anim;
-                    }
-                }
-                None => {
-                    ch.surface = Surface::Airborne;
-                    ch.anim_state = State::Falling { vx: 0.0, vy: 0.0, shocked: 0.0 };
-                }
-            }
+            handle_left_up(app);
         });
     });
     if let Some(m) = unsafe {
@@ -1210,12 +1299,63 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
+    let blk_local_down = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let flags = unsafe { ev.as_ref().modifierFlags() };
+        if !flags.contains(NSEventModifierFlags::Command) {
+            return ev.as_ptr();
+        }
+        let option = flags.contains(NSEventModifierFlags::Option);
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            if let Some(app) = b.as_mut() {
+                handle_cmd_left_down(app, mouse_ns, option);
+            }
+        });
+        // Do not consume mouse-down: the panel must become the tracking window
+        // so subsequent dragged / up events stay in-app. Finder never sees this
+        // click because ignoresMouseEvents is already false.
+        ev.as_ptr()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_down, &*blk_local_down)
+    } {
+        monitors.push(m);
+    }
+
+    let blk_local_drag = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let mouse_ns = unsafe { NSEvent::mouseLocation() };
+        let handled = APP.with(|cell| {
+            let Ok(mut b) = cell.try_borrow_mut() else { return false };
+            b.as_mut().is_some_and(|app| handle_left_dragged(app, mouse_ns))
+        });
+        if handled { std::ptr::null_mut() } else { ev.as_ptr() }
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_drag, &*blk_local_drag)
+    } {
+        monitors.push(m);
+    }
+
+    let blk_local_up = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let handled = APP.with(|cell| {
+            let Ok(mut b) = cell.try_borrow_mut() else { return false };
+            b.as_mut().is_some_and(|app| handle_left_up(app))
+        });
+        if handled { std::ptr::null_mut() } else { ev.as_ptr() }
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_up, &*blk_local_up)
+    } {
+        monitors.push(m);
+    }
+
     // RightMouseDown (local monitor) — captures right-clicks on our panels when ⌥⌘ is held.
     //
     // Using a LOCAL monitor (not global) is essential: local monitors can return nil to
     // consume the event, preventing it from reaching the underlying app (Finder/Desktop).
-    // The tick loop polls ⌥⌘ state and sets ignoresMouseEvents=false on panels under the
-    // cursor so that right-clicks are delivered to our app rather than passing through.
+    // update_cmd_hit_participation sets ignoresMouseEvents=false while ⌘ is held over
+    // a panel, so Option+Command right-clicks are delivered here rather than to Finder.
     let mask_rdown = NSEventMask::RightMouseDown;
     let blk_rdown = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
         let flags = unsafe { _ev.as_ref().modifierFlags() };
@@ -1366,32 +1506,60 @@ fn setup_drag_monitors() -> Vec<Retained<AnyObject>> {
         monitors.push(m);
     }
 
-    // FlagsChanged (global) — immediately update ignoresMouseEvents when ⌥⌘ is
-    // pressed or released. Without this, the 10 Hz tick creates a ≤100 ms window
-    // where the panel still ignores mouse events even though ⌥⌘ is held, causing
-    // the local RightMouseDown monitor to never fire.
+    // FlagsChanged / MouseMoved — flip ignoresMouseEvents as soon as ⌘ is held
+    // over a mate or the cage, so the subsequent mouse-down never reaches Finder.
     let mask_flags = NSEventMask::FlagsChanged;
     let blk_flags = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
-        let flags = unsafe { NSEvent::modifierFlags_class() };
-        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
-            && flags.contains(NSEventModifierFlags::Command);
-        let mouse_ns = unsafe { NSEvent::mouseLocation() };
         APP.with(|cell| {
-            let b = cell.borrow();
-            let Some(app) = b.as_ref() else { return };
-            for ch in &app.chars {
-                let frame = unsafe { ch.panel.frame() };
-                let over = opt_cmd
-                    && mouse_ns.x >= frame.origin.x
-                    && mouse_ns.x < frame.origin.x + frame.size.width
-                    && mouse_ns.y >= frame.origin.y
-                    && mouse_ns.y < frame.origin.y + frame.size.height;
-                unsafe { ch.panel.setIgnoresMouseEvents(!over) };
-            }
+            let mut b = cell.borrow_mut();
+            let Some(app) = b.as_mut() else { return };
+            update_cmd_hit_participation(app);
         });
     });
     if let Some(m) = unsafe {
         NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_flags, &*blk_flags)
+    } {
+        monitors.push(m);
+    }
+    let blk_local_flags = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            if let Some(app) = b.as_mut() {
+                update_cmd_hit_participation(app);
+            }
+        });
+        ev.as_ptr()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_flags, &*blk_local_flags)
+    } {
+        monitors.push(m);
+    }
+
+    let mask_move = NSEventMask::MouseMoved;
+    let blk_move = block2::RcBlock::new(move |_ev: std::ptr::NonNull<NSEvent>| {
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            let Some(app) = b.as_mut() else { return };
+            update_cmd_hit_participation(app);
+        });
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask_move, &*blk_move)
+    } {
+        monitors.push(m);
+    }
+    let blk_local_move = block2::RcBlock::new(move |ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        APP.with(|cell| {
+            let mut b = cell.borrow_mut();
+            if let Some(app) = b.as_mut() {
+                update_cmd_hit_participation(app);
+            }
+        });
+        ev.as_ptr()
+    });
+    if let Some(m) = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask_move, &*blk_local_move)
     } {
         monitors.push(m);
     }
@@ -1521,7 +1689,6 @@ fn tick_char(
     wins: &[WinInfo],
     _mt: MainThreadMarker,
     sprite_size: f64,
-    mode: &crate::user_config::Mode,
 ) {
     // While dragging, skip physics and state machine — panel position is
     // updated directly by the drag event monitor.
@@ -1587,26 +1754,31 @@ fn tick_char(
     if let Some(ref mut aq) = ch.aquatic {
         // --- Water physics ---
         let wa = ch.assets.surfaces.water_affinity;
-        if let Surface::WindowInterior { win_id, .. } = ch.surface {
+        if let Surface::WindowInterior { win_id, ref mut x_local, ref mut y_local } = ch.surface {
             if let Some(&win) = macos_wm::find_win(win_id, wins) {
                 let mut rng = rand::rngs::SmallRng::seed_from_u64(
                     now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
                 );
-                physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, wa, sprite_size / 2.0, dt, &mut rng);
+                physics::tick_water(
+                    x_local,
+                    y_local,
+                    aq,
+                    physics::WaterBounds { x: 0.0, y: 0.0, w: win.w, h: win.h },
+                    &cfg.water,
+                    wa,
+                    sprite_size / 2.0,
+                    dt,
+                    &mut rng,
+                );
 
                 // Rest/wake transitions (resting only triggers near the bottom).
                 let was_resting = aq.resting;
                 if aq.resting {
                     let wake_p = (cfg.water.wake_prob_per_sec * dt).clamp(0.0, 1.0);
                     if rng.gen_bool(wake_p) { aq.resting = false; }
-                } else {
-                    let near_bottom = if let Surface::WindowInterior { y_local, .. } = ch.surface {
-                        y_local > win.h - cfg.water.thigmotaxis_margin
-                    } else { false };
-                    if near_bottom {
-                        let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
-                        if rng.gen_bool(rest_p) { aq.resting = true; }
-                    }
+                } else if *y_local > win.h - cfg.water.thigmotaxis_margin {
+                    let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
+                    if rng.gen_bool(rest_p) { aq.resting = true; }
                 }
                 // Flip animation state when rest/swim mode changes.
                 if was_resting != aq.resting {
@@ -1650,51 +1822,8 @@ fn tick_char(
             }
         }
     } else {
-        // Water entry: only in Vivarium mode.
-        let wa = ch.assets.surfaces.water_affinity;
-        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
-            let win_id_side: Option<(u32, Side)> = match ch.surface {
-                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
-                Surface::WindowTop { win_id, x_local } => {
-                    // Entry from the left or right end of the window top.
-                    macos_wm::find_win(win_id, wins).and_then(|win| {
-                        let half = sprite_size / 2.0;
-                        let edge_margin = 2.0;
-                        if x_local <= edge_margin + half {
-                            Some((win_id, Side::Left))
-                        } else if x_local >= win.w - edge_margin - half {
-                            Some((win_id, Side::Right))
-                        } else {
-                            None
-                        }
-                    })
-                }
-                _ => None,
-            };
-            if let Some((win_id, side)) = win_id_side {
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(
-                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
-                );
-                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
-                if rng.gen_bool(dive_prob) {
-                    if let Some(&win) = macos_wm::find_win(win_id, wins) {
-                        let half = sprite_size / 2.0;
-                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
-                        let vx = match side {
-                            Side::Left  =>  cfg.water.swim_speed * 0.5,
-                            Side::Right => -cfg.water.swim_speed * 0.5,
-                        };
-                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
-                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3, resting: false });
-                        ch.anim_state = State::Walking {
-                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
-                            frame: 0,
-                            frame_elapsed: 0.0,
-                        };
-                    }
-                }
-            }
-        }
+        // Water entry into foreign windows is disabled (cage water is a later slice).
+    }
 
     // Save CG y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -1806,8 +1935,6 @@ fn tick_char(
             ch.anim_state = target;
         }
     }
-
-    } // end land physics (else branch)
 
     // Keep facing in sync with Walking/Running direction (land only; water updates facing via vx).
     if ch.aquatic.is_none() {
@@ -1965,15 +2092,15 @@ fn perform_settings_restart(mt: MainThreadMarker) {
 }
 
 fn tick() {
+    let mt = unsafe { MainThreadMarker::new_unchecked() };
+    if crate::user_config::take_restart_request() {
+        perform_settings_restart(mt);
+        return;
+    }
+
     APP.with(|cell| {
         let mut b = cell.borrow_mut();
         let Some(app) = b.as_mut() else { return };
-        let mt = unsafe { MainThreadMarker::new_unchecked() };
-
-        if crate::user_config::take_restart_request() {
-            perform_settings_restart(mt);
-            return;
-        }
 
         // Rate-limit: skip this 60 Hz callback when the target interval has not elapsed.
         {
@@ -2039,7 +2166,7 @@ fn tick() {
                 }
             }
             let cfg = ch.effective_config.clone();
-            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size, &app.mode);
+            tick_char(ch, &cfg, &si, wins, mt, app.sprite_size);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -2224,24 +2351,9 @@ fn tick() {
             }
         }
 
-        // ⌥⌘ hover tracking: when Option+Command is held and the cursor is
-        // directly over a character panel, temporarily stop ignoring mouse events
-        // so that the local RightMouseDown monitor can intercept the right-click
-        // before it reaches the underlying app (Finder / Desktop).
-        // All other panels (and this panel outside ⌥⌘) stay transparent to clicks.
-        let flags: NSEventModifierFlags = unsafe { msg_send![NSEvent::class(), modifierFlags] };
-        let opt_cmd = flags.contains(NSEventModifierFlags::Option)
-            && flags.contains(NSEventModifierFlags::Command);
-        let mouse_ns = unsafe { NSEvent::mouseLocation() };
-        for ch in &app.chars {
-            let frame = unsafe { ch.panel.frame() };
-            let over = opt_cmd
-                && mouse_ns.x >= frame.origin.x
-                && mouse_ns.x < frame.origin.x + frame.size.width
-                && mouse_ns.y >= frame.origin.y
-                && mouse_ns.y < frame.origin.y + frame.size.height;
-            unsafe { ch.panel.setIgnoresMouseEvents(!over) };
-        }
+        // ⌘ over a mate (or an in-progress ⌘-drag) makes that panel
+        // accept events so Finder never sees the click. Without ⌘, click-through.
+        update_cmd_hit_participation(app);
     });
 }
 
@@ -2286,38 +2398,23 @@ pub fn run() {
         // Demo mode: one bearded dragon with deterministic scripted behavior.
         vec![spawn_char(Rc::clone(&bd_assets), bd_config.clone(), &si, mt, true, "bearded_dragon")]
     } else {
-        user_cfg
-            .characters
-            .startup_species_ids()
-            .into_iter()
-            .map(|species| match species {
-                "bearded_dragon" => spawn_char(
-                    Rc::clone(&bd_assets),
-                    bd_config.clone(),
-                    &si,
-                    mt,
-                    false,
-                    species,
-                ),
-                "pond_turtle" => spawn_char(
-                    Rc::clone(&pt_assets),
+        user_cfg.startup_spawns().into_iter().map(|spawn| {
+            let (assets, config) = match spawn.species {
+                "pond_turtle" => (
+                    assets_for_species("pond_turtle", &pt_assets, pt_display_w, spawn.coat),
                     pt_config.clone(),
-                    &si,
-                    mt,
-                    false,
-                    species,
                 ),
-                "leopard_gecko" => spawn_char(
-                    Rc::clone(&lg_assets),
-                    lg_config.clone(),
-                    &si,
-                    mt,
-                    false,
-                    species,
+                "leopard_gecko" => (Rc::clone(&lg_assets), lg_config.clone()),
+                _ => (
+                    assets_for_species("bearded_dragon", &bd_assets, bd_display_w, spawn.coat),
+                    bd_config.clone(),
                 ),
-                _ => unreachable!("startup_species_ids only returns built-in species"),
-            })
-            .collect()
+            };
+            let mut ch = spawn_char(assets, config, &si, mt, false, spawn.species);
+            ch.pet_name = spawn.name;
+            ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
+            ch
+        }).collect()
     };
 
     let weather_handle = crate::weather::spawn(&user_cfg.weather);
@@ -2332,6 +2429,11 @@ pub fn run() {
     unsafe {
         let common: &NSRunLoopMode = &*(NSRunLoopCommonModes as *const NSRunLoopMode);
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, common);
+    }
+
+    unsafe {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let (): () = msg_send![&*status_item, setVisible: true];
     }
 
     APP.with(|cell| {
@@ -2366,7 +2468,6 @@ pub fn run() {
                 user_cfg.display.tick_rate_battery
             }.max(1),
             last_full_tick: Instant::now(),
-            mode: user_cfg.mode,
         });
     });
 

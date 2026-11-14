@@ -102,9 +102,8 @@ Screen Recording permission is **not** required. Characters navigate using publi
 ### Windows
 
 1. Download **`Petit-Mates-vX.X.X-windows-x86_64.zip`** from [Releases](https://github.com/rinodrops/petitmates/releases/latest).
-2. Extract and run **`Petit Mates.exe`**. A system tray icon appears.
-
-No installer needed — the executable is fully self-contained.
+2. Extract the ZIP and keep **`Settings.exe`** next to **`Petit Mates.exe`**.
+3. Run **`Petit Mates.exe`**. A system tray icon appears.
 
 ## Usage
 
@@ -123,7 +122,7 @@ No installer needed — the executable is fully self-contained.
 </tr>
 </table>
 
-- **Settings…** — Open the settings window to edit display, speech, and weather. When you close the settings window, Petit Mates **restarts** so changes apply.
+- **Settings…** — Edit display, characters, individual pets, speech, and weather. When Settings closes after saving changes, Petit Mates restarts to apply them. On Windows, choose **OK** to save and close.
 - **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor instead (restart the app manually to apply).
 - **Add / Remove character** — Spawn or dismiss each of the three characters independently.
 - **About** — Version info.
@@ -140,6 +139,12 @@ Drop anywhere — onto a window edge, a wall, or the desktop floor — and the c
 ### Mouse Hover
 
 Move your cursor over a character and it fades to 25% opacity, letting you interact with whatever is behind it.
+
+### Individual Pets
+
+Open **Settings → Pets** to save named profiles and reorder them for each species. At startup and when you add a character, Petit Mates uses the first profile of that species that is available. Dismissing a pet makes its profile available again. When every named profile is already out, a bearded dragon or pond turtle uses a randomly chosen preset from the same palette.
+
+Choose **Original** to restore the artwork, or open **Custom…** to edit hue, saturation, and value and watch the preview. Pond turtles have separate shell and skin colors.
 
 ## Customization
 
@@ -174,6 +179,13 @@ leopard_gecko_params.toml    ← optional override
 If no override file is present, built-in defaults derived from personality are used.
 
 ## Release Notes
+
+### v1.1.0
+
+- The **Pets** tab lets you name and reorder individual profiles by species. Petit Mates uses available profiles in list order at startup and when you add a character.
+- Bearded dragons and pond turtles have preset palettes and custom hue, saturation, and value controls with live previews. Pond turtles have separate shell and skin colors. When the named profiles are in use, additional dragons and turtles pick colors from their species' palettes.
+- Built-in coat masks are prepared during the build to reduce startup work. Pond turtles keep their shell color while climbing.
+- Petit Mates reloads saved changes when the Settings window closes. On Windows, select **OK** to save and close.
 
 ### v1.0.1
 

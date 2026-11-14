@@ -32,8 +32,8 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{AnyThread, MainThreadOnly};
-use objc2_app_kit::{NSImage, NSImageView};
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_app_kit::{NSBitmapFormat, NSBitmapImageRep, NSCalibratedRGBColorSpace, NSImage, NSImageView};
+use objc2_foundation::{MainThreadMarker, NSData, NSPoint, NSRect, NSSize};
 
 use crate::manifest::{Attachment, AnimationDef, Manifest, SurfaceConfig};
 
@@ -71,6 +71,16 @@ impl SpriteAssets {
         manifest: &Manifest,
         display_width: f64,
     ) -> Option<Self> {
+        Self::load_coated(char_dir, manifest, display_width, None)
+    }
+
+    /// Load sprites, optionally recolored by `coat`.
+    pub fn load_coated(
+        char_dir: &Path,
+        manifest: &Manifest,
+        display_width: f64,
+        coat: Option<crate::coat::Coat>,
+    ) -> Option<Self> {
         let scale = display_width / manifest.canonical_width.max(1.0);
         let sprite_dir = char_dir.join("sprite");
 
@@ -86,12 +96,14 @@ impl SpriteAssets {
                 return None;
             }
             let path = sprite_dir.join(format!("{name}.png"));
-            let ns_path = NSString::from_str(path.to_str()?);
-
-            let orig =
-                unsafe { NSImage::initWithContentsOfFile(NSImage::alloc(), &ns_path) }?;
+            let bytes = std::fs::read(&path).ok()?;
+            let orig = coat.filter(|coat| !coat.is_original())
+                .and_then(|coat| tinted_image(&bytes, name, coat))
+                .or_else(|| {
+                    let data = NSData::with_bytes(&bytes);
+                    unsafe { NSImage::initWithData(NSImage::alloc(), &data) }
+                })?;
             let orig_h = unsafe { orig.size() }.height;
-
             let scaled = scale_image(&orig, scale);
             let anchor = compute_anchor(info.x, info.y, orig_h, scale, &info.attachment);
             let mirror = unsafe { make_mirrored_image(&scaled) };
@@ -101,7 +113,13 @@ impl SpriteAssets {
             anchors.insert(name.clone(), anchor);
         }
 
-        Some(SpriteAssets { images, mirrored, anchors, animations: manifest.animations.clone(), surfaces: manifest.surfaces.clone() })
+        Some(SpriteAssets {
+            images,
+            mirrored,
+            anchors,
+            animations: manifest.animations.clone(),
+            surfaces: manifest.surfaces.clone(),
+        })
     }
 
     /// Returns the (optionally mirrored) NSImage for `name`.
@@ -127,6 +145,29 @@ impl SpriteAssets {
 }
 
 // ---- Image helpers ----
+
+/// Recolor decoded pixels and give AppKit a bitmap without another PNG round trip.
+fn tinted_image(bytes: &[u8], name: &str, coat: crate::coat::Coat) -> Option<Retained<NSImage>> {
+    let mut rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
+    crate::coat_mask::tint_builtin(&mut rgba, bytes, name, coat);
+    let (width, height) = (rgba.width() as isize, rgba.height() as isize);
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(), std::ptr::null_mut(), width, height,
+            8, 4, true, false, NSCalibratedRGBColorSpace,
+            NSBitmapFormat::AlphaNonpremultiplied, width * 4, 32,
+        )
+    }?;
+    let pixels = rep.bitmapData();
+    if pixels.is_null() {
+        return None;
+    }
+    // With no input planes AppKit owns the buffer, sized to the requested stride and height.
+    unsafe { std::ptr::copy_nonoverlapping(rgba.as_ptr(), pixels, rgba.len()) };
+    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(width as f64, height as f64));
+    image.addRepresentation(&rep);
+    Some(image)
+}
 
 /// Return a new NSImage scaled uniformly by `scale`.
 pub fn scale_image(src: &NSImage, scale: f64) -> Retained<NSImage> {
@@ -169,6 +210,9 @@ pub fn make_image_view(image: &NSImage, mt: MainThreadMarker) -> Retained<NSImag
             NSRect::new(NSPoint::ZERO, sz),
         );
         iv.setImage(Some(image));
+        // Keep per-pixel alpha (default bezel/background would look opaque).
+        let _: () = msg_send![&*iv, setImageFrameStyle: 0u64];
+        iv.setWantsLayer(true);
         iv
     }
 }

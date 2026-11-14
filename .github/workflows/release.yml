@@ -8,7 +8,7 @@ on:
 
 jobs:
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -20,12 +20,14 @@ jobs:
       APPLE_DEVELOPER_APP_PASSWORD: ${{ secrets.APPLE_DEVELOPER_APP_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: petitmates
 
       - name: Checkout Settings
         uses: actions/checkout@v4
         with:
           repository: rinodrops/settings
-          ref: v0.2.5
+          ref: c836b380533ef969306156a344cb7b869a26a6cb
           path: settings
 
       - uses: extractions/setup-just@v2
@@ -35,7 +37,10 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install dmgbuild
-        run: pip install dmgbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild-venv"
+          "$RUNNER_TEMP/dmgbuild-venv/bin/python" -m pip install dmgbuild
+          echo "$RUNNER_TEMP/dmgbuild-venv/bin" >> "$GITHUB_PATH"
 
       - name: Import code signing certificate
         env:
@@ -58,8 +63,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+            petitmates/target
+          key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('petitmates/Cargo.lock') }}
           restore-keys: cargo-macos-${{ matrix.arch }}-
 
       - name: Sanitize notarization credentials
@@ -80,26 +85,27 @@ jobs:
             { echo "APPLE_DEVELOPER_APP_PASSWORD must be 19 characters (got ${#APPLE_DEVELOPER_APP_PASSWORD}); use an app-specific password from appleid.apple.com" >&2; exit 1; }
 
       - name: Build and notarize (${{ matrix.arch }})
+        working-directory: petitmates
         run: just darwin-notarize-${{ matrix.arch }}
-        env:
-          SETTINGS_DIR: settings
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
-          path: dist/Petit-Mates-v*-darwin-${{ matrix.arch }}.dmg
+          path: petitmates/dist/Petit-Mates-v*-darwin-${{ matrix.arch }}.dmg
 
   windows:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: petitmates
 
       - name: Checkout Settings
         uses: actions/checkout@v4
         with:
           repository: rinodrops/settings
-          ref: v0.2.5
+          ref: c836b380533ef969306156a344cb7b869a26a6cb
           path: settings
 
       - uses: extractions/setup-just@v2
@@ -122,19 +128,18 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
+          key: cargo-windows-${{ hashFiles('petitmates/Cargo.lock') }}
           restore-keys: cargo-windows-
 
       - name: Build Windows package
+        working-directory: petitmates
         run: just win-zip
-        env:
-          SETTINGS_DIR: settings
 
       - name: Upload Windows zip
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/Petit-Mates-v*-windows-x86_64.zip
+          path: petitmates/dist/Petit-Mates-v*-windows-x86_64.zip
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -170,7 +175,7 @@ jobs:
             echo ""
             echo "### Windows Installation"
             echo "1. Download the zip and extract it."
-            echo "2. Run **Petit Mates.exe** — a system tray icon appears."
+            echo "2. Keep **Settings.exe** next to **Petit Mates.exe** and run **Petit Mates.exe**. A system tray icon appears."
           } > release-body.md
 
       - name: Create draft release

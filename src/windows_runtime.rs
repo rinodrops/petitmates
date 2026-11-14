@@ -181,6 +181,16 @@ struct CharState {
     snap_highlight: bool,
     /// Water-physics state; `Some` when character is in `Surface::WindowInterior`.
     aquatic: Option<crate::behavior::AquaticState>,
+    pet_name: Option<String>,
+    pet_profile: Option<(&'static str, String)>,
+}
+
+fn next_pet(app: &AppState, species: &'static str) -> crate::user_config::Spawn {
+    let active: Vec<_> = app.chars.iter().filter_map(|character| {
+        let (kind, id) = character.pet_profile.as_ref()?;
+        (species == *kind).then_some(id.as_str())
+    }).collect();
+    crate::user_config::load().next_spawn(species, &active)
 }
 
 struct AppState {
@@ -222,8 +232,6 @@ struct AppState {
     tick_rate: u32,
     /// Timestamp of the last physics/rendering tick. Used for rate limiting.
     last_full_tick: Instant,
-    /// Runtime mode: `Free` disables aquatic physics; `Vivarium` enables it.
-    mode: crate::user_config::Mode,
 }
 
 thread_local! {
@@ -267,7 +275,16 @@ unsafe fn set_layered_content(
 
         let mut bits: *mut c_void = ptr::null_mut();
         let hbmp = CreateDIBSection(hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
-        ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, bgra.len());
+        let need = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+        if bits.is_null() || hbmp.is_null() || bgra.len() < need {
+            if !hbmp.is_null() {
+                DeleteObject(hbmp);
+            }
+            DeleteDC(hdc_mem);
+            ReleaseDC(ptr::null_mut(), hdc_screen);
+            return;
+        }
+        ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, need);
 
         let old   = SelectObject(hdc_mem, hbmp);
         let pt_dst = POINT { x, y };
@@ -649,6 +666,31 @@ fn compute_effective_config(
     cfg
 }
 
+fn windows_coated(
+    species: &str,
+    base: &Rc<SpriteAssets>,
+    width: f64,
+    coat: Option<crate::coat::Coat>,
+) -> Rc<SpriteAssets> {
+    let Some(coat) = coat.filter(|c| !c.is_original()) else { return Rc::clone(base); };
+    let (sprites, manifest_bytes) = match species {
+        "pond_turtle" => (
+            windows_assets::embedded::pond_turtle::SPRITES,
+            windows_assets::embedded::pond_turtle::MANIFEST_TOML,
+        ),
+        _ => (
+            windows_assets::embedded::bearded_dragon::SPRITES,
+            windows_assets::embedded::bearded_dragon::MANIFEST_TOML,
+        ),
+    };
+    let Some(manifest) = crate::manifest::load_from_bytes(manifest_bytes) else {
+        return Rc::clone(base);
+    };
+    SpriteAssets::load_embedded_coated(sprites, &manifest, width, Some(coat))
+        .map(Rc::new)
+        .unwrap_or_else(|| Rc::clone(base))
+}
+
 unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: SharedConfig, char_name: &str) -> CharState {
     let hinstance  = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide("PetitMatesOverlay");
@@ -700,6 +742,8 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         last_sprite_w: 150.0,
         snap_highlight: false,
         aquatic: None,
+        pet_name: None,
+        pet_profile: None,
     }
 }
 
@@ -718,9 +762,7 @@ fn brighten_bgra(bgra: &mut [u8], delta: u8) {
     }
 }
 
-// ---- Per-character tick ----
-
-fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64, mode: &crate::user_config::Mode) {
+fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, wins: &[WinInfo], sprite_size: f64) {
     let assets: &SpriteAssets = &ch.assets;
     // While being dragged, skip the state machine and just render at the
     // position set by WM_MOUSEMOVE.
@@ -762,26 +804,31 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
     if let Some(ref mut aq) = ch.aquatic {
         // --- Water physics ---
         let wa = ch.assets.surfaces.water_affinity;
-        if let Surface::WindowInterior { win_id, .. } = ch.surface {
+        if let Surface::WindowInterior { win_id, ref mut x_local, ref mut y_local } = ch.surface {
             if let Some(&win) = windows_wm::find_win(win_id, wins) {
                 let mut rng = rand::rngs::SmallRng::seed_from_u64(
                     now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
                 );
-                physics::tick_water(&mut ch.surface, aq, &win, &cfg.water, wa, sprite_size / 2.0, dt, &mut rng);
+                physics::tick_water(
+                    x_local,
+                    y_local,
+                    aq,
+                    physics::WaterBounds { x: 0.0, y: 0.0, w: win.w, h: win.h },
+                    &cfg.water,
+                    wa,
+                    sprite_size / 2.0,
+                    dt,
+                    &mut rng,
+                );
 
                 // Rest/wake transitions (resting only triggers near the bottom).
                 let was_resting = aq.resting;
                 if aq.resting {
                     let wake_p = (cfg.water.wake_prob_per_sec * dt).clamp(0.0, 1.0);
                     if rng.gen_bool(wake_p) { aq.resting = false; }
-                } else {
-                    let near_bottom = if let Surface::WindowInterior { y_local, .. } = ch.surface {
-                        y_local > win.h - cfg.water.thigmotaxis_margin
-                    } else { false };
-                    if near_bottom {
-                        let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
-                        if rng.gen_bool(rest_p) { aq.resting = true; }
-                    }
+                } else if *y_local > win.h - cfg.water.thigmotaxis_margin {
+                    let rest_p = (cfg.water.rest_prob_per_sec * dt).clamp(0.0, 1.0);
+                    if rng.gen_bool(rest_p) { aq.resting = true; }
                 }
                 // Flip animation state when rest/swim mode changes.
                 if was_resting != aq.resting {
@@ -825,51 +872,8 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             }
         }
     } else { // land physics
-
-        // Water entry: only in Vivarium mode.
-        let wa = ch.assets.surfaces.water_affinity;
-        if wa > 0.0 && *mode == crate::user_config::Mode::Vivarium {
-            let win_id_side: Option<(u32, Side)> = match ch.surface {
-                Surface::WindowUpperCorner { win_id, side } => Some((win_id, side)),
-                Surface::WindowTop { win_id, x_local } => {
-                    windows_wm::find_win(win_id, wins).and_then(|win| {
-                        let half = sprite_size / 2.0;
-                        let edge_margin = 2.0;
-                        if x_local <= edge_margin + half {
-                            Some((win_id, Side::Left))
-                        } else if x_local >= win.w - edge_margin - half {
-                            Some((win_id, Side::Right))
-                        } else {
-                            None
-                        }
-                    })
-                }
-                _ => None,
-            };
-            if let Some((win_id, side)) = win_id_side {
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(
-                    now.elapsed().subsec_nanos() as u64 ^ (win_id as u64).wrapping_mul(6364136223846793005),
-                );
-                let dive_prob = (cfg.water.dive_prob_per_sec * wa * dt).clamp(0.0, 1.0);
-                if rng.gen_bool(dive_prob) {
-                    if let Some(&win) = windows_wm::find_win(win_id, wins) {
-                        let half = sprite_size / 2.0;
-                        let x_local = match side { Side::Left => half, Side::Right => win.w - half };
-                        let vx = match side {
-                            Side::Left  =>  cfg.water.swim_speed * 0.5,
-                            Side::Right => -cfg.water.swim_speed * 0.5,
-                        };
-                        ch.surface = Surface::WindowInterior { win_id, x_local, y_local: half };
-                        ch.aquatic = Some(crate::behavior::AquaticState { vx, vy: cfg.water.swim_speed * 0.3, resting: false });
-                        ch.anim_state = State::Walking {
-                            dir: match side { Side::Left => Dir::Right, Side::Right => Dir::Left },
-                            frame: 0,
-                            frame_elapsed: 0.0,
-                        };
-                    }
-                }
-            }
-        }
+        // Water entry into foreign windows is disabled (cage water is a later slice).
+    }
 
     // Save y before position update for swept landing detection.
     let prev_cy = ch.char_pos.1;
@@ -974,8 +978,6 @@ fn tick_char(ch: &mut CharState, cfg: &crate::config::Config, si: &ScreenInfo, w
             ch.anim_state = target;
         }
     }
-
-    } // end land physics (else branch)
 
     // Keep facing in sync with Walking/Running direction (land only).
     if ch.aquatic.is_none() {
@@ -1123,7 +1125,7 @@ fn tick_all() {
                 }
             }
             let cfg = app.chars[i].effective_config.clone();
-            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size, &app.mode);
+            tick_char(&mut app.chars[i], &cfg, &si, &wins, app.sprite_size);
         }
 
         // Post-tick: separate resting characters that are too close on the same surface.
@@ -1623,10 +1625,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_BD => {
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
-                        let si     = windows_wm::screen_info();
-                        let assets = Rc::clone(&app.bd_assets);
+                        let si = windows_wm::screen_info();
+                        let spawn = next_pet(app, "bearded_dragon");
+                        let assets = windows_coated("bearded_dragon", &app.bd_assets, app.sprite_size, spawn.coat);
                         let config = app.bd_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
+                        let mut ch = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
+                        ch.pet_name = spawn.name;
+                        ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                         app.chars.push(ch);
                     }
                 });
@@ -1656,10 +1661,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_COMMAND if (wp & 0xFFFF) == IDM_ADD_PT => {
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
-                        let si     = windows_wm::screen_info();
-                        let assets = Rc::clone(&app.pt_assets);
+                        let si = windows_wm::screen_info();
+                        let spawn = next_pet(app, "pond_turtle");
+                        let assets = windows_coated("pond_turtle", &app.pt_assets, app.sprite_size, spawn.coat);
                         let config = app.pt_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config, "pond_turtle");
+                        let mut ch = spawn_char_hwnd(&si, assets, config, "pond_turtle");
+                        ch.pet_name = spawn.name;
+                        ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                         app.chars.push(ch);
                     }
                 });
@@ -1671,7 +1679,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.lg_assets);
                         let config = app.lg_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config, "leopard_gecko");
+                        let spawn = next_pet(app, "leopard_gecko");
+                        let mut ch = spawn_char_hwnd(&si, assets, config, spawn.species);
+                        ch.pet_name = spawn.name;
+                        ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                         app.chars.push(ch);
                     }
                 });
@@ -1957,32 +1968,23 @@ pub fn run() {
         // Create character windows. The first serves as the host for timer+tray.
         let si         = windows_wm::screen_info();
         let weather_handle = crate::weather::spawn(&user_cfg.weather);
-        let initial_chars: Vec<CharState> = user_cfg
-            .characters
-            .startup_species_ids()
-            .into_iter()
-            .map(|species| match species {
-                "bearded_dragon" => spawn_char_hwnd(
-                    &si,
-                    Rc::clone(&bd_assets),
-                    bd_config.clone(),
-                    species,
-                ),
-                "pond_turtle" => spawn_char_hwnd(
-                    &si,
-                    Rc::clone(&pt_assets),
+        let initial_chars: Vec<CharState> = user_cfg.startup_spawns().into_iter().map(|spawn| {
+            let (assets, config) = match spawn.species {
+                "pond_turtle" => (
+                    windows_coated("pond_turtle", &pt_assets, pt_display_w, spawn.coat),
                     pt_config.clone(),
-                    species,
                 ),
-                "leopard_gecko" => spawn_char_hwnd(
-                    &si,
-                    Rc::clone(&lg_assets),
-                    lg_config.clone(),
-                    species,
+                "leopard_gecko" => (Rc::clone(&lg_assets), lg_config.clone()),
+                _ => (
+                    windows_coated("bearded_dragon", &bd_assets, bd_display_w, spawn.coat),
+                    bd_config.clone(),
                 ),
-                _ => unreachable!("startup_species_ids only returns built-in species"),
-            })
-            .collect();
+            };
+            let mut ch = spawn_char_hwnd(&si, assets, config, spawn.species);
+            ch.pet_name = spawn.name;
+            ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
+            ch
+        }).collect();
         let host_hwnd = initial_chars
             .first()
             .expect("startup_species_ids always returns at least one character")
@@ -2016,7 +2018,6 @@ pub fn run() {
                     user_cfg.display.tick_rate_battery
                 }.max(1),
                 last_full_tick: Instant::now(),
-                mode: user_cfg.mode,
             });
         });
 
