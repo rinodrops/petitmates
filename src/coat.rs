@@ -2,7 +2,8 @@
 //!
 //! Eyes, mouth, outline, and the bearded dragon's cream belly stay as drawn.
 //! Skin beside an open eye follows the body. A pond turtle's shell and skin
-//! take separate hues. Walk poses with a painted mask use that mask for the shell.
+//! take separate hues. Walk and vertical-climb poses with a painted mask use
+//! that mask for the shell.
 
 use image::{Rgba, RgbaImage};
 
@@ -110,6 +111,9 @@ fn mask_for(sprite: &str) -> Option<RgbaImage> {
         "s-walk-1" => include_bytes!("../assets/pond_turtle/mask/s-walk-1.png"),
         "s-walk-2" => include_bytes!("../assets/pond_turtle/mask/s-walk-2.png"),
         "s-walk-3" => include_bytes!("../assets/pond_turtle/mask/s-walk-3.png"),
+        "s-hang-wall-0" => include_bytes!("../assets/pond_turtle/mask/s-hang-wall-0.png"),
+        "s-hang-wall-1" => include_bytes!("../assets/pond_turtle/mask/s-hang-wall-1.png"),
+        "s-hang-wall-2" => include_bytes!("../assets/pond_turtle/mask/s-hang-wall-2.png"),
         _ => return None,
     };
     image::load_from_memory(bytes)
@@ -395,4 +399,35 @@ fn is_stripe(px: &Rgba<u8>) -> bool {
 fn is_olive(px: &Rgba<u8>) -> bool {
     let (h, s, v) = hsv(*px);
     (18.0..=72.0).contains(&h) && s >= 0.22 && (0.16..0.62).contains(&v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn climb_shell_keeps_its_own_hue() {
+        let png = include_bytes!("../assets/pond_turtle/sprite/s-hang-wall-0.png");
+        let tinted = tint_png(
+            png,
+            "s-hang-wall-0",
+            Coat::Turtle {
+                shell: 200.0,
+                skin: SKIN_HUE,
+            },
+        );
+        let img = image::load_from_memory(&tinted).unwrap().to_rgba8();
+        let shell = hsv(*img.get_pixel(305, 337));
+        let skin = hsv(*img.get_pixel(144, 236));
+        assert!(
+            (shell.0 - 200.0).abs() < 8.0,
+            "shell hue {}",
+            shell.0
+        );
+        assert!(
+            (skin.0 - SKIN_HUE).abs() < 20.0,
+            "skin hue {}",
+            skin.0
+        );
+    }
 }
