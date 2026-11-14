@@ -213,8 +213,6 @@ _copy-assets res_dir:
     cp assets/leopard_gecko/sprite/*.png    "{{res_dir}}/assets/leopard_gecko/sprite/"
     mkdir -p "{{res_dir}}/assets/common"
     cp assets/common/params.toml            "{{res_dir}}/assets/common/"
-    mkdir -p "{{res_dir}}/assets/vivarium"
-    cp assets/vivarium/look.toml            "{{res_dir}}/assets/vivarium/"
 
 _plist contents_dir:
     sed 's/@VERSION@/{{version}}/g' assets/darwin/Info.plist > "{{contents_dir}}/Info.plist"

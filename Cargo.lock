@@ -3078,7 +3078,6 @@ dependencies = [
  "serde_json",
  "settings",
  "toml 0.8.23",
- "toml_edit 0.22.27",
  "ureq",
  "windows-sys 0.59.0",
 ]

@@ -188,16 +188,6 @@ impl CharactersConfig {
     }
 }
 
-/// Deprecated global mode (`mode = "vivarium"` in old `user.toml`).
-/// Kept so existing files still parse. Water-in-foreign-windows is no longer used.
-#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    #[default]
-    Free,
-    Vivarium,
-}
-
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct NamedDragon {
@@ -236,10 +226,6 @@ pub struct UserConfig {
     pub weather: WeatherConfig,
     pub characters: CharactersConfig,
     pub pets: PetsConfig,
-    pub vivarium: crate::vivarium::VivariumConfig,
-    /// Ignored at runtime except as a one-shot enable hint when `[vivarium]` is absent.
-    #[serde(default)]
-    pub mode: Mode,
 }
 
 impl UserConfig {
@@ -387,55 +373,6 @@ pub fn user_config_path() -> Option<PathBuf> {
     Some(app_support_dir()?.join("user.toml"))
 }
 
-/// Engine-written Vivarium geometry. Preserves comments and other keys.
-pub fn write_vivarium_geometry(origin_x: f64, origin_y: f64, logical_w: u32, logical_h: u32) {
-    patch_vivarium(|table| {
-        table["origin_x"] = toml_edit::value(origin_x);
-        table["origin_y"] = toml_edit::value(origin_y);
-        table["logical_w"] = toml_edit::value(logical_w as i64);
-        table["logical_h"] = toml_edit::value(logical_h as i64);
-    });
-}
-
-pub fn write_vivarium_z_order(z: crate::vivarium::ZOrder) {
-    patch_vivarium(|table| {
-        table["z_order"] = toml_edit::value(z.as_str());
-    });
-}
-
-fn patch_vivarium(edit: impl FnOnce(&mut toml_edit::Table)) {
-    let Some(path) = user_config_path() else {
-        return;
-    };
-    let src = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => DEFAULT_TOML.to_string(),
-    };
-    let mut doc: toml_edit::DocumentMut = match src.parse() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("[user_config] patch: parse failed: {e}");
-            return;
-        }
-    };
-    if !doc.as_table().contains_key("vivarium") {
-        doc["vivarium"] = toml_edit::Item::Table(toml_edit::Table::new());
-    }
-    let Some(table) = doc["vivarium"].as_table_mut() else {
-        eprintln!("[user_config] patch: [vivarium] is not a table");
-        return;
-    };
-    edit(table);
-    let tmp = path.with_extension("toml.tmp");
-    if let Err(e) = std::fs::write(&tmp, doc.to_string()) {
-        eprintln!("[user_config] patch: write failed: {e}");
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        eprintln!("[user_config] patch: rename failed: {e}");
-    }
-}
-
 // ---- Language resolution ----
 
 /// Resolves `display.language` for runtime UI and speech.
@@ -529,21 +466,6 @@ enabled = true
 bearded_dragon = 1   # startup count per species (0–5); all zero → 1 bearded dragon
 pond_turtle    = 1
 leopard_gecko  = 1
-
-[vivarium]
-enabled         = true    # show the glass-cage home window
-z_order         = "normal"  # "desktop" (behind windows), "normal", or "front"
-display_scale   = 0.5
-sprite_size     = 150     # size at display_scale 1.0; same formula as display.sprite_size
-logical_w       = 960     # snapped to 16 px
-logical_h       = 640
-# origin_x / origin_y are written by dragging the cage (native screen points)
-
-[vivarium.back]
-kind    = "gradient"   # "solid" or "gradient"
-color   = "#000000"    # default black: opacity darkens, it does not wash white
-color2  = "#000000"
-opacity = 0.0          # 0 = glass-only ND; raise to dim the back further
 "##;
 
 /// Loads `user.toml` from the application support directory.
@@ -576,22 +498,12 @@ pub fn load() -> UserConfig {
     };
 
     match toml::from_str::<UserConfig>(&text) {
-        Ok(mut cfg) => {
-            apply_legacy_mode(&mut cfg, &text);
-            cfg.vivarium.clamp();
-            cfg
-        }
+        Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("[user_config] failed to parse user.toml: {e}");
             warn_config_load_failed(&path, &format!("{e}"));
             UserConfig::default()
         }
-    }
-}
-
-fn apply_legacy_mode(cfg: &mut UserConfig, text: &str) {
-    if !text.contains("[vivarium]") && cfg.mode == Mode::Vivarium {
-        cfg.vivarium.enabled = true;
     }
 }
 
