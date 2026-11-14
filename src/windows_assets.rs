@@ -153,7 +153,7 @@ impl SpriteAssets {
             let img = image::load_from_memory(png_bytes).ok()?;
             let img = if let Some(coat) = coat {
                 let mut rgba = img.to_rgba8();
-                crate::coat::tint_image(&mut rgba, name, coat);
+                crate::coat_mask::tint_builtin(&mut rgba, png_bytes, name, coat);
                 image::DynamicImage::ImageRgba8(rgba)
             } else {
                 img

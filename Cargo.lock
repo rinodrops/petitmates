@@ -3079,6 +3079,7 @@ version = "0.7.2"
 dependencies = [
  "block2 0.6.2",
  "chrono",
+ "crc32fast",
  "dirs",
  "image",
  "objc2 0.6.4",

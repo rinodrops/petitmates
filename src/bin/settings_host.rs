@@ -4,12 +4,14 @@
 
 #[path = "../coat.rs"]
 mod coat;
+#[path = "../coat_mask.rs"]
+mod coat_mask;
 #[path = "../coat_palette.rs"]
 mod coat_palette;
 
 use std::collections::HashMap;
 
-use coat::TintPreview;
+use coat_mask::TintPreview;
 
 fn main() {
     settings::set_legacy_color_resolver(coat::legacy_editor_color);
@@ -51,11 +53,7 @@ fn main() {
             )
         };
         if !previews.contains_key(species) {
-            let source = image::load_from_memory(bytes).ok()?.to_rgba8();
-            previews.insert(
-                species,
-                TintPreview::new(source, "s-stand", species == "pond_turtle"),
-            );
+            previews.insert(species, TintPreview::new(bytes, coat)?);
         }
         let image = previews.get(species)?.render(coat);
         let (width, height) = image.dimensions();

@@ -77,6 +77,7 @@ impl Coat {
 }
 
 /// Tint PNG bytes. Returns the original bytes when the coat is the asset hue.
+#[allow(dead_code)] // Also used by local color tools and tests.
 pub fn tint_png(png: &[u8], sprite: &str, coat: Coat) -> Vec<u8> {
     if coat.is_original() {
         return png.to_vec();
@@ -97,21 +98,22 @@ pub fn tint_image(img: &mut RgbaImage, sprite: &str, coat: Coat) {
         return;
     }
     let regions = tint_regions(img, sprite, is_turtle(coat));
-    apply_tint(img, &regions, coat);
+    apply_tint(img, region_runs(&regions), coat);
 }
 
-fn is_turtle(coat: Coat) -> bool {
+pub(crate) fn is_turtle(coat: Coat) -> bool {
     matches!(coat, Coat::Turtle { .. } | Coat::TurtleColor { .. })
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum TintRegion {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub(crate) enum TintRegion {
     Protected,
     Primary,
     Secondary,
 }
 
-fn tint_regions(img: &RgbaImage, sprite: &str, turtle: bool) -> Vec<TintRegion> {
+pub(crate) fn tint_regions(img: &RgbaImage, sprite: &str, turtle: bool) -> Vec<TintRegion> {
     let eyes = eye_protect(img);
     let shell = turtle.then(|| shell_mask(img, mask_for(sprite).as_ref()));
     img.pixels().enumerate().map(|(i, px)| {
@@ -136,7 +138,15 @@ fn tint_regions(img: &RgbaImage, sprite: &str, turtle: bool) -> Vec<TintRegion> 
     }).collect()
 }
 
-fn apply_tint(img: &mut RgbaImage, regions: &[TintRegion], coat: Coat) {
+pub(crate) fn region_runs(regions: &[TintRegion]) -> impl Iterator<Item = (TintRegion, usize)> {
+    regions.chunk_by(|a, b| a == b).map(|run| (run[0], run.len()))
+}
+
+pub(crate) fn apply_tint(
+    img: &mut RgbaImage,
+    runs: impl IntoIterator<Item = (TintRegion, usize)>,
+    coat: Coat,
+) {
     let (primary, secondary) = match coat {
         Coat::Dragon { hue } => (RegionColor::Legacy { hue, base: DRAGON_HUE }, RegionColor::Original),
         Coat::Turtle { shell, skin } => (
@@ -146,36 +156,23 @@ fn apply_tint(img: &mut RgbaImage, regions: &[TintRegion], coat: Coat) {
         Coat::DragonColor(body) => (body, RegionColor::Original),
         Coat::TurtleColor { shell, skin } => (shell, skin),
     };
-    for (px, region) in img.pixels_mut().zip(regions) {
-        match region {
-            TintRegion::Primary => *px = primary.apply(*px),
-            TintRegion::Secondary => *px = secondary.apply(*px),
-            TintRegion::Protected => {}
+    let mut pixels: &mut [u8] = img.as_mut();
+    for (region, len) in runs {
+        let (run, remaining) = pixels.split_at_mut(len * 4);
+        pixels = remaining;
+        let color = match region {
+            TintRegion::Primary => primary,
+            TintRegion::Secondary => secondary,
+            TintRegion::Protected => continue,
+        };
+        if color == RegionColor::Original {
+            continue;
+        }
+        for px in run.as_chunks_mut::<4>().0 {
+            *px = color.apply(Rgba(*px)).0;
         }
     }
-}
-
-/// Prepared sprite for repeated preview edits.
-#[allow(dead_code)]
-pub struct TintPreview {
-    image: RgbaImage,
-    regions: Vec<TintRegion>,
-}
-
-#[allow(dead_code)]
-impl TintPreview {
-    pub fn new(image: RgbaImage, sprite: &str, turtle: bool) -> Self {
-        let regions = tint_regions(&image, sprite, turtle);
-        Self { image, regions }
-    }
-
-    pub fn render(&self, coat: Option<Coat>) -> RgbaImage {
-        let mut image = self.image.clone();
-        if let Some(coat) = coat.filter(|coat| !coat.is_original()) {
-            apply_tint(&mut image, &self.regions, coat);
-        }
-        image
-    }
+    debug_assert!(pixels.is_empty());
 }
 
 /// Hue is absolute. Saturation and value are multipliers on the pixel (1.0 keeps them).
@@ -571,10 +568,8 @@ mod tests {
         let original = image::load_from_memory(bytes).unwrap().to_rgba8();
         let shell = RegionColor::Hsv { base: [42, 48, 42], target: [200, 68, 60] };
         let coat = Coat::TurtleColor { shell, skin: RegionColor::Original };
-        let preview = TintPreview::new(original.clone(), sprite, true).render(Some(coat));
         let mut runtime = original.clone();
         tint_image(&mut runtime, sprite, coat);
-        assert_eq!(preview, runtime);
         assert_eq!(runtime.get_pixel(144, 236), original.get_pixel(144, 236));
         assert_ne!(runtime.get_pixel(305, 337), original.get_pixel(305, 337));
     }

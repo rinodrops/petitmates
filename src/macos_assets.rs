@@ -149,7 +149,7 @@ impl SpriteAssets {
 /// Recolor decoded pixels and give AppKit a bitmap without another PNG round trip.
 fn tinted_image(bytes: &[u8], name: &str, coat: crate::coat::Coat) -> Option<Retained<NSImage>> {
     let mut rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
-    crate::coat::tint_image(&mut rgba, name, coat);
+    crate::coat_mask::tint_builtin(&mut rgba, bytes, name, coat);
     let (width, height) = (rgba.width() as isize, rgba.height() as isize);
     let rep = unsafe {
         NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel(
