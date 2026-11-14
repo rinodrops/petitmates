@@ -14,7 +14,6 @@ mod speech;
 mod sprite_map;
 mod terrestrial_behavior;
 mod user_config;
-mod vivarium;
 mod weather;
 
 #[cfg(target_os = "macos")]

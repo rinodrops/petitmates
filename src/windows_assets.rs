@@ -10,7 +10,6 @@
 //! `assets.rs` so that `surface_to_screen_pos` in `windows.rs` can use the
 //! same formulas as `surface_to_ns_origin` in `macos.rs`.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -59,10 +58,6 @@ pub struct SpriteAssets {
     images:   HashMap<String, Sprite>,
     mirrored: HashMap<String, Sprite>,
     anchors:  HashMap<String, Anchor>,
-    native: HashMap<String, (u32, u32, Vec<u8>)>,
-    native_mirrored: HashMap<String, (u32, u32, Vec<u8>)>,
-    cage: RefCell<HashMap<(String, bool, u32, u32, i16), (u32, u32, Vec<u8>, f64, f64)>>,
-    pub canonical_width: f64,
     pub animations: HashMap<String, AnimationDef>,
     pub surfaces: SurfaceConfig,
 }
@@ -87,8 +82,6 @@ impl SpriteAssets {
         let mut images   = HashMap::new();
         let mut mirrored = HashMap::new();
         let mut anchors  = HashMap::new();
-        let mut native = HashMap::new();
-        let mut native_mirrored = HashMap::new();
 
         for (name, info) in &manifest.sprites {
             // Reject names that could escape the sprite directory (groundwork
@@ -107,8 +100,6 @@ impl SpriteAssets {
                 img
             };
             let (ow, oh) = img.dimensions();
-            let native_rgba = img.to_rgba8().into_raw();
-            let native_flip = mirror_rgba(&native_rgba, ow, oh);
             let nw = ((ow as f64 * scale).round() as u32).clamp(1, MAX_SPRITE_DIM);
             let nh = ((oh as f64 * scale).round() as u32).clamp(1, MAX_SPRITE_DIM);
 
@@ -120,8 +111,6 @@ impl SpriteAssets {
             let bgra   = rgba_to_bgra_premul(&scaled);
             let mirror = mirror_bgra(&bgra, nw as usize, nh as usize);
 
-            native.insert(name.clone(), (ow, oh, native_rgba));
-            native_mirrored.insert(name.clone(), (ow, oh, native_flip));
             images.insert(name.clone(),   Sprite { bgra,   w: nw as i32, h: nh as i32 });
             mirrored.insert(name.clone(), Sprite { bgra: mirror, w: nw as i32, h: nh as i32 });
             anchors.insert(name.clone(), anchor);
@@ -131,10 +120,6 @@ impl SpriteAssets {
             images,
             mirrored,
             anchors,
-            native,
-            native_mirrored,
-            cage: RefCell::new(HashMap::new()),
-            canonical_width: manifest.canonical_width,
             animations: manifest.animations.clone(),
             surfaces: manifest.surfaces.clone(),
         })
@@ -159,8 +144,6 @@ impl SpriteAssets {
         let mut images   = HashMap::new();
         let mut mirrored = HashMap::new();
         let mut anchors  = HashMap::new();
-        let mut native = HashMap::new();
-        let mut native_mirrored = HashMap::new();
 
         for (name, info) in &manifest.sprites {
             let png_bytes = sprites.iter()
@@ -176,8 +159,6 @@ impl SpriteAssets {
                 img
             };
             let (ow, oh) = img.dimensions();
-            let native_rgba = img.to_rgba8().into_raw();
-            let native_flip = mirror_rgba(&native_rgba, ow, oh);
             let nw = ((ow as f64 * scale).round() as u32).clamp(1, MAX_SPRITE_DIM);
             let nh = ((oh as f64 * scale).round() as u32).clamp(1, MAX_SPRITE_DIM);
 
@@ -189,8 +170,6 @@ impl SpriteAssets {
             let bgra   = rgba_to_bgra_premul(&scaled);
             let mirror = mirror_bgra(&bgra, nw as usize, nh as usize);
 
-            native.insert(name.clone(), (ow, oh, native_rgba));
-            native_mirrored.insert(name.clone(), (ow, oh, native_flip));
             images.insert(name.clone(),   Sprite { bgra,   w: nw as i32, h: nh as i32 });
             mirrored.insert(name.clone(), Sprite { bgra: mirror, w: nw as i32, h: nh as i32 });
             anchors.insert(name.clone(), anchor);
@@ -200,10 +179,6 @@ impl SpriteAssets {
             images,
             mirrored,
             anchors,
-            native,
-            native_mirrored,
-            cage: RefCell::new(HashMap::new()),
-            canonical_width: manifest.canonical_width,
             animations: manifest.animations.clone(),
             surfaces: manifest.surfaces.clone(),
         })
@@ -217,42 +192,6 @@ impl SpriteAssets {
     /// Returns the anchor for `name`, or `None` if not loaded.
     pub fn anchor(&self, name: &str) -> Option<Anchor> {
         self.anchors.get(name).copied()
-    }
-
-    /// Native PNG size in source pixels.
-    pub fn native_size(&self, name: &str) -> (f64, f64) {
-        self.native
-            .get(name)
-            .map(|(w, h, _)| (*w as f64, *h as f64))
-            .unwrap_or((512.0, 512.0))
-    }
-
-    /// Cage blit source: native PNG scaled once to `dw×dh`, then rotated by a
-    /// permitted `angle_id` about the foot. Cache key includes the angle.
-    pub fn cage_rgba(
-        &self,
-        name: &str,
-        mirror: bool,
-        dw: u32,
-        dh: u32,
-        angle: crate::vivarium::AngleId,
-    ) -> Option<(u32, u32, Vec<u8>, f64, f64)> {
-        let key = (name.to_string(), mirror, dw, dh, angle.deg());
-        {
-            let cache = self.cage.borrow();
-            if let Some(v) = cache.get(&key) {
-                return Some(v.clone());
-            }
-        }
-        let (sw, sh, src) = if mirror {
-            self.native_mirrored.get(name)?
-        } else {
-            self.native.get(name)?
-        };
-        let scaled = crate::vivarium::scale_rgba_triangle(src, *sw, *sh, dw, dh);
-        let out = crate::vivarium::rotate_rgba_about_foot(&scaled, dw, dh, angle.rad());
-        self.cage.borrow_mut().insert(key, out.clone());
-        Some(out)
     }
 
     /// Returns the (w, h) of `name` in display pixels, or `(150, 150)` as
@@ -305,20 +244,6 @@ fn rgba_to_bgra_premul(img: &image::RgbaImage) -> Vec<u8> {
             ]
         })
         .collect()
-}
-
-fn mirror_rgba(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
-    let w = w as usize;
-    let h = h as usize;
-    let mut out = vec![0u8; rgba.len()];
-    for row in 0..h {
-        for col in 0..w {
-            let src = (row * w + col) * 4;
-            let dst = (row * w + (w - 1 - col)) * 4;
-            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
-        }
-    }
-    out
 }
 
 /// Flip a BGRA buffer horizontally (row by row).
