@@ -102,9 +102,8 @@ Screen Recording permission is **not** required. Characters navigate using publi
 ### Windows
 
 1. Download **`Petit-Mates-vX.X.X-windows-x86_64.zip`** from [Releases](https://github.com/rinodrops/petitmates/releases/latest).
-2. Extract and run **`Petit Mates.exe`**. A system tray icon appears.
-
-No installer needed — the executable is fully self-contained.
+2. Extract the ZIP and keep **`Settings.exe`** next to **`Petit Mates.exe`**.
+3. Run **`Petit Mates.exe`**. A system tray icon appears.
 
 ## Usage
 
@@ -135,7 +134,7 @@ No installer needed — the executable is fully self-contained.
 | ---------------- | -------- | ----------- |
 | Pick up and move | ⌘ + drag | Ctrl + drag |
 
-Drop anywhere — onto a window edge, a wall, or the desktop floor — and the character will land and continue from there.
+Drop anywhere — onto a window edge, a wall, or the desktop floor — and the character will land and continue from there. The left and right edges of a window accept a drop with the same ⌘ + drag (Ctrl + drag on Windows).
 
 ### Mouse Hover
 
@@ -156,7 +155,7 @@ Open **Settings…** from the menu bar / system tray. The settings window edits 
 - macOS: `~/Library/Application Support/PetitMates/user.toml`
 - Windows: `%APPDATA%\PetitMates\user.toml`
 
-You can change character size, speech bubble font size, speech language (`os` / `en` / `ja`), how many of each built-in character spawn at startup (0–5 per species), speech on/off and interval, and weather (city name). **Close the settings window to restart Petit Mates** — settings load on the next launch.
+You can change character size, speech bubble font size, speech language (`os` / `en` / `ja`), how many of each built-in character spawn at startup (0–5 per species), speech on/off and interval, and weather (city name). Frame rate is set separately for AC power and battery (10, 15, 30, or 60 fps; defaults are 30 and 15) and switches when the power source changes. **Close the settings window to restart Petit Mates** — settings load on the next launch.
 
 The **Characters** tab sets startup counts in `[characters]` (`bearded_dragon`, `pond_turtle`, `leopard_gecko`). At least one count must be greater than zero in the Settings UI. If `user.toml` is edited manually with all three at `0`, exactly one Bearded Dragon still spawns at startup (engine fallback). Menu **Add / Remove character** is runtime-only and does not change these startup counts (restart restores the saved values).
 
@@ -180,6 +179,26 @@ leopard_gecko_params.toml    ← optional override
 If no override file is present, built-in defaults derived from personality are used.
 
 ## Release Notes
+
+### v1.1.0
+
+- The **Pets** tab lets you name and reorder individual profiles by species. Petit Mates uses available profiles in list order at startup and when you add a character.
+- Bearded dragons and pond turtles have preset palettes and custom hue, saturation, and value controls with live previews. Pond turtles have separate shell and skin colors. When the named profiles are in use, additional dragons and turtles pick colors from their species' palettes.
+- Built-in coat masks are prepared during the build to reduce startup work. Pond turtles keep their shell color while climbing.
+- Petit Mates reloads saved changes when the Settings window closes. On Windows, select **OK** to save and close.
+
+### v1.0.1
+
+**Fixes**
+- macOS: a character sitting on a window no longer stays behind that window after you bring the window forward. It may slip behind for a moment, then returns to the front.
+
+### v1.0.0
+
+**Settings**
+- Frame rate can be set separately for AC power and battery: 10, 15, 30, or 60 fps. Defaults are 30 on AC and 15 on battery. The rate switches when the power source changes.
+
+**Characters**
+- Characters can sit on the left and right edges of a window. Pick one up with ⌘ + drag (Ctrl + drag on Windows) and drop it on a side edge.
 
 ### v0.7.1
 

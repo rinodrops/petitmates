@@ -8,7 +8,7 @@ on:
 
 jobs:
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,10 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install dmgbuild
-        run: pip install dmgbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild-venv"
+          "$RUNNER_TEMP/dmgbuild-venv/bin/python" -m pip install dmgbuild
+          echo "$RUNNER_TEMP/dmgbuild-venv/bin" >> "$GITHUB_PATH"
 
       - name: Import code signing certificate
         env:
@@ -172,7 +175,7 @@ jobs:
             echo ""
             echo "### Windows Installation"
             echo "1. Download the zip and extract it."
-            echo "2. Run **Petit Mates.exe** — a system tray icon appears."
+            echo "2. Keep **Settings.exe** next to **Petit Mates.exe** and run **Petit Mates.exe**. A system tray icon appears."
           } > release-body.md
 
       - name: Create draft release
