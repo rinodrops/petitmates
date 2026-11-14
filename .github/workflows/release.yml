@@ -20,12 +20,14 @@ jobs:
       APPLE_DEVELOPER_APP_PASSWORD: ${{ secrets.APPLE_DEVELOPER_APP_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: petitmates
 
       - name: Checkout Settings
         uses: actions/checkout@v4
         with:
           repository: rinodrops/settings
-          ref: v0.2.5
+          ref: d869de221c3569272a20c774958395161f01135d
           path: settings
 
       - uses: extractions/setup-just@v2
@@ -58,8 +60,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+            petitmates/target
+          key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('petitmates/Cargo.lock') }}
           restore-keys: cargo-macos-${{ matrix.arch }}-
 
       - name: Sanitize notarization credentials
@@ -80,26 +82,27 @@ jobs:
             { echo "APPLE_DEVELOPER_APP_PASSWORD must be 19 characters (got ${#APPLE_DEVELOPER_APP_PASSWORD}); use an app-specific password from appleid.apple.com" >&2; exit 1; }
 
       - name: Build and notarize (${{ matrix.arch }})
+        working-directory: petitmates
         run: just darwin-notarize-${{ matrix.arch }}
-        env:
-          SETTINGS_DIR: settings
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
-          path: dist/Petit-Mates-v*-darwin-${{ matrix.arch }}.dmg
+          path: petitmates/dist/Petit-Mates-v*-darwin-${{ matrix.arch }}.dmg
 
   windows:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: petitmates
 
       - name: Checkout Settings
         uses: actions/checkout@v4
         with:
           repository: rinodrops/settings
-          ref: v0.2.5
+          ref: d869de221c3569272a20c774958395161f01135d
           path: settings
 
       - uses: extractions/setup-just@v2
@@ -122,19 +125,18 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
+          key: cargo-windows-${{ hashFiles('petitmates/Cargo.lock') }}
           restore-keys: cargo-windows-
 
       - name: Build Windows package
+        working-directory: petitmates
         run: just win-zip
-        env:
-          SETTINGS_DIR: settings
 
       - name: Upload Windows zip
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/Petit-Mates-v*-windows-x86_64.zip
+          path: petitmates/dist/Petit-Mates-v*-windows-x86_64.zip
 
   release:
     if: startsWith(github.ref, 'refs/tags/')

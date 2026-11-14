@@ -3,6 +3,7 @@
 mod anim_trigger;
 mod behavior;
 pub mod coat;
+mod coat_palette;
 mod config;
 mod debug_menu;
 mod demo_behavior;

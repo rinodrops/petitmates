@@ -123,7 +123,7 @@ No installer needed — the executable is fully self-contained.
 </tr>
 </table>
 
-- **Settings…** — Open the settings window to edit display, speech, and weather. When you close the settings window, Petit Mates **restarts** so changes apply.
+- **Settings…** — Edit display, characters, individual pets, speech, and weather. Changes to display and behavior apply after the app restarts. Changes to the Pets tab apply the next time you call a character.
 - **Open Settings File** — Hold **Option** (macOS) or **Alt** (Windows) while opening the menu to edit `user.toml` in your text editor instead (restart the app manually to apply).
 - **Add / Remove character** — Spawn or dismiss each of the three characters independently.
 - **About** — Version info.
@@ -140,6 +140,12 @@ Drop anywhere — onto a window edge, a wall, or the desktop floor — and the c
 ### Mouse Hover
 
 Move your cursor over a character and it fades to 25% opacity, letting you interact with whatever is behind it.
+
+### Individual Pets
+
+Open **Settings → Pets** to save named profiles and reorder them for each species. At startup and when you add a character, Petit Mates uses the first profile of that species that is available. Dismissing a pet makes its profile available again. When every named profile is already out, a bearded dragon or pond turtle uses a randomly chosen preset from the same palette.
+
+Choose **Original** to restore the artwork, or open **Custom…** to edit hue, saturation, and value and watch the preview. Pond turtles have separate shell and skin colors.
 
 ## Customization
 

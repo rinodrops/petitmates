@@ -181,9 +181,18 @@ struct CharState {
     aquatic: Option<crate::behavior::AquaticState>,
     /// Saved name, when this animal is one of the named pets.
     pet_name: Option<String>,
+    pet_profile: Option<(&'static str, String)>,
 }
 
 // ---- App-wide state (singletons) ----
+
+fn next_pet(app: &AppState, species: &'static str) -> crate::user_config::Spawn {
+    let active: Vec<_> = app.chars.iter().filter_map(|character| {
+        let (kind, id) = character.pet_profile.as_ref()?;
+        (species == *kind).then_some(id.as_str())
+    }).collect();
+    crate::user_config::load().next_spawn(species, &active)
+}
 
 struct AppState {
     chars: Vec<CharState>,
@@ -938,6 +947,7 @@ fn spawn_char(assets: Rc<SpriteAssets>, config: SharedConfig, si: &ScreenInfo, m
         last_rendered: None,
         aquatic: None,
         pet_name: None,
+        pet_profile: None,
     }
 }
 
@@ -1030,12 +1040,12 @@ define_class!(
                 let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
-                let spawn = crate::user_config::load().next_spawn("bearded_dragon", &out);
+                let spawn = next_pet(app, "bearded_dragon");
                 let assets = assets_for_species("bearded_dragon", &app.bd_assets, app.sprite_size, spawn.coat);
                 let config = app.bd_config.clone();
                 let mut ch = spawn_char(assets, config, &si, mt, false, "bearded_dragon");
                 ch.pet_name = spawn.name;
+                ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                 app.chars.push(ch);
             });
         }
@@ -1050,12 +1060,12 @@ define_class!(
                 let si = macos_wm::screen_info(mt).unwrap_or(ScreenInfo {
                     width: 1280.0, height: 800.0, dock_height: 0.0, menu_bar_height: 24.0,
                 });
-                let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
-                let spawn = crate::user_config::load().next_spawn("pond_turtle", &out);
+                let spawn = next_pet(app, "pond_turtle");
                 let assets = assets_for_species("pond_turtle", &app.pt_assets, app.sprite_size, spawn.coat);
                 let config = app.pt_config.clone();
                 let mut ch = spawn_char(assets, config, &si, mt, false, "pond_turtle");
                 ch.pet_name = spawn.name;
+                ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                 app.chars.push(ch);
             });
         }
@@ -1072,7 +1082,11 @@ define_class!(
                 });
                 let assets = Rc::clone(&app.lg_assets);
                 let config = app.lg_config.clone();
-                app.chars.push(spawn_char(assets, config, &si, mt, false, "leopard_gecko"));
+                let spawn = next_pet(app, "leopard_gecko");
+                let mut ch = spawn_char(assets, config, &si, mt, false, spawn.species);
+                ch.pet_name = spawn.name;
+                ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
+                app.chars.push(ch);
             });
         }
 
@@ -2387,6 +2401,7 @@ pub fn run() {
             };
             let mut ch = spawn_char(assets, config, &si, mt, false, spawn.species);
             ch.pet_name = spawn.name;
+            ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
             ch
         }).collect()
     };

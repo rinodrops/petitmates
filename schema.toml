@@ -114,63 +114,104 @@ when  = "chars_min_one"
 id    = "pets"
 label = { en = "Pets", ja = "個体" }
 icon  = "pets"
+content_height = 540
 
 [[tabs.fields]]
-key       = "pets.bearded_dragon"
-label     = { en = "Bearded dragons", ja = "フトアゴヒゲトカゲ" }
-widget    = "record_list"
-on_change = "pet_preview"
+widget = "separator"
+label  = { en = "Appearance order", ja = "登場順" }
+
+[[tabs.fields]]
+key              = "pets.bearded_dragon"
+label            = { en = "Bearded dragons", ja = "フトアゴヒゲトカゲ" }
+widget           = "record_list"
+record_title_key = "name"
+record_id_key    = "id"
+on_change        = "pet_preview"
 
 [[tabs.fields.item_fields]]
 key    = "name"
 label  = { en = "Name", ja = "名前" }
-type   = "string"
 widget = "text_input"
 
 [[tabs.fields.item_fields]]
-key     = "hue"
-label   = { en = "Hue", ja = "色相" }
-type    = "number"
-widget  = "slider"
-min     = 0
-max     = 360
-step    = 1
-initial = 38
-reset   = true
+key            = "body_color"
+label          = { en = "Body color", ja = "体の色" }
+widget         = "color_palette"
+legacy_hue_key = "hue"
+colors         = [
+    { id = "original", label = { en = "Original", ja = "原画" }, hsv = [38, 74, 96] },
+    { id = "red_clay", label = { en = "Red clay", ja = "赤土" }, hsv = [18, 67, 73] },
+    { id = "apricot", label = { en = "Apricot", ja = "杏" }, hsv = [23, 51, 94] },
+    { id = "persimmon", label = { en = "Persimmon", ja = "柿" }, hsv = [28, 79, 87] },
+    { id = "amber", label = { en = "Amber", ja = "琥珀" }, hsv = [34, 73, 88] },
+    { id = "honey", label = { en = "Honey", ja = "はちみつ" }, hsv = [42, 72, 98] },
+    { id = "wheat", label = { en = "Wheat", ja = "小麦" }, hsv = [45, 48, 83] },
+    { id = "sand", label = { en = "Sand", ja = "サンド" }, hsv = [49, 36, 92] },
+    { id = "straw", label = { en = "Straw", ja = "麦わら" }, hsv = [54, 58, 88] },
+    { id = "ochre", label = { en = "Muted ochre", ja = "淡い黄土" }, hsv = [58, 48, 73] },
+]
 
 [[tabs.fields]]
-key       = "pets.pond_turtle"
-label     = { en = "Pond turtles", ja = "クサガメ" }
-widget    = "record_list"
-on_change = "pet_preview"
+key              = "pets.pond_turtle"
+label            = { en = "Pond turtles", ja = "クサガメ" }
+widget           = "record_list"
+record_title_key = "name"
+record_id_key    = "id"
+on_change        = "pet_preview"
 
 [[tabs.fields.item_fields]]
 key    = "name"
 label  = { en = "Name", ja = "名前" }
-type   = "string"
 widget = "text_input"
 
 [[tabs.fields.item_fields]]
-key     = "shell_hue"
-label   = { en = "Shell hue", ja = "背甲の色相" }
-type    = "number"
-widget  = "slider"
-min     = 0
-max     = 360
-step    = 1
-initial = 42
-reset   = true
+key            = "shell_color"
+label          = { en = "Shell color", ja = "背甲の色" }
+widget         = "color_palette"
+legacy_hue_key = "shell_hue"
+colors         = [
+    { id = "original", label = { en = "Original", ja = "原画" }, hsv = [42, 48, 42] },
+    { id = "chestnut", label = { en = "Chestnut", ja = "栗" }, hsv = [22, 63, 48] },
+    { id = "dark_brown", label = { en = "Dark brown", ja = "濃茶" }, hsv = [26, 57, 29] },
+    { id = "walnut", label = { en = "Walnut", ja = "くるみ" }, hsv = [31, 56, 53] },
+    { id = "ochre", label = { en = "Ochre", ja = "黄土" }, hsv = [36, 58, 65] },
+    { id = "amber_brown", label = { en = "Amber brown", ja = "琥珀茶" }, hsv = [45, 66, 55] },
+    { id = "dry_grass", label = { en = "Dry grass", ja = "枯れ草" }, hsv = [49, 37, 63] },
+    { id = "olive_brown", label = { en = "Olive brown", ja = "オリーブ茶" }, hsv = [54, 48, 46] },
+    { id = "moss_brown", label = { en = "Moss brown", ja = "苔茶" }, hsv = [58, 43, 35] },
+    { id = "deep_olive", label = { en = "Deep olive", ja = "深いオリーブ" }, hsv = [62, 52, 34] },
+]
 
 [[tabs.fields.item_fields]]
-key     = "skin_hue"
-label   = { en = "Skin hue", ja = "肌の色相" }
-type    = "number"
-widget  = "slider"
-min     = 0
-max     = 360
-step    = 1
-initial = 46
-reset   = true
+key            = "skin_color"
+label          = { en = "Skin color", ja = "肌の色" }
+widget         = "color_palette"
+legacy_hue_key = "skin_hue"
+colors         = [
+    { id = "original", label = { en = "Original", ja = "原画" }, hsv = [46, 58, 52] },
+    { id = "russet_sand", label = { en = "Russet sand", ja = "赤みの砂" }, hsv = [26, 35, 66] },
+    { id = "beige", label = { en = "Beige", ja = "ベージュ" }, hsv = [32, 34, 74] },
+    { id = "camel", label = { en = "Camel", ja = "キャメル" }, hsv = [37, 58, 68] },
+    { id = "gold_brown", label = { en = "Golden brown", ja = "金茶" }, hsv = [42, 66, 59] },
+    { id = "mustard", label = { en = "Mustard", ja = "からし" }, hsv = [50, 68, 66] },
+    { id = "dry_grass", label = { en = "Dry grass", ja = "枯れ草" }, hsv = [54, 37, 73] },
+    { id = "olive", label = { en = "Olive", ja = "オリーブ" }, hsv = [58, 52, 56] },
+    { id = "pale_olive", label = { en = "Pale olive", ja = "淡いオリーブ" }, hsv = [63, 37, 64] },
+    { id = "deep_olive", label = { en = "Deep olive", ja = "深いオリーブ" }, hsv = [66, 48, 41] },
+]
+
+[[tabs.fields]]
+key              = "pets.leopard_gecko"
+label            = { en = "Leopard geckos", ja = "レオパードゲッコー" }
+widget           = "record_list"
+record_title_key = "name"
+record_id_key    = "id"
+on_change        = "pet_preview"
+
+[[tabs.fields.item_fields]]
+key    = "name"
+label  = { en = "Name", ja = "名前" }
+widget = "text_input"
 
 # ── Speech ───────────────────────────────────────────────────────────────────
 

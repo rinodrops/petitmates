@@ -182,6 +182,15 @@ struct CharState {
     /// Water-physics state; `Some` when character is in `Surface::WindowInterior`.
     aquatic: Option<crate::behavior::AquaticState>,
     pet_name: Option<String>,
+    pet_profile: Option<(&'static str, String)>,
+}
+
+fn next_pet(app: &AppState, species: &'static str) -> crate::user_config::Spawn {
+    let active: Vec<_> = app.chars.iter().filter_map(|character| {
+        let (kind, id) = character.pet_profile.as_ref()?;
+        (species == *kind).then_some(id.as_str())
+    }).collect();
+    crate::user_config::load().next_spawn(species, &active)
 }
 
 struct AppState {
@@ -734,6 +743,7 @@ unsafe fn spawn_char_hwnd(si: &ScreenInfo, assets: Rc<SpriteAssets>, config: Sha
         snap_highlight: false,
         aquatic: None,
         pet_name: None,
+        pet_profile: None,
     }
 }
 
@@ -1616,12 +1626,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
                         let si = windows_wm::screen_info();
-                        let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
-                        let spawn = crate::user_config::load().next_spawn("bearded_dragon", &out);
+                        let spawn = next_pet(app, "bearded_dragon");
                         let assets = windows_coated("bearded_dragon", &app.bd_assets, app.sprite_size, spawn.coat);
                         let config = app.bd_config.clone();
                         let mut ch = spawn_char_hwnd(&si, assets, config, "bearded_dragon");
                         ch.pet_name = spawn.name;
+                        ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                         app.chars.push(ch);
                     }
                 });
@@ -1652,12 +1662,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 APP.with(|cell| {
                     if let Some(app) = cell.borrow_mut().as_mut() {
                         let si = windows_wm::screen_info();
-                        let out: Vec<String> = app.chars.iter().filter_map(|c| c.pet_name.clone()).collect();
-                        let spawn = crate::user_config::load().next_spawn("pond_turtle", &out);
+                        let spawn = next_pet(app, "pond_turtle");
                         let assets = windows_coated("pond_turtle", &app.pt_assets, app.sprite_size, spawn.coat);
                         let config = app.pt_config.clone();
                         let mut ch = spawn_char_hwnd(&si, assets, config, "pond_turtle");
                         ch.pet_name = spawn.name;
+                        ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                         app.chars.push(ch);
                     }
                 });
@@ -1669,7 +1679,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                         let si     = windows_wm::screen_info();
                         let assets = Rc::clone(&app.lg_assets);
                         let config = app.lg_config.clone();
-                        let ch     = spawn_char_hwnd(&si, assets, config, "leopard_gecko");
+                        let spawn = next_pet(app, "leopard_gecko");
+                        let mut ch = spawn_char_hwnd(&si, assets, config, spawn.species);
+                        ch.pet_name = spawn.name;
+                        ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
                         app.chars.push(ch);
                     }
                 });
@@ -1969,6 +1982,7 @@ pub fn run() {
             };
             let mut ch = spawn_char_hwnd(&si, assets, config, spawn.species);
             ch.pet_name = spawn.name;
+            ch.pet_profile = spawn.profile_id.map(|id| (spawn.species, id));
             ch
         }).collect();
         let host_hwnd = initial_chars

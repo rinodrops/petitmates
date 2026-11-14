@@ -1,70 +1,69 @@
-//! Settings window with a live coat preview.
-//!
-//! Settings stays generic. This binary registers the preview callback and
-//! then runs the settings window.
+//! Settings window with live previews of the selected individual.
+
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 #[path = "../coat.rs"]
 mod coat;
+#[path = "../coat_palette.rs"]
+mod coat_palette;
+
+use std::collections::HashMap;
+
+use coat::TintPreview;
 
 fn main() {
-    settings::set_on_change(|change| {
+    settings::set_legacy_color_resolver(coat::legacy_editor_color);
+    let mut previews = HashMap::new();
+    settings::set_on_change(move |change| {
         if change.callback != "pet_preview" {
             return None;
         }
-        let hue = |key: &str| {
+        let value = |key: &str| {
             change
                 .values
                 .iter()
-                .find(|(k, _)| k == key)
-                .and_then(|(_, v)| v.parse::<f64>().ok())
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.as_str())
         };
-        let (species, coat) = if change.record.contains("pond_turtle") {
+        let hue = |key| value(key).and_then(|value| value.parse().ok());
+        let (species, bytes, coat) = if change.record.starts_with("pets.pond_turtle[") {
             (
                 "pond_turtle",
-                coat::Coat::Turtle {
-                    shell: hue("shell_hue").unwrap_or(coat::SHELL_HUE),
-                    skin: hue("skin_hue").unwrap_or(coat::SKIN_HUE),
-                },
+                &include_bytes!("../../assets/pond_turtle/sprite/s-stand.png")[..],
+                Some(coat_palette::turtle(
+                    value("shell_color"),
+                    hue("shell_hue"),
+                    value("skin_color"),
+                    hue("skin_hue"),
+                )),
+            )
+        } else if change.record.starts_with("pets.leopard_gecko[") {
+            (
+                "leopard_gecko",
+                &include_bytes!("../../assets/leopard_gecko/sprite/s-stand.png")[..],
+                None,
             )
         } else {
             (
                 "bearded_dragon",
-                coat::Coat::Dragon {
-                    hue: hue("hue").unwrap_or(coat::DRAGON_HUE),
-                },
+                &include_bytes!("../../assets/bearded_dragon/sprite/s-stand.png")[..],
+                Some(coat_palette::dragon(value("body_color"), hue("hue"))),
             )
         };
-        let path = asset_png(species, "s-stand")?;
-        let bytes = std::fs::read(path).ok()?;
-        let tinted = coat::tint_png(&bytes, "s-stand", coat);
-        let img = image::load_from_memory(&tinted).ok()?.to_rgba8();
-        let (width, height) = img.dimensions();
+        if !previews.contains_key(species) {
+            let source = image::load_from_memory(bytes).ok()?.to_rgba8();
+            previews.insert(
+                species,
+                TintPreview::new(source, "s-stand", species == "pond_turtle"),
+            );
+        }
+        let image = previews.get(species)?.render(coat);
+        let (width, height) = image.dimensions();
         Some(settings::Preview {
-            rgba: img.into_raw(),
+            rgba: image.into_raw(),
             width: width as usize,
             height: height as usize,
         })
     });
     settings::run().expect("settings window failed");
-}
-
-fn asset_png(species: &str, sprite: &str) -> Option<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(dir) = std::env::var("PETITMATES_ASSETS") {
-        candidates.push(std::path::PathBuf::from(dir));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(macos) = exe.parent() {
-            candidates.push(macos.join("../Resources/assets"));
-            candidates.push(macos.join("assets"));
-        }
-    }
-    candidates.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"));
-    candidates.into_iter().find_map(|root| {
-        let path = root
-            .join(species)
-            .join("sprite")
-            .join(format!("{sprite}.png"));
-        path.is_file().then_some(path)
-    })
 }
