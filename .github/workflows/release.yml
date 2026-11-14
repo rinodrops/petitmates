@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rinodrops/settings
-          ref: 9b3d8d31fadab190a06319bdfb3381ac1844f00d
+          ref: c836b380533ef969306156a344cb7b869a26a6cb
           path: settings
 
       - uses: extractions/setup-just@v2
@@ -102,7 +102,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rinodrops/settings
-          ref: 9b3d8d31fadab190a06319bdfb3381ac1844f00d
+          ref: c836b380533ef969306156a344cb7b869a26a6cb
           path: settings
 
       - uses: extractions/setup-just@v2
