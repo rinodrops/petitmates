@@ -102,9 +102,8 @@ Screen Recording permission is **not** required. Characters navigate using publi
 ### Windows
 
 1. Download **`Petit-Mates-vX.X.X-windows-x86_64.zip`** from [Releases](https://github.com/rinodrops/petitmates/releases/latest).
-2. Extract and run **`Petit Mates.exe`**. A system tray icon appears.
-
-No installer needed — the executable is fully self-contained.
+2. Extract the ZIP and keep **`Settings.exe`** next to **`Petit Mates.exe`**.
+3. Run **`Petit Mates.exe`**. A system tray icon appears.
 
 ## Usage
 
@@ -180,6 +179,13 @@ leopard_gecko_params.toml    ← optional override
 If no override file is present, built-in defaults derived from personality are used.
 
 ## Release Notes
+
+### v1.1.0
+
+- The **Pets** tab lets you name and reorder individual profiles by species. Petit Mates uses available profiles in list order at startup and when you add a character.
+- Bearded dragons and pond turtles have preset palettes and custom hue, saturation, and value controls with live previews. Pond turtles have separate shell and skin colors. When the named profiles are in use, additional dragons and turtles pick colors from their species' palettes.
+- Built-in coat masks are prepared during the build to reduce startup work. Pond turtles keep their shell color while climbing.
+- Petit Mates reloads saved changes when the Settings window closes. On Windows, select **OK** to save and close.
 
 ### v1.0.1
 
